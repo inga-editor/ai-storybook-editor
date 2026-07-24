@@ -8,6 +8,8 @@
 
 import { callImageApi, type ImageApiFailure } from './image-api-client';
 import { createLogger } from '@/utils/logger';
+import type { SaveResourceDirective, SaveResourceOutcomeFields } from '@/types/save-resource';
+import { warnIfSaveResourceFailed } from '@/utils/save-resource-path';
 
 const log = createLogger('API', 'SketchSpreadApi');
 
@@ -23,6 +25,8 @@ export interface GenerateSpreadImageParams {
   /** Optional "W:H" override; omit to let the backend pick its per-page default. */
   targetRatio?: string;
   // modelParams omitted in v1 (KISS).
+  /** Opt-in auto-persist directive — attached to the body only when defined. */
+  saveResource?: SaveResourceDirective;
 }
 
 export interface GenerateSpreadImageResult {
@@ -40,7 +44,7 @@ export interface GenerateSpreadImageResult {
     /** Soft ref → ai_service_logs.id của call Gemini sinh ảnh này (cost attribution). FE ghi vào
      *  illustration entry's `ai_request_id`. Additive optional — mirrors sketch base/variant/stage. */
     aiRequestId?: string;
-  };
+  } & SaveResourceOutcomeFields;
   error?: string;
   meta?: { processingTime?: number; mimeType?: string; tokenUsage?: number; model?: string };
 }
@@ -64,7 +68,10 @@ export async function callGenerateSketchSpread(
     sketchSpreadId: params.sketchSpreadId,
     page: params.page,
     ...(params.targetRatio ? { targetRatio: params.targetRatio } : {}),
+    ...(params.saveResource ? { saveResource: params.saveResource } : {}),
   };
 
-  return callImageApi<GenerateSpreadImageResult>(GENERATE_SPREAD_IMAGE_PATH, body);
+  const res = await callImageApi<GenerateSpreadImageResult>(GENERATE_SPREAD_IMAGE_PATH, body);
+  warnIfSaveResourceFailed(log.warn, 'callGenerateSketchSpread', res);
+  return res;
 }

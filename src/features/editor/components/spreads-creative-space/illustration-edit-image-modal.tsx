@@ -13,6 +13,7 @@ import {
 import type { EditToolKey } from "@/features/editor/components/shared-components/edit-image-modal";
 import { useRawImageById, useSnapshotActions, useSnapshotId } from "@/stores/snapshot-store/selectors";
 import type { Illustration } from "@/types/prop-types";
+import type { SaveResourceDirective } from "@/types/save-resource";
 import { createLogger } from "@/utils/logger";
 
 const log = createLogger("Editor", "IllustrationEditImageModal");
@@ -29,6 +30,9 @@ interface IllustrationEditImageModalProps {
    *  Absent ⇒ the commit is only persisted on the session's release-time save-if-dirty (ADR-044,
    *  mirror of RetouchEditImageModal). */
   onCommitSave?: () => Promise<boolean>;
+  /** Opt-in double-write directive — pass-through to EditImageModal (path resolved by the opener,
+   *  Phase 04). Undefined → omitted. */
+  saveResource?: SaveResourceDirective;
 }
 
 export function IllustrationEditImageModal({
@@ -38,6 +42,7 @@ export function IllustrationEditImageModal({
   imageId,
   enabledTools,
   onCommitSave,
+  saveResource,
 }: IllustrationEditImageModalProps) {
   const image = useRawImageById(spreadId, imageId);
   const { updateRawImage } = useSnapshotActions();
@@ -85,6 +90,7 @@ export function IllustrationEditImageModal({
       enabledTools={enabledTools}
       referenceImageCandidates={referenceImageCandidates}
       attribution={{ snapshotId: snapshotId ?? undefined }}
+      saveResource={saveResource}
     />
   );
 }

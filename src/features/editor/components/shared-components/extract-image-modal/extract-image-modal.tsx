@@ -19,6 +19,7 @@ import { toast } from "sonner";
 import { useInteractionLayer } from "@/features/editor/contexts";
 import { createLogger } from "@/utils/logger";
 import type { SpreadImage } from "@/types/spread-types";
+import type { SaveResourceDirective } from "@/types/save-resource";
 import { SWAP_MODAL_TOKENS, Z_INDEX, HEADER_HEIGHT_PX, RIGHT_SIDEBAR_WIDTH_PX } from "./extract-image-modal-constants";
 import {
   EXTRACT_TABS,
@@ -87,6 +88,10 @@ export interface ExtractImageModalProps {
   /** Attribution-only snapshot version id (book cost) forwarded into the AI extract tabs
    *  (segment / layering / background / get_text). Book-context only — never remix. */
   snapshotId?: string;
+  /** Opt-in double-write directive (parent/opener resolves the path). v1 threads to the Background
+   *  tab only (RESERVED create-node — see background-tab); other extract tabs are not wired.
+   *  Undefined → payload omits the field. */
+  saveResource?: SaveResourceDirective;
   /** Background tab — other spread images (effective URLs, source excluded) offered as
    *  remove targets. Absent/[] → Background grid empty → run disabled. */
   backgroundRemoveCandidates?: BackgroundRemoveCandidate[];
@@ -109,6 +114,7 @@ export function ExtractImageModal({
   yieldedFrom,
   detectContext,
   snapshotId,
+  saveResource,
   backgroundRemoveCandidates = [],
   cropPresets,
   onUpsertCropPreset,
@@ -159,6 +165,7 @@ export function ExtractImageModal({
     onRequestRun,
     removeCandidates: backgroundRemoveCandidates,
     snapshotId,
+    saveResource,
   });
 
   // ── Derived (computed in render — no set-state-in-effect, React 19 lint) ─────────

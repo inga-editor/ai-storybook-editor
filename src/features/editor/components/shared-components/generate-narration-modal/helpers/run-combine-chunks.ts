@@ -9,6 +9,7 @@ import {
   type CombineAudioChunksErrorCode,
 } from '@/apis/combine-audio-chunks-api';
 import type { WordTiming } from '@/types/spread-types';
+import type { SaveResourceDirective } from '@/types/save-resource';
 
 import type { ChunkDraft } from '../components/chunk-types';
 
@@ -31,6 +32,9 @@ export type CombineChunksOutcome =
 export interface RunCombineChunksParams {
   chunks: ChunkDraft[];
   signal: AbortSignal;
+  /** Opt-in auto-persist directive (textbox_combined_audio anchor). Only the >=2-chunk
+   *  combine path reaches here; the 1-chunk shortcut never calls this (no combine directive). */
+  saveResource?: SaveResourceDirective;
 }
 
 /**
@@ -40,7 +44,7 @@ export interface RunCombineChunksParams {
 export async function runCombineChunks(
   params: RunCombineChunksParams,
 ): Promise<CombineChunksOutcome> {
-  const { chunks, signal } = params;
+  const { chunks, signal, saveResource } = params;
 
   const payload = chunks.map((c) => {
     const sel = c.results.find((r) => r.is_selected);
@@ -53,7 +57,8 @@ export async function runCombineChunks(
 
   try {
     const res = await callCombineAudioChunks(
-      { chunks: payload },
+      // Undefined ⇒ client drops the field (strict backward-compat). Client warns on soft-fail.
+      { chunks: payload, saveResource },
       { signal },
     );
     if (!res.success) {

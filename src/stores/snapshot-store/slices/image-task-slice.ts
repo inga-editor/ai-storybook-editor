@@ -28,6 +28,8 @@ import {
 } from './collab-image-save-helper';
 import { ACTION_TYPE_UPLOAD } from '@/apis/activity-log-client';
 import { toastLockedByOther } from '@/utils/collab-save-toasts';
+import { buildImageVersionSaveResource } from '@/utils/save-resource-path';
+import type { SaveResourceDirective } from '@/types/save-resource';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('Store', 'ImageTaskSlice');
@@ -226,12 +228,62 @@ async function persistIllustrationCollab(
   }
 }
 
+/**
+ * COLUMN-RELATIVE `image_version` anchor path for a task target (helper prepends the snapshot root).
+ * Same resolver drives BOTH generate ('create') and edit ('edit') so the opt-in save-directive node
+ * always matches the node the client optimistically prepends into (findIllustrations, same keys).
+ * Entity (character/prop/stage): base is variant `key='base'` so `childKey` carries it verbatim.
+ * Returns null for an unknown entityType (defensive — caller then omits the directive).
+ */
+function resolveImageVersionColPath(
+  entityType: ImageTaskEntityType,
+  entityKey: string,
+  childKey: string,
+): string | null {
+  switch (entityType) {
+    case 'character':
+      return `col:characters/find:key=${entityKey}/key:variants/find:key=${childKey}`;
+    case 'prop':
+      return `col:props/find:key=${entityKey}/key:variants/find:key=${childKey}`;
+    case 'stage':
+      return `col:stages/find:key=${entityKey}/key:variants/find:key=${childKey}`;
+    case 'illustration_image':
+      // scene raw image — entityKey = spread id, childKey = raw_images[] node id
+      return `col:illustration/spread:${entityKey}/key:raw_images/find:id=${childKey}`;
+    case 'retouch_image':
+      // retouch layer image — entityKey = spread id, childKey = images[] node id
+      return `col:illustration/spread:${entityKey}/key:images/find:id=${childKey}`;
+    default:
+      return null;
+  }
+}
+
+/**
+ * Build the opt-in `image_version` save directive for a task target, or undefined when it cannot be
+ * anchored (no snapshot row yet, or unknown entityType) — in which case the client-side persist path
+ * remains the sole writer. `action` = 'create' (generate) | 'edit' (AI edit).
+ */
+function buildImageTaskSaveResource(
+  entityType: ImageTaskEntityType,
+  entityKey: string,
+  childKey: string,
+  snapshotId: string | undefined,
+  action: 'create' | 'edit',
+): SaveResourceDirective | undefined {
+  if (!snapshotId) return undefined;
+  const colPath = resolveImageVersionColPath(entityType, entityKey, childKey);
+  if (!colPath) return undefined;
+  return buildImageVersionSaveResource(colPath, snapshotId, action);
+}
+
 /** Routes a generate call to the correct illustration API based on discriminated union params.
  *  `snapshotId` (= store meta.id) is injected by the slice for the scene path only — the backend
- *  resolves `@<key>/<variant>` mentions → entity reference images (07-generate-scene). */
+ *  resolves `@<key>/<variant>` mentions → entity reference images (07-generate-scene). `saveResource`
+ *  is the opt-in auto-persist directive built at the slice (same node the client prepends into). */
 function routeGenerateCall(
   params: StartGenerateTaskParams,
   snapshotId?: string,
+  saveResource?: SaveResourceDirective,
 ): Promise<IllustrationGenerateResult | ImageApiFailure> {
   switch (params.entityType) {
     case 'character':
@@ -244,6 +296,7 @@ function routeGenerateCall(
           artStyleId: params.artStyleId,
           referenceImages: params.referenceImages,
           snapshotId,
+          saveResource,
         });
       }
       return callGenerateCharacterVariant({
@@ -255,6 +308,7 @@ function routeGenerateCall(
         artStyleId: params.artStyleId,
         additionalReferenceImages: params.additionalReferenceImages,
         snapshotId,
+        saveResource,
       });
 
     case 'prop':
@@ -269,6 +323,7 @@ function routeGenerateCall(
           artStyleId: params.artStyleId,
           referenceImages: params.referenceImages,
           snapshotId,
+          saveResource,
         });
       }
       return callGeneratePropVariant({
@@ -279,6 +334,7 @@ function routeGenerateCall(
         artStyleId: params.artStyleId,
         additionalReferenceImages: params.additionalReferenceImages,
         snapshotId,
+        saveResource,
       });
 
     case 'stage':
@@ -291,6 +347,7 @@ function routeGenerateCall(
           artStyleId: params.artStyleId,
           referenceImages: params.referenceImages,
           snapshotId,
+          saveResource,
         });
       }
       return callGenerateStageVariant({
@@ -304,6 +361,7 @@ function routeGenerateCall(
         artStyleId: params.artStyleId,
         additionalReferenceImages: params.additionalReferenceImages,
         snapshotId,
+        saveResource,
       });
 
     case 'illustration_image':
@@ -316,6 +374,7 @@ function routeGenerateCall(
         modelParams: params.modelParams,
         edgeTreatment: params.edgeTreatment,
         snapshotId,
+        saveResource,
       });
 
     default:
@@ -387,7 +446,11 @@ export const createImageTaskSlice: StateCreator<
     // Inject snapshotId (= meta.id) at the slice so the scene path can resolve @mentions;
     // empty/absent id → omit the field (optional — mentions degrade to plain text).
     const snapshotId = get().meta.id || undefined;
-    const apiCall = routeGenerateCall(params, snapshotId);
+    // Opt-in auto-persist (BE-first double-write): anchor the SAME variant/scene node the client
+    // optimistically prepends into on success; action='create' (AI generate). Undefined when the
+    // book has no snapshot row yet OR entityType is unmapped → client persist stays the sole writer.
+    const saveResource = buildImageTaskSaveResource(entityType, entityKey, childKey, snapshotId, 'create');
+    const apiCall = routeGenerateCall(params, snapshotId, saveResource);
 
     apiCall
       .then((result) => {
@@ -476,7 +539,10 @@ export const createImageTaskSlice: StateCreator<
     // Attribution: this slice edits the book snapshot (never remix) → forward snapshotId only.
     // Empty/absent id → omit the field (optional attribution).
     const snapshotId = get().meta.id || undefined;
-    callEditObjectImage({ prompt, imageUrl, referenceImages, aspectRatio, snapshotId })
+    // Opt-in auto-persist (BE-first double-write): SAME node the client prepends into; action='edit'
+    // (AI edit → Illustration Entry type='edited'). Undefined when no snapshot row / unmapped type.
+    const saveResource = buildImageTaskSaveResource(entityType, entityKey, childKey, snapshotId, 'edit');
+    callEditObjectImage({ prompt, imageUrl, referenceImages, aspectRatio, snapshotId, saveResource })
       .then((result) => {
         const taskStillExists = get().imageTasks.some((t) => t.id === taskId);
         if (!taskStillExists) {

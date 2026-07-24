@@ -32,6 +32,7 @@ import type { Illustration } from '@/types/prop-types';
 import type { ItemType, ViewMode } from '@/types/canvas-types';
 import type { PageNumberingSettings } from '@/types/editor';
 import type { RemixSpread, RemixSpreadImage } from '@/types/remix';
+import type { SaveResourceDirective } from '@/types/save-resource';
 
 const log = createLogger('Editor', 'RemixDisplayCanvasArea');
 
@@ -90,6 +91,18 @@ export function RemixDisplayCanvasArea({ spreads, remixId, pageNumbering }: Prop
     const spread = spreads.find((s) => s.id === editModal.spreadId);
     return spread?.images.find((img) => img.id === editModal.imageId) ?? null;
   }, [editModal, spreads]);
+
+  // Phase 04: opt-in double-write for the remix image edit. Backend B (remix) — ABSOLUTE
+  // `table:remixes` anchor, NO snapshot root (built literal; withSnapshotRoot would pass a
+  // `table:` path through unchanged). Memoized so the modal's tab-hook deps don't churn per render.
+  const editSaveResource = useMemo<SaveResourceDirective | undefined>(() => {
+    if (editModal.kind !== 'edit') return undefined;
+    return {
+      type: 'image_version',
+      path: `table:remixes/id:${remixId}/col:illustration/spread:${editModal.spreadId}/key:images/find:id=${editModal.imageId}`,
+      action: 'edit',
+    };
+  }, [editModal, remixId]);
 
   // Persist one image-layer patch; store action owns optimistic set + rollback.
   const handleImageUpdate = useCallback(
@@ -275,6 +288,7 @@ export function RemixDisplayCanvasArea({ spreads, remixId, pageNumbering }: Prop
         initialTool="inpaint"
         referenceImageCandidates={referenceImageCandidates}
         attribution={{ remixId }}
+        saveResource={editSaveResource}
         onUpdateIllustrations={(next) =>
           handleImageUpdate(editModal.spreadId, editModal.imageId, {
             illustrations: next,

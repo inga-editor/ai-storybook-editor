@@ -10,6 +10,7 @@ import {
 } from '@/apis/narrate-script-api';
 import { NARRATION_OUTPUT_FORMAT } from '@/types/textbox-audio-adapter';
 import type { TextboxAudioResult } from '@/types/spread-types';
+import type { SaveResourceDirective } from '@/types/save-resource';
 import type { Voice } from '@/types/voice';
 
 import type { ChunkDraft } from '../components/chunk-types';
@@ -36,6 +37,8 @@ export interface RunGenerateChunkParams {
   signal: AbortSignal;
   /** Attribution-only — spread-narration is book-scoped → ai_service_logs.snapshot_id. */
   snapshotId?: string;
+  /** Opt-in auto-persist directive (textbox_audio_chunk anchor). Undefined ⇒ not opted in. */
+  saveResource?: SaveResourceDirective;
 }
 
 /**
@@ -46,7 +49,7 @@ export interface RunGenerateChunkParams {
 export async function runGenerateChunk(
   params: RunGenerateChunkParams,
 ): Promise<GenerateChunkOutcome> {
-  const { chunk, voicesById, signal, snapshotId } = params;
+  const { chunk, voicesById, signal, snapshotId, saveResource } = params;
 
   const validation = validateChunk(chunk, voicesById);
   if (!validation.ok) {
@@ -76,6 +79,8 @@ export async function runGenerateChunk(
         }),
         outputFormat: NARRATION_OUTPUT_FORMAT,
         snapshotId,
+        // Undefined ⇒ client drops the field (strict backward-compat). Client warns on soft-fail.
+        saveResource,
       },
       { signal },
     );

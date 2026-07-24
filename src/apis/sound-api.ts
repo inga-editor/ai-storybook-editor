@@ -1,5 +1,7 @@
 import { callImageApi, type ImageApiFailure } from '@/apis/image-api-client';
 import { createLogger } from '@/utils/logger';
+import type { SaveResourceDirective, SaveResourceOutcomeFields } from '@/types/save-resource';
+import { warnIfSaveResourceFailed } from '@/utils/save-resource-path';
 
 const log = createLogger('SoundApi', 'callGenerateSoundEffect');
 
@@ -19,6 +21,8 @@ export interface GenerateSoundEffectRequest {
   promptInfluence?: number;
   seed?: number | null;
   outputFormat?: SoundEffectOutputFormat;
+  /** Opt-in auto-persist directive — added to the payload only when defined (table:sounds target). */
+  saveResource?: SaveResourceDirective;
 }
 
 export interface GenerateSoundEffectData {
@@ -41,7 +45,7 @@ export interface GenerateSoundEffectMeta {
 
 export interface GenerateSoundEffectSuccess {
   success: true;
-  data: GenerateSoundEffectData;
+  data: GenerateSoundEffectData & SaveResourceOutcomeFields;
   meta?: GenerateSoundEffectMeta;
 }
 
@@ -157,6 +161,7 @@ export async function callGenerateSoundEffect(
   if (params.promptInfluence !== undefined) payload.promptInfluence = params.promptInfluence;
   if (params.seed !== undefined) payload.seed = params.seed;
   if (params.outputFormat !== undefined) payload.outputFormat = params.outputFormat;
+  if (params.saveResource) payload.saveResource = params.saveResource;
 
   log.info('callGenerateSoundEffect', 'start', {
     descLen: description.length,
@@ -186,5 +191,6 @@ export async function callGenerateSoundEffect(
     mediaType: result.data.mediaType,
     processingTimeMs: result.meta?.processingTimeMs,
   });
+  warnIfSaveResourceFailed(log.warn, 'callGenerateSoundEffect', result);
   return result;
 }

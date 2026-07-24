@@ -404,6 +404,7 @@ export const createSketchSlice: StateCreator<
     pageType: SketchPageType,
     mediaUrl: string,
     aiRequestId?: string,
+    imageId?: string,
   ) =>
     set((state) => {
       const spread = state.sketch.spreads.find((s) => s.id === spreadId);
@@ -411,7 +412,10 @@ export const createSketchSlice: StateCreator<
       let img = spread.images.find((im) => im.type === pageType);
       if (!img) {
         log.debug('addSketchSpreadImageVersion', 'create page image', { spreadId, pageType });
-        spread.images.push({ id: crypto.randomUUID(), type: pageType, illustrations: [] });
+        // `imageId` lets the spread-generate job pre-mint the node id BEFORE the AI call so the opt-in
+        // saveResource directive addresses the SAME node the BE nested-creates (no duplicate node).
+        // Absent → mint here (uploads / callers not opting into the BE-first double-write).
+        spread.images.push({ id: imageId ?? crypto.randomUUID(), type: pageType, illustrations: [] });
         img = spread.images[spread.images.length - 1]; // re-read as immer draft proxy
       }
       img.illustrations.forEach((ill) => {

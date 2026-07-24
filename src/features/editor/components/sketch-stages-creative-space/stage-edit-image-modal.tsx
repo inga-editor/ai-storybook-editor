@@ -22,6 +22,7 @@ import {
 import { SPACE_TOOL_MATRIX } from '@/features/editor/components/shared-components/image-tools-space-matrix';
 import { useSketchStageByKey, useSnapshotActions, useSnapshotId } from '@/stores/snapshot-store/selectors';
 import type { Illustration } from '@/types/prop-types';
+import type { SaveResourceDirective } from '@/types/save-resource';
 import { effectiveIllustrationUrl } from '@/types/sketch';
 import { createLogger } from '@/utils/logger';
 import type { StageEditImageTarget } from './sketch-stages-constants';
@@ -31,9 +32,12 @@ const log = createLogger('Editor', 'StageEditImageModal');
 export interface StageEditImageModalProps {
   target: StageEditImageTarget;
   onClose: () => void;
+  /** Opt-in double-write directive — pass-through to EditImageModal (path resolved by the opener,
+   *  Phase 04). Undefined → omitted. */
+  saveResource?: SaveResourceDirective;
 }
 
-export function StageEditImageModal({ target, onClose }: StageEditImageModalProps) {
+export function StageEditImageModal({ target, onClose, saveResource }: StageEditImageModalProps) {
   const stage = useSketchStageByKey(target.stageKey);
   const {
     setSketchStageStyleIllustrations,
@@ -157,6 +161,7 @@ export function StageEditImageModal({ target, onClose }: StageEditImageModalProp
       initialTool="inpaint"
       referenceImageCandidates={referenceImageCandidates}
       attribution={{ snapshotId: snapshotId ?? undefined }}
+      saveResource={saveResource}
     />
   );
 }

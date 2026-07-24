@@ -2,6 +2,8 @@ import { callImageApi, type ImageApiFailure } from './image-api-client';
 import { createLogger } from '@/utils/logger';
 import type { AspectRatio } from '@/constants/aspect-ratio-constants';
 import type { ExtractedTrait, VisualProfileTrait } from '@/types/human';
+import type { SaveResourceDirective, SaveResourceOutcomeFields } from '@/types/save-resource';
+import { warnIfSaveResourceFailed } from '@/utils/save-resource-path';
 
 export type { AspectRatio };
 
@@ -12,7 +14,7 @@ const imageApiKey = import.meta.env.VITE_IMAGE_API_KEY as string;
 
 // --- New types: multipart FastAPI normalize-ratio ---
 
-export interface NormalizeImageData {
+export interface NormalizeImageData extends SaveResourceOutcomeFields {
   publicUrl: string;
   path: string;
   ratio: AspectRatio | null;
@@ -120,12 +122,16 @@ async function postMultipart<R extends { success: boolean }>(
 export async function normalizeImage(
   file: File,
   outputPrefix?: string,
+  saveResource?: SaveResourceDirective,
 ): Promise<NormalizeImageResult> {
   log.info('normalizeImage', 'start', { filename: file.name, size: file.size, type: file.type, outputPrefix });
 
   const form = new FormData();
   form.append('file', file);
   if (outputPrefix) form.append('outputPrefix', outputPrefix);
+  // Multipart flow: JSON-encode the directive into a FormData field named `saveResource`
+  // (NOT a JSON body). Append only when defined — strict backward-compat with the BE model.
+  if (saveResource) form.append('saveResource', JSON.stringify(saveResource));
 
   const result = await postMultipart<NormalizeImageSuccess>('/api/image/normalize-ratio', form);
 
@@ -140,6 +146,7 @@ export async function normalizeImage(
     log.error('normalizeImage', 'failed', { errorCode: result.errorCode, httpStatus: result.httpStatus });
   }
 
+  warnIfSaveResourceFailed(log.warn, 'normalizeImage', result);
   return result;
 }
 
@@ -149,12 +156,12 @@ export type FaceToManyStyle = '3D' | 'Emoji' | 'Video Game' | 'Pixels' | 'Clay' 
 
 export interface NormalizeHumanResponse {
   success: true;
-  data: { imageUrl: string; storagePath: string };
+  data: { imageUrl: string; storagePath: string } & SaveResourceOutcomeFields;
 }
 
 export interface ExtractHumanTraitsResponse {
   success: true;
-  data: { traits: ExtractedTrait[] };
+  data: { traits: ExtractedTrait[] } & SaveResourceOutcomeFields;
 }
 
 /** Host-only for logging — never log full URL (may carry signed tokens). */
@@ -173,17 +180,21 @@ function urlHost(url: string): string {
 export async function normalizeHuman(
   imageUrl: string,
   style: FaceToManyStyle = '3D',
+  saveResource?: SaveResourceDirective,
 ): Promise<NormalizeHumanResponse | ImageApiFailure> {
   log.info('normalizeHuman', 'start', { host: urlHost(imageUrl), style });
   const result = await callImageApi<NormalizeHumanResponse>('/api/image/normalize-human', {
     imageUrl,
     style,
+    // Attach the directive only when defined — strict backward-compat (BE model is extra=forbid).
+    ...(saveResource ? { saveResource } : {}),
   });
   if (result.success) {
     log.debug('normalizeHuman', 'ok', { host: urlHost(result.data.imageUrl) });
   } else {
     log.error('normalizeHuman', 'failed', { errorCode: result.errorCode, httpStatus: result.httpStatus });
   }
+  warnIfSaveResourceFailed(log.warn, 'normalizeHuman', result);
   return result;
 }
 
@@ -194,17 +205,21 @@ export async function normalizeHuman(
 export async function extractHumanTraits(
   imageUrl: string,
   descriptionLanguage: 'en' | 'vi' = 'en',
+  saveResource?: SaveResourceDirective,
 ): Promise<ExtractHumanTraitsResponse | ImageApiFailure> {
   log.info('extractHumanTraits', 'start', { host: urlHost(imageUrl), descriptionLanguage });
   const result = await callImageApi<ExtractHumanTraitsResponse>('/api/image/extract-human-traits', {
     imageUrl,
     descriptionLanguage,
+    // Attach the directive only when defined — strict backward-compat (BE model is extra=forbid).
+    ...(saveResource ? { saveResource } : {}),
   });
   if (result.success) {
     log.debug('extractHumanTraits', 'ok', { count: result.data.traits.length });
   } else {
     log.error('extractHumanTraits', 'failed', { errorCode: result.errorCode, httpStatus: result.httpStatus });
   }
+  warnIfSaveResourceFailed(log.warn, 'extractHumanTraits', result);
   return result;
 }
 
@@ -234,11 +249,13 @@ export interface UpscaleImagePayload {
   snapshotId?: string;
   /** Remix context → ai_service_logs.remix_id (discriminator — wins over snapshotId). */
   remixId?: string;
+  /** Opt-in auto-persist directive — forwarded to the body only when defined (JSON.stringify drops undefined). */
+  saveResource?: SaveResourceDirective;
 }
 
 export interface UpscaleImageResponse {
   success: true;
-  data: { imageUrl: string; storagePath: string; width: number; height: number; aiRequestId?: string };
+  data: { imageUrl: string; storagePath: string; width: number; height: number; aiRequestId?: string } & SaveResourceOutcomeFields;
   meta?: {
     processingTime?: number;
     mimeType?: string;
@@ -285,6 +302,7 @@ export async function callImageUpscale(
   } else {
     log.error('callImageUpscale', 'failed', { errorCode: result.errorCode, httpStatus: result.httpStatus });
   }
+  warnIfSaveResourceFailed(log.warn, 'callImageUpscale', result);
   return result;
 }
 

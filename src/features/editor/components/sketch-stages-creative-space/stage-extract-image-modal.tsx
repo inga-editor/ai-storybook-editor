@@ -16,6 +16,7 @@ import { appendMediaVersions } from '@/features/editor/components/shared-compone
 import { useSketchStageByKey, useSnapshotActions } from '@/stores/snapshot-store/selectors';
 import type { Illustration } from '@/types/prop-types';
 import type { Geometry, SpreadImage } from '@/types/spread-types';
+import type { SaveResourceDirective } from '@/types/save-resource';
 import { createLogger } from '@/utils/logger';
 import type { StageExtractImageTarget } from './sketch-stages-constants';
 
@@ -34,9 +35,13 @@ function effectiveUrl(illustrations: Illustration[]): string | undefined {
 export interface StageExtractImageModalProps {
   target: StageExtractImageTarget;
   onClose: () => void;
+  /** Opt-in double-write directive — pass-through to ExtractImageModal (Background tab; path resolved
+   *  by the opener, Phase 04). This space enables the Crop tab only, so v1 has no effective target.
+   *  Undefined → omitted. */
+  saveResource?: SaveResourceDirective;
 }
 
-export function StageExtractImageModal({ target, onClose }: StageExtractImageModalProps) {
+export function StageExtractImageModal({ target, onClose, saveResource }: StageExtractImageModalProps) {
   const stage = useSketchStageByKey(target.stageKey);
   const { setSketchStageBaseCropIllustrations, setSketchStageVariantCropIllustrations } =
     useSnapshotActions();
@@ -105,6 +110,7 @@ export function StageExtractImageModal({ target, onClose }: StageExtractImageMod
       onUpsertCropPreset={presets.onUpsertCropPreset}
       onDeleteCropPreset={presets.onDeleteCropPreset}
       onCreateImages={handleCreate}
+      saveResource={saveResource}
     />
   );
 }

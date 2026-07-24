@@ -19,6 +19,7 @@ import { createLogger } from '@/utils/logger';
 import { callGenerateBackground, type GenerateBackgroundResult } from '@/apis/retouch-api';
 import type { ImageApiFailure } from '@/apis/image-api-client';
 import type { SpreadImage } from '@/types/spread-types';
+import type { SaveResourceDirective } from '@/types/save-resource';
 import {
   BACKGROUND_MODEL_OPTIONS,
   DEFAULT_BACKGROUND_MODEL,
@@ -74,6 +75,9 @@ interface UseBackgroundTabOptions {
   removeCandidates: BackgroundRemoveCandidate[];
   /** Attribution-only snapshot version id → ai_service_logs.snapshot_id (book cost). */
   snapshotId?: string;
+  /** Opt-in double-write directive (parent-resolved path). Undefined → payload omits it.
+   *  RESERVED: create-node — v1 no effective persist; client-spawn onCreateImages remains the persist path. */
+  saveResource?: SaveResourceDirective;
 }
 
 function candidateToItem(c: BackgroundRemoveCandidate): BackgroundRemoveItem {
@@ -82,7 +86,7 @@ function candidateToItem(c: BackgroundRemoveCandidate): BackgroundRemoveItem {
 
 export function useBackgroundTabState(
   image: SpreadImage,
-  { isBusy, onRequestRun, removeCandidates, snapshotId }: UseBackgroundTabOptions,
+  { isBusy, onRequestRun, removeCandidates, snapshotId, saveResource }: UseBackgroundTabOptions,
 ): BackgroundTabHandle {
   const [model, setModel] = useState<string>(DEFAULT_BACKGROUND_MODEL);
   const [prompt, setPrompt] = useState('');
@@ -149,6 +153,8 @@ export function useBackgroundTabState(
         // Omit modelParams when the default model is selected (server default applies).
         modelParams: model !== DEFAULT_BACKGROUND_MODEL ? { model } : undefined,
         snapshotId,
+        // RESERVED: create-node — v1 no effective persist; client-spawn onCreateImages remains the persist path.
+        ...(saveResource ? { saveResource } : {}),
       });
 
       if (!res.success) {
@@ -181,7 +187,7 @@ export function useBackgroundTabState(
         },
       ];
     },
-    [removeItems, prompt, model, image.title, snapshotId],
+    [removeItems, prompt, model, image.title, snapshotId, saveResource],
   );
 
   const handlePromptKeyDown = useCallback(

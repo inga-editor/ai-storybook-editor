@@ -214,4 +214,84 @@ describe('ImageTaskSlice — collab per-resource save wiring', () => {
     expect(store.getState().sync.isDirty).toBe(true);
     expect(h.save).not.toHaveBeenCalled();
   });
+
+  describe('saveResource wiring — opt-in BE-first double-write', () => {
+    it('generate scene passes saveResource with correct image_version anchor', async () => {
+      mockedScene.mockResolvedValue(okScene as never);
+      const store = createTestStore();
+
+      store.getState().startGenerateTask(sceneParams());
+      await flush();
+
+      expect(mockedScene).toHaveBeenCalledWith(
+        expect.objectContaining({
+          saveResource: expect.objectContaining({
+            type: 'image_version',
+            path: expect.stringContaining('table:snapshots/id:snap-1/col:illustration/spread:sp1/key:raw_images/find:id=ri1'),
+            action: 'create',
+          }),
+        }),
+      );
+    });
+
+    it('edit passes saveResource with edit action', async () => {
+      mockedEdit.mockResolvedValue({ success: true, data: { imageUrl: 'edited.png' } } as never);
+      const store = createTestStore();
+
+      store.getState().startEditTask({
+        entityType: 'illustration_image',
+        entityKey: 'sp1',
+        entityName: 'S',
+        childKey: 'ri1',
+        childName: 'R',
+        prompt: 'make it blue',
+        imageUrl: 'orig.png',
+      });
+      await flush();
+
+      expect(mockedEdit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          saveResource: expect.objectContaining({
+            type: 'image_version',
+            action: 'edit',
+          }),
+        }),
+      );
+    });
+
+    it('omits saveResource when snapshotId is absent (not opted in)', async () => {
+      mockedScene.mockResolvedValue(okScene as never);
+      /* eslint-disable @typescript-eslint/no-explicit-any */
+      const store = create<any>()(
+        immer((...a: any[]) => ({
+          ...(createImageTaskSlice as any)(...a),
+          characters: [],
+          props: [],
+          stages: [],
+          illustration: {
+            spreads: [
+              {
+                id: 'sp1',
+                raw_images: [{ id: 'ri1', illustrations: [] }],
+                images: [{ id: 'img1', illustrations: [] }],
+              },
+            ],
+          },
+          meta: { id: null, bookId: 'book-1' }, // No snapshot id
+          sync: { isDirty: false, isSaving: false },
+        })),
+      );
+      /* eslint-enable @typescript-eslint/no-explicit-any */
+
+      store.getState().startGenerateTask(sceneParams());
+      await flush();
+
+      // When snapshotId is null, saveResource should be undefined so it's not included in the body
+      expect(mockedScene).toHaveBeenCalledWith(
+        expect.not.objectContaining({
+          saveResource: expect.anything(),
+        }),
+      );
+    });
+  });
 });

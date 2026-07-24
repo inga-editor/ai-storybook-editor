@@ -1,5 +1,7 @@
 import { createLogger } from '@/utils/logger';
 import type { RawAlignment } from '@/types/spread-types';
+import type { SaveResourceDirective, SaveResourceOutcomeFields } from '@/types/save-resource';
+import { warnIfSaveResourceFailed } from '@/utils/save-resource-path';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // narrate-script API client
@@ -42,6 +44,8 @@ export interface NarrateScriptRequest {
   snapshotId?: string;
   /** Voice-config preview context → ai_service_logs.book_id (book-level, not snapshot-bound). */
   bookId?: string;
+  /** Opt-in auto-persist directive — forwarded to the body only when defined (JSON.stringify drops undefined). */
+  saveResource?: SaveResourceDirective;
 }
 
 export interface NarrationWordTiming {
@@ -73,7 +77,7 @@ export interface NarrateScriptSuccess {
     words: NarrationWordTiming[];
     /** Raw ElevenLabs alignment — persisted verbatim per chunk result. */
     rawAlignment: RawAlignment;
-  };
+  } & SaveResourceOutcomeFields;
   meta?: NarrateScriptMeta;
 }
 
@@ -289,7 +293,9 @@ export async function callNarrateScript(
       alignmentFallback: body.meta?.alignmentFallback,
     });
 
-    return { success: true, data, meta: body.meta };
+    const result: NarrateScriptResult = { success: true, data, meta: body.meta };
+    warnIfSaveResourceFailed(log.warn, 'callNarrateScript', result);
+    return result;
   } catch (err) {
     const name = (err as { name?: string } | null)?.name;
     if (options?.signal?.aborted) {

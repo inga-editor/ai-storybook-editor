@@ -37,6 +37,7 @@ import {
   useStageSheetGenerateOp,
   useStageGenerateStatus,
   useSnapshotActions,
+  useSnapshotId,
   stageTargetsEqual,
 } from '@/stores/snapshot-store/selectors';
 import { useCurrentBookId } from '@/stores/book-store';
@@ -52,6 +53,8 @@ import { LockedByOtherOverlay } from '@/features/editor/components/shared-compon
 import { CANVAS_CONFIRM_DIALOG_Z } from '@/constants/spread-constants';
 import type { SketchStage, StageSelection } from '@/types/sketch';
 import { effectiveStageBaseUrl } from '@/types/sketch';
+import type { SaveResourceDirective } from '@/types/save-resource';
+import { buildImageVersionSaveResource } from '@/utils/save-resource-path';
 import { createLogger } from '@/utils/logger';
 import { useStageLockSession } from './use-stage-lock-session';
 import { StageSidebar } from './stage-sidebar';
@@ -108,6 +111,8 @@ export function SketchStagesCreativeSpace() {
     selectSketchStageVariantCrop,
     startStageVariantSheetGenerate,
   } = useSnapshotActions();
+  // Book-edit context (Sketch space is never remix) → the opt-in saveResource snapshot root.
+  const snapshotId = useSnapshotId();
 
   // ── Local UI state (owner = this root; state-location rule) ─────────────────────────────────
   const [userSelection, setUserSelection] = useState<StageSelection | null>(null);
@@ -342,6 +347,33 @@ export function SketchStagesCreativeSpace() {
     }
   }, [selection, displayedLockedByOther, lock]);
 
+  // === Phase 04: opt-in saveResource for the Edit path (4 scopes) ===
+  // Stage anchors (per BE path grammar): base workspace lives PER-STAGE under
+  // `key:stages/find:key/key:base/key:styles/idx`; the stage variant is FLAT (NO `raw_sheet`) —
+  // variant-raw anchors the variant node itself, crops are positional (`key:crops/idx`).
+  // Undefined snapshot ⇒ omit. (Extract crop = RESERVED — see the modal mount below.)
+  const editImageSaveResource = useMemo<SaveResourceDirective | undefined>(() => {
+    if (!snapshotId || !editImageTarget) return undefined;
+    const t = editImageTarget;
+    const stageRoot = `col:sketch/key:stages/find:key=${t.stageKey}`;
+    let path: string;
+    switch (t.scope) {
+      case 'base-raw':
+        path = `${stageRoot}/key:base/key:styles/idx:${t.styleIndex}`;
+        break;
+      case 'base-crop':
+        path = `${stageRoot}/key:base/key:styles/idx:${t.styleIndex}/key:crops/idx:${t.cropIndex}`;
+        break;
+      case 'variant-raw':
+        path = `${stageRoot}/key:variants/find:key=${t.variantKey}`; // FLAT — no raw_sheet
+        break;
+      case 'variant-crop':
+        path = `${stageRoot}/key:variants/find:key=${t.variantKey}/key:crops/idx:${t.cropIndex}`;
+        break;
+    }
+    return buildImageVersionSaveResource(path, snapshotId, 'edit');
+  }, [snapshotId, editImageTarget]);
+
   // ── Import ⬆ (design 05) — parse/confirm/commit pipeline lives in useStageImport. ───────────
   const handleImportReplaced = useCallback(() => {
     setUserSelection(null); // stale selection after a full replace → re-derive
@@ -425,9 +457,16 @@ export function SketchStagesCreativeSpace() {
         />
       )}
       {editImageTarget && (
-        <StageEditImageModal target={editImageTarget} onClose={() => setEditImageTarget(null)} />
+        <StageEditImageModal
+          target={editImageTarget}
+          onClose={() => setEditImageTarget(null)}
+          saveResource={editImageSaveResource}
+        />
       )}
       {extractImageTarget && (
+        // Phase 04 RESERVED: NO saveResource — the stage Extract exposes the Crop tab only (CV cut,
+        // no AI provider → no anchor to double-write). Extracted cells persist via onCreateImages
+        // (setSketchStage*CropIllustrations + the stage held-session release-save).
         <StageExtractImageModal target={extractImageTarget} onClose={() => setExtractImageTarget(null)} />
       )}
 

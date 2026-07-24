@@ -37,6 +37,7 @@ import {
   useVariantSheetGenerateOps,
   useVariantSheetGenerateStatus,
   useSnapshotActions,
+  useSnapshotId,
 } from '@/stores/snapshot-store/selectors';
 import {
   variantOpKey,
@@ -63,6 +64,8 @@ import { useVariantEntityLockSession } from './use-variant-entity-lock-session';
 import { LockedByOtherOverlay } from '@/features/editor/components/shared-components/sketch-locked-by-other-overlay';
 import { CANVAS_CONFIRM_DIALOG_Z } from '@/constants/spread-constants';
 import type { BaseKind, SketchEntity, VariantRef } from '@/types/sketch';
+import type { SaveResourceDirective } from '@/types/save-resource';
+import { buildImageVersionSaveResource } from '@/utils/save-resource-path';
 import { createLogger } from '@/utils/logger';
 import { VariantKindSidebar } from './variant-kind-sidebar';
 import { VariantSheetContentArea } from './variant-sheet-content-area';
@@ -103,6 +106,8 @@ export function SketchVariantsCreativeSpace() {
   // across both kinds) + the content-area busy state.
   const ops = useVariantSheetGenerateOps();
   const { startVariantSheetGenerate, selectSketchVariantCrop } = useSnapshotActions();
+  // Book-edit context (Sketch space is never remix) → the opt-in saveResource snapshot root.
+  const snapshotId = useSnapshotId();
 
   // ── Local UI state (owner = this root; state-location rule) ────────────────────────────────
   const [selectedVariant, setSelectedVariant] = useState<VariantRef | null>(null);
@@ -407,6 +412,21 @@ export function SketchVariantsCreativeSpace() {
     }
   }, [selected, displayedLockedByOther, lock]);
 
+  // === Phase 04: opt-in saveResource for the Edit path (Raw sheet | one positional crop) ===
+  // Anchor = the variant node under its entity: raw → `key:raw_sheet` (char/prop wrap the sheet);
+  // crop → that variant's positional crop (`key:crops/idx`). `kind` is the column key directly.
+  // Undefined snapshot ⇒ omit. (Extract crop = RESERVED — see the modal mount below.)
+  const editImageSaveResource = useMemo<SaveResourceDirective | undefined>(() => {
+    if (!snapshotId || !editImageTarget) return undefined;
+    const t = editImageTarget;
+    const variantRoot = `col:sketch/key:${t.kind}/find:key=${t.entityKey}/key:variants/find:key=${t.variantKey}`;
+    const path =
+      t.scope === 'raw'
+        ? `${variantRoot}/key:raw_sheet`
+        : `${variantRoot}/key:crops/idx:${t.cropIndex}`;
+    return buildImageVersionSaveResource(path, snapshotId, 'edit');
+  }, [snapshotId, editImageTarget]);
+
   const regenerateMention = pendingRegenerate
     ? `@${pendingRegenerate.entityKey}/${pendingRegenerate.variantKey}`
     : '';
@@ -470,9 +490,13 @@ export function SketchVariantsCreativeSpace() {
         <VariantEditImageModal
           target={editImageTarget}
           onClose={() => setEditImageTarget(null)}
+          saveResource={editImageSaveResource}
         />
       )}
       {extractImageTarget && (
+        // Phase 04 RESERVED: NO saveResource — the variant Extract exposes the Crop tab only (CV cut,
+        // no AI provider → no anchor to double-write). Extracted cells persist via onCreateImages
+        // (setSketchVariantCropIllustrations + the entity held-session release-save).
         <VariantExtractImageModal
           target={extractImageTarget}
           onClose={() => setExtractImageTarget(null)}

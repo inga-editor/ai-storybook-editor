@@ -30,6 +30,7 @@ import { createLogger } from '@/utils/logger';
 import { callEditObjectImage, type EditObjectImageParams } from '@/apis/retouch-api';
 import type { ImageApiFailure } from '@/apis/image-api-client';
 import type { Illustration } from '@/types/prop-types';
+import type { SaveResourceDirective } from '@/types/save-resource';
 import { type Stroke, norm, paintStrokesOnCtx } from './erase-stroke-engine';
 import {
   BRUSH,
@@ -98,6 +99,8 @@ interface UseInpaintTabOptions {
   referenceImageCandidates?: ReferenceImageCandidate[];
   /** AI-usage attribution (book snapshotId / remix remixId) forwarded into the edit call. */
   attribution?: EditImageAttribution;
+  /** Opt-in double-write directive (parent-resolved path). Undefined → payload omits it. */
+  saveResource?: SaveResourceDirective;
 }
 
 export function useInpaintTabState({
@@ -105,6 +108,7 @@ export function useInpaintTabState({
   zoom,
   referenceImageCandidates,
   attribution,
+  saveResource,
 }: UseInpaintTabOptions): InpaintTabApi {
   const [model, setModel] = useState<InpaintModel>(INPAINT_DEFAULT_MODEL);
   // Reference-image picker + onPick (upload + picked prop-variant GỘP, cap = INPAINT_REF_MAX). Lives
@@ -291,6 +295,7 @@ export function useInpaintTabState({
         imageSize: INPAINT_IMAGE_SIZE,
         modelParams: { model }, // omit params → server temperature default 0.3
         ...(attribution ?? {}), // book snapshotId / remix remixId (attribution-only)
+        ...(saveResource ? { saveResource } : {}),
       };
 
       if (strokes.length > 0 && canvas) {
@@ -346,7 +351,7 @@ export function useInpaintTabState({
       log.info('commit', 'inpaint success', { processingMs: res.meta?.processingTime });
       return { imageUrl: res.data.imageUrl, aiRequestId: res.data.aiRequestId };
     },
-    [prompt, model, strokes, refs.images, attribution],
+    [prompt, model, strokes, refs.images, attribution, saveResource],
   );
 
   // ── ParamsPanel (Model + Brush + Prompt — no History UI) ──────────────────────

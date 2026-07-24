@@ -2,6 +2,8 @@ import { callImageApi, type ImageApiFailure } from './image-api-client';
 import { createLogger } from '@/utils/logger';
 import type { WordTiming } from '@/types/spread-types';
 import type { AspectRatio } from '@/constants/aspect-ratio-constants';
+import type { SaveResourceDirective, SaveResourceOutcomeFields } from '@/types/save-resource';
+import { warnIfSaveResourceFailed } from '@/utils/save-resource-path';
 
 const log = createLogger('API', 'RetouchApi');
 
@@ -47,11 +49,13 @@ export interface EditObjectImageParams {
   snapshotId?: string;
   /** Remix context → ai_service_logs.remix_id (discriminator — wins over snapshotId). */
   remixId?: string;
+  /** Opt-in auto-persist directive — forwarded to the body only when defined (JSON.stringify drops undefined). */
+  saveResource?: SaveResourceDirective;
 }
 
 export interface EditObjectImageResult {
   success: boolean;
-  data?: { imageUrl: string; storagePath: string; aiRequestId?: string };
+  data?: { imageUrl: string; storagePath: string; aiRequestId?: string } & SaveResourceOutcomeFields;
   error?: string;
   meta?: { processingTime?: number; mimeType?: string; tokenUsage?: number; model?: string };
 }
@@ -79,11 +83,13 @@ export interface OutpaintImageParams {
   snapshotId?: string;
   /** Remix context → ai_service_logs.remix_id (discriminator — wins over snapshotId). */
   remixId?: string;
+  /** Opt-in auto-persist directive — forwarded to the body only when defined (JSON.stringify drops undefined). */
+  saveResource?: SaveResourceDirective;
 }
 
 export interface OutpaintImageResult {
   success: boolean;
-  data?: { imageUrl: string; storagePath: string; aiRequestId?: string };
+  data?: { imageUrl: string; storagePath: string; aiRequestId?: string } & SaveResourceOutcomeFields;
   error?: string;
   meta?: {
     processingTime?: number;
@@ -228,11 +234,13 @@ export interface ImageRemoveBgParams {
   snapshotId?: string;
   /** Remix context → ai_service_logs.remix_id (discriminator — wins over snapshotId). */
   remixId?: string;
+  /** Opt-in auto-persist directive — forwarded to the body only when defined (JSON.stringify drops undefined). */
+  saveResource?: SaveResourceDirective;
 }
 
 export interface ImageRemoveBgResult {
   success: boolean;
-  data?: { imageUrl: string; storagePath: string; aiRequestId?: string };
+  data?: { imageUrl: string; storagePath: string; aiRequestId?: string } & SaveResourceOutcomeFields;
   error?: string;
   meta?: { processingTime?: number; mimeType?: string; replicatePredictionId?: string; backgroundColor?: string | null };
 }
@@ -249,11 +257,13 @@ export interface RemoveTextImageParams {
   snapshotId?: string;
   /** Remix context → ai_service_logs.remix_id (discriminator — wins over snapshotId). */
   remixId?: string;
+  /** Opt-in auto-persist directive — forwarded to the body only when defined (JSON.stringify drops undefined). */
+  saveResource?: SaveResourceDirective;
 }
 
 export interface RemoveTextImageResult {
   success: true;
-  data: { imageUrl: string; storagePath: string; aiRequestId?: string };
+  data: { imageUrl: string; storagePath: string; aiRequestId?: string } & SaveResourceOutcomeFields;
   meta?: {
     processingTime?: number;
     mimeType?: string;
@@ -376,6 +386,7 @@ export async function callEditObjectImage(
     const { error, httpStatus, errorCode } = res as ImageApiFailure;
     log.error('callEditObjectImage', 'error', { errorCode, httpStatus, msg: error?.slice(0, 100) });
   }
+  warnIfSaveResourceFailed(log.warn, 'callEditObjectImage', res);
   return res;
 }
 
@@ -402,6 +413,7 @@ export async function callOutpaintImage(
     const { error, httpStatus, errorCode } = res as ImageApiFailure;
     log.error('callOutpaintImage', 'error', { errorCode, httpStatus, msg: error?.slice(0, 100) });
   }
+  warnIfSaveResourceFailed(log.warn, 'callOutpaintImage', res);
   return res;
 }
 
@@ -425,6 +437,7 @@ export async function callImageRemoveBg(
     const { error, httpStatus, errorCode } = res as ImageApiFailure;
     log.error('callImageRemoveBg', 'error', { errorCode, httpStatus, msg: error?.slice(0, 100) });
   }
+  warnIfSaveResourceFailed(log.warn, 'callImageRemoveBg', res);
   return res;
 }
 
@@ -447,6 +460,7 @@ export async function callRemoveTextImage(
     const { error, httpStatus, errorCode } = res as ImageApiFailure;
     log.error('callRemoveTextImage', 'error', { errorCode, httpStatus, msg: error?.slice(0, 100) });
   }
+  warnIfSaveResourceFailed(log.warn, 'callRemoveTextImage', res);
   return res;
 }
 
@@ -548,11 +562,13 @@ export interface GenerateBackgroundParams {
   modelParams?: { model: string; params?: { temperature?: number } };
   /** Attribution-only snapshot version id → ai_service_logs.snapshot_id (book cost). */
   snapshotId?: string;
+  /** Opt-in auto-persist directive — forwarded to the body only when defined (JSON.stringify drops undefined). */
+  saveResource?: SaveResourceDirective;
 }
 
 export interface GenerateBackgroundResult {
   success: true;
-  data: { imageUrl: string; storagePath: string; aiRequestId?: string };
+  data: { imageUrl: string; storagePath: string; aiRequestId?: string } & SaveResourceOutcomeFields;
   meta?: {
     processingTime?: number;
     mimeType?: string;
@@ -584,5 +600,6 @@ export async function callGenerateBackground(
     const { error, httpStatus, errorCode } = res as ImageApiFailure;
     log.error('callGenerateBackground', 'error', { errorCode, httpStatus, msg: error?.slice(0, 100) });
   }
+  warnIfSaveResourceFailed(log.warn, 'callGenerateBackground', res);
   return res;
 }

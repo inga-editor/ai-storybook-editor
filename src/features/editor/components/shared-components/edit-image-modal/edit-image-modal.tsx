@@ -22,6 +22,7 @@ import { useInteractionLayer, useGlobalHotkey } from "@/features/editor/contexts
 import type { YieldedFromLinkage } from "@/features/editor/contexts/interaction-layer-provider";
 import { createLogger } from "@/utils/logger";
 import type { Illustration } from "@/types/prop-types";
+import type { SaveResourceDirective } from "@/types/save-resource";
 import {
   SWAP_MODAL_TOKENS,
   Z_INDEX,
@@ -97,6 +98,10 @@ export interface EditImageModalProps {
   /** AI-usage attribution threaded into every EDIT commit (book snapshotId / remix remixId).
    *  Dual-context: book mounts pass `{ snapshotId }`, the remix mount passes `{ remixId }`. */
   attribution?: EditImageAttribution;
+  /** Opt-in double-write directive (parent/opener resolves the path — modal stays path-agnostic).
+   *  Threaded into every AI-tab commit payload (inpaint/outpaint/upscale/remove-text/remove-bg).
+   *  Erasor is upload-only (no endpoint) → never receives it. Undefined → payload omits the field. */
+  saveResource?: SaveResourceDirective;
   yieldedFrom?: YieldedFromLinkage;
 }
 
@@ -112,6 +117,7 @@ export function EditImageModal({
   enabledTools,
   referenceImageCandidates,
   attribution,
+  saveResource,
   yieldedFrom,
 }: EditImageModalProps) {
   // Landing tool ∈ (available-in-space ∩ built); never lands on a coming-soon slot. Plain const
@@ -147,12 +153,13 @@ export function EditImageModal({
   const canCompare = selectedVersion?.type === "edited" && !!selectedVersion.original_url;
 
   // ── Per-tab sub-state (all hooks run unconditionally; shell renders the active one) ──
-  const removeBgState = useRemoveBgTabState({ selectedVersion, attribution });
-  const removeTextState = useRemoveTextTabState({ selectedVersion, attribution });
-  const upscaleState = useUpscaleTabState({ selectedVersion, attribution });
-  const outpaintState = useOutpaintTabState({ selectedVersion, attribution });
+  const removeBgState = useRemoveBgTabState({ selectedVersion, attribution, saveResource });
+  const removeTextState = useRemoveTextTabState({ selectedVersion, attribution, saveResource });
+  const upscaleState = useUpscaleTabState({ selectedVersion, attribution, saveResource });
+  const outpaintState = useOutpaintTabState({ selectedVersion, attribution, saveResource });
+  // Erasor = plain upload (no AI endpoint) → intentionally NOT threaded saveResource.
   const erasorState = useEraserTabState({ selectedVersion, pathPrefix, zoom });
-  const inpaintState = useInpaintTabState({ selectedVersion, zoom, referenceImageCandidates, attribution });
+  const inpaintState = useInpaintTabState({ selectedVersion, zoom, referenceImageCandidates, attribution, saveResource });
 
   // Active "paint" tab — inpaint + erasor share the canvas/commit/undo-redo/confirm path
   // (both expose the same paint surface; resetAll is inpaint-only and used in resetState).

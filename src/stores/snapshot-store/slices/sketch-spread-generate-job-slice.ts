@@ -43,6 +43,7 @@ import {
   TARGET_TYPE_SPREAD,
 } from '@/apis/activity-log-client';
 import { toast } from 'sonner';
+import { buildImageVersionSaveResource } from '@/utils/save-resource-path';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('Store', 'SketchSpreadGenerateJobSlice');
@@ -190,6 +191,23 @@ export const createSketchSpreadGenerateJobSlice: StateCreator<
         errorCount: state.sketchSpreadLastErrors.length,
       });
     });
+  }
+
+  /** Resolve the per-page image node id for (spread, page): reuse the existing node's id, else mint a
+   *  fresh uuid. Called BEFORE the generate call so the opt-in saveResource directive and the
+   *  addSketchSpreadImageVersion node-create share ONE id — the BE nested-create + the client prepend
+   *  address the SAME node (else two nodes for one page). Read FRESH via get() ('left' may have minted
+   *  its node just before 'right'). */
+  function resolveSpreadPageImageId(spreadId: string, pageType: SketchPageType): string {
+    const existing = get()
+      .sketch.spreads.find((s) => s.id === spreadId)
+      ?.images.find((im) => im.type === pageType);
+    return existing?.id ?? crypto.randomUUID();
+  }
+
+  /** Column-relative `image_version` anchor for one spread page node (helper prepends snapshot root). */
+  function spreadPageImagePath(spreadId: string, imageId: string): string {
+    return `col:sketch/spread:${spreadId}/key:images/find:id=${imageId}`;
   }
 
   /** Mark task `i` SKIPPED because a peer holds its lock(s): counted in job.skipped + named for
@@ -399,10 +417,18 @@ export const createSketchSpreadGenerateJobSlice: StateCreator<
           break;
         }
 
+        // Pre-mint (or reuse) the per-page image node id so the opt-in saveResource directive and the
+        // client-side addSketchSpreadImageVersion node-create address the SAME node (BE-first double-write).
+        const imageId = resolveSpreadPageImageId(task.spreadId, pageType);
         const result = await callGenerateSketchSpread({
           snapshotId,
           sketchSpreadId: task.spreadId,
           page: pageType,
+          saveResource: buildImageVersionSaveResource(
+            spreadPageImagePath(task.spreadId, imageId),
+            snapshotId,
+            'create',
+          ),
         });
         if (get().sketchSpreadGenerateJob?.id !== jobId) return 'replaced';
         if (!result.success || !result.data) {
@@ -415,7 +441,7 @@ export const createSketchSpreadGenerateJobSlice: StateCreator<
           spreadId: task.spreadId,
           page: pageType,
         });
-        get().addSketchSpreadImageVersion(task.spreadId, pageType, lastUrl, result.data.aiRequestId);
+        get().addSketchSpreadImageVersion(task.spreadId, pageType, lastUrl, result.data.aiRequestId, imageId);
 
         // Resolve the (now-existing) per-page image node + id; acquire its lock if it was deferred
         // (brand-new page), then save DATA-ONLY (log:false) so 'left' lands in the DB before 'right'
@@ -649,10 +675,18 @@ export const createSketchSpreadGenerateJobSlice: StateCreator<
             break;
           }
 
+          // Pre-mint (or reuse) the per-page image node id so the opt-in saveResource directive and
+          // the client-side addSketchSpreadImageVersion node-create share ONE id (BE-first double-write).
+          const imageId = resolveSpreadPageImageId(task.spreadId, pageType);
           const result = await callGenerateSketchSpread({
             snapshotId,
             sketchSpreadId: task.spreadId,
             page: pageType,
+            saveResource: buildImageVersionSaveResource(
+              spreadPageImagePath(task.spreadId, imageId),
+              snapshotId,
+              'create',
+            ),
           });
 
           if (get().sketchSpreadGenerateJob?.id !== jobId) return; // race: job replaced during await
@@ -663,8 +697,8 @@ export const createSketchSpreadGenerateJobSlice: StateCreator<
           lastUrl = result.data.imageUrl;
           log.info('runJob', 'spread page done', { jobId, spreadId: task.spreadId, page: pageType });
 
-          // Prepend the version (sync.isDirty) into the page's slot.
-          get().addSketchSpreadImageVersion(task.spreadId, pageType, lastUrl, result.data.aiRequestId);
+          // Prepend the version (sync.isDirty) into the page's slot (same id as the directive).
+          get().addSketchSpreadImageVersion(task.spreadId, pageType, lastUrl, result.data.aiRequestId, imageId);
 
           // Flush AFTER 'left' (before 'right') — per-page durability only (the backend no longer
           // reads the left page for 'right'; consistency refs died 2026-07-21).

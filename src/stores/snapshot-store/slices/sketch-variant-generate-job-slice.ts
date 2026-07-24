@@ -58,6 +58,7 @@ import { useResourceLockStore } from '@/stores/resource-lock-store';
 // Sibling slice-helper (same dir) — whole sketch-entity gateway flush that KEEPS the lock held so
 // the component held-session stays the sole releaser (ADR-047). Reads no store (caller passes node).
 import { flushSketchEntityUnderLock } from './collab-sketch-variant-save-helper';
+import { buildImageVersionSaveResource } from '@/utils/save-resource-path';
 import { toast } from 'sonner';
 import { createLogger } from '@/utils/logger';
 
@@ -276,6 +277,14 @@ export const createSketchVariantGenerateJobSlice: StateCreator<
         snapshotId,
         entityKey: ref.entityKey,
         variantKey: ref.variantKey,
+        // Opt-in auto-persist (BE-first double-write): prepend the raw sheet version into
+        // variants[variantKey].raw_sheet.illustrations[] — the SAME node
+        // setSketchVariantRawSheetIllustrations writes below. snapshotId is non-null here (guarded above).
+        saveResource: buildImageVersionSaveResource(
+          `col:sketch/key:${ref.kind}/find:key=${ref.entityKey}/key:variants/find:key=${ref.variantKey}/key:raw_sheet`,
+          snapshotId,
+          'create',
+        ),
       });
       if (opStale(ref)) return; // reset/replaced during the generate call → drop
       if (!gen.success || !gen.data) throw new Error(classifyError(gen));

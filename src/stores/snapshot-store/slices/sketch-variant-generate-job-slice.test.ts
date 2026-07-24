@@ -155,12 +155,14 @@ describe('SketchVariantGenerateJobSlice', () => {
     );
     // ⚡ ADR-047 contract: snapshot-reading payload carries snapshotId + keys ONLY (artStyleId dropped).
     expect(mockedGen.mock.calls[0][0]).toBe('characters'); // kind dispatch
-    expect(mockedGen.mock.calls[0][1]).toEqual({
+    expect(mockedGen.mock.calls[0][1]).toMatchObject({
       snapshotId: 'snap-1',
       entityKey: 'kid',
       variantKey: 'hero',
     });
     expect(mockedGen.mock.calls[0][1]).not.toHaveProperty('artStyleId');
+    // Phase 03: saveResource added for BE-first double-write opt-in
+    expect(mockedGen.mock.calls[0][1]).toHaveProperty('saveResource');
   });
 
   it('(a2) COLLAB: gateway flush (whole entity node) runs BEFORE generate; NO flushSnapshot', async () => {
@@ -668,6 +670,97 @@ describe('SketchVariantGenerateJobSlice', () => {
       await tick();
 
       expect(mockedCut.mock.calls[0][0]).toMatchObject({ imageUrl: 'selected.png' });
+    });
+  });
+
+  describe('saveResource wiring — opt-in BE-first double-write', () => {
+    const rawIllustrations = (
+      entries: { media_url: string; is_selected: boolean; created_time?: string }[] = [
+        { media_url: 'raw.png', is_selected: true },
+      ],
+    ) =>
+      entries.map((e) => ({
+        type: 'created' as const,
+        media_url: e.media_url,
+        created_time: e.created_time ?? '2026-07-15T00:00:00Z',
+        is_selected: e.is_selected,
+      }));
+
+    it('passes saveResource with correct variant raw_sheet anchor for character', async () => {
+      const { store } = createTestStore('snap-var');
+      store.getState().setSketchVariantRawSheetIllustrations('characters', 'hero', 'cool', rawIllustrations());
+      mockedGen.mockResolvedValueOnce(okGen('gen.png'));
+      mockedCut.mockResolvedValueOnce(okCut(['c1.png', 'c2.png']));
+
+      store.getState().startVariantSheetGenerate({
+        kind: 'characters',
+        entityKey: 'hero',
+        variantKey: 'cool',
+        visualDescription: 'cool variant',
+        referenceImages: [],
+        baseVariantImageUrl: 'base.png',
+        artStyleId: 'style-1',
+      });
+      await tick();
+
+      // mockedGen is called with (kind, params), second arg is the params object
+      expect(mockedGen.mock.calls[0][0]).toBe('characters');
+      expect(mockedGen.mock.calls[0][1]).toMatchObject({
+        saveResource: expect.objectContaining({
+          type: 'image_version',
+          path: expect.stringContaining('table:snapshots/id:snap-var/col:sketch/key:characters/find:key=hero/key:variants/find:key=cool/key:raw_sheet'),
+          action: 'create',
+        }),
+      });
+    });
+
+    it('passes saveResource with correct variant raw_sheet anchor for props', async () => {
+      const { store } = createTestStore('snap-prop-var');
+      store.getState().setSketchVariantRawSheetIllustrations('props', 'sword', 'rusty', rawIllustrations());
+      mockedGen.mockResolvedValueOnce(okGen('gen.png'));
+      mockedCut.mockResolvedValueOnce(okCut(['c1.png']));
+
+      store.getState().startVariantSheetGenerate({
+        kind: 'props',
+        entityKey: 'sword',
+        variantKey: 'rusty',
+        visualDescription: 'rusty sword',
+        referenceImages: [],
+        baseVariantImageUrl: 'base.png',
+        artStyleId: 'style-1',
+      });
+      await tick();
+
+      // mockedGen is called with (kind, params), second arg is the params object
+      expect(mockedGen.mock.calls[0][0]).toBe('props');
+      expect(mockedGen.mock.calls[0][1]).toMatchObject({
+        saveResource: expect.objectContaining({
+          type: 'image_version',
+          path: expect.stringContaining('table:snapshots/id:snap-prop-var/col:sketch/key:props/find:key=sword/key:variants/find:key=rusty/key:raw_sheet'),
+          action: 'create',
+        }),
+      });
+    });
+
+    it('omits saveResource when snapshotId is null (not opted in)', async () => {
+      const { store } = createTestStore(null);
+      store.getState().setSketchVariantRawSheetIllustrations('characters', 'hero', 'cool', rawIllustrations());
+      mockedGen.mockResolvedValueOnce(okGen('gen.png'));
+      mockedCut.mockResolvedValueOnce(okCut(['c1.png', 'c2.png']));
+
+      store.getState().startVariantSheetGenerate({
+        kind: 'characters',
+        entityKey: 'hero',
+        variantKey: 'cool',
+        visualDescription: 'cool variant',
+        referenceImages: [],
+        baseVariantImageUrl: 'base.png',
+        artStyleId: 'style-1',
+      });
+      await tick();
+
+      // When snapshotId is null, generate should not be called
+      expect(mockedGen).not.toHaveBeenCalled();
     });
   });
 });

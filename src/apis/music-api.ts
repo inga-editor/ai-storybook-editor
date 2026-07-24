@@ -1,5 +1,7 @@
 import { callImageApi, type ImageApiFailure } from '@/apis/image-api-client';
 import { createLogger } from '@/utils/logger';
+import type { SaveResourceDirective, SaveResourceOutcomeFields } from '@/types/save-resource';
+import { warnIfSaveResourceFailed } from '@/utils/save-resource-path';
 
 const log = createLogger('MusicApi', 'callGenerateMusic');
 
@@ -17,6 +19,8 @@ export interface GenerateMusicRequest {
   forceInstrumental: boolean;
   seed?: number;
   outputFormat?: MusicOutputFormat;
+  /** Opt-in auto-persist directive — added to the payload only when defined (table:musics target). */
+  saveResource?: SaveResourceDirective;
 }
 
 export interface GenerateMusicData {
@@ -41,7 +45,7 @@ export interface GenerateMusicMeta {
 
 export interface GenerateMusicSuccess {
   success: true;
-  data: GenerateMusicData;
+  data: GenerateMusicData & SaveResourceOutcomeFields;
   meta?: GenerateMusicMeta;
 }
 
@@ -157,6 +161,7 @@ export async function callGenerateMusic(
   };
   if (params.seed !== undefined) payload.seed = params.seed;
   if (params.outputFormat !== undefined) payload.outputFormat = params.outputFormat;
+  if (params.saveResource) payload.saveResource = params.saveResource;
 
   log.info('callGenerateMusic', 'start', {
     promptLen: prompt.length,
@@ -187,5 +192,6 @@ export async function callGenerateMusic(
     mediaType: result.data.mediaType,
     processingTimeMs: result.meta?.processingTimeMs,
   });
+  warnIfSaveResourceFailed(log.warn, 'callGenerateMusic', result);
   return result;
 }

@@ -43,6 +43,9 @@ export interface GenerateNarrationModalProps {
   textboxText: string;
   existingAudio: TextboxAudio | null;
   currentLanguage: string;
+  /** Anchor context for opt-in save_resource — the spread + textbox this modal edits. */
+  spreadId: string;
+  textboxId: string;
   onAudioChange: (audio: TextboxAudio) => void;
 }
 
@@ -55,6 +58,8 @@ export function GenerateNarrationModal({
   textboxText,
   existingAudio,
   currentLanguage,
+  spreadId,
+  textboxId,
   onAudioChange,
 }: GenerateNarrationModalProps) {
   const dialogContentRef = useRef<HTMLDivElement>(null);
@@ -100,6 +105,9 @@ export function GenerateNarrationModal({
     defaultNarratorVoiceId,
     voicesById,
     onAudioChange,
+    spreadId,
+    textboxId,
+    currentLanguage,
   });
 
   // ── Open/close logging ──

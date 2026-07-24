@@ -56,6 +56,8 @@ export function GenerateSoundModal({ onClose, onSaved }: GenerateSoundModalProps
         durationSecs: form.durationAuto ? null : form.durationSecs,
         promptInfluence: form.promptInfluence,
         seed,
+        // Opt-in auto-persist — absolute table target (Backend B insert). Client warns on soft-fail.
+        saveResource: { type: 'sound_effect', path: 'table:sounds' },
       });
       if (r.success) {
         log.info('generate', 'success', {

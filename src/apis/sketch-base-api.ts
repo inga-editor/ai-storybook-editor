@@ -16,6 +16,8 @@ import { callImageApi, type ImageApiFailure } from './image-api-client';
 import type { VariantModelParams } from './sketch-variant-api';
 import type { BaseKind } from '@/types/sketch';
 import { createLogger } from '@/utils/logger';
+import type { SaveResourceDirective, SaveResourceOutcomeFields } from '@/types/save-resource';
+import { warnIfSaveResourceFailed } from '@/utils/save-resource-path';
 
 const log = createLogger('API', 'SketchBaseApi');
 
@@ -60,11 +62,13 @@ export interface GenerateBaseSheetParams {
   modelParams?: SketchModelParams;
   /** Attribution-only snapshot version id → ai_service_logs.snapshot_id (book cost). */
   snapshotId?: string;
+  /** Opt-in auto-persist directive — attached to the body only when defined. */
+  saveResource?: SaveResourceDirective;
 }
 
 export interface GenerateBaseSheetResult {
   success: boolean;
-  data?: { imageUrl: string; storagePath: string; cellOrder: string[]; grid: SheetGrid; aiRequestId?: string };
+  data?: { imageUrl: string; storagePath: string; cellOrder: string[]; grid: SheetGrid; aiRequestId?: string } & SaveResourceOutcomeFields;
   error?: string;
   meta?: { processingTime?: number; mimeType?: string; tokenUsage?: number };
 }
@@ -75,7 +79,7 @@ export interface GenerateBaseSheetResult {
  */
 export async function callGenerateBaseSheet(
   kind: BaseKind,
-  { entities, artStyleId, stylePrompt, referenceImages, modelParams, snapshotId }: GenerateBaseSheetParams,
+  { entities, artStyleId, stylePrompt, referenceImages, modelParams, snapshotId, saveResource }: GenerateBaseSheetParams,
 ): Promise<GenerateBaseSheetResult | ImageApiFailure> {
   const path = BASE_SHEET_ENDPOINT[kind];
   log.info('callGenerateBaseSheet', 'start', {
@@ -84,7 +88,7 @@ export async function callGenerateBaseSheet(
     referenceCount: referenceImages.length,
     hasModelParams: !!modelParams,
   });
-  return callImageApi<GenerateBaseSheetResult>(path, {
+  const res = await callImageApi<GenerateBaseSheetResult>(path, {
     entities,
     artStyleId,
     stylePrompt,
@@ -93,5 +97,9 @@ export async function callGenerateBaseSheet(
     ...(modelParams ? { modelParams } : {}),
     // Attribution-only — forward snapshotId so the AI-usage logger stamps book cost.
     ...(snapshotId ? { snapshotId } : {}),
+    // Opt-in auto-persist — attach only when defined (strict backward-compat).
+    ...(saveResource ? { saveResource } : {}),
   });
+  warnIfSaveResourceFailed(log.warn, 'callGenerateBaseSheet', res);
+  return res;
 }

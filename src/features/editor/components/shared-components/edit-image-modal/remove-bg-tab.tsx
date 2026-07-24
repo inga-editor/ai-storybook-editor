@@ -19,6 +19,7 @@ import { createLogger } from '@/utils/logger';
 import { callImageRemoveBg, type ImageRemoveBgResult } from '@/apis/retouch-api';
 import type { ImageApiFailure } from '@/apis/image-api-client';
 import type { Illustration } from '@/types/prop-types';
+import type { SaveResourceDirective } from '@/types/save-resource';
 import {
   RMBG_MODEL_OPTIONS,
   DEFAULT_RMBG_MODEL,
@@ -54,9 +55,11 @@ interface UseRemoveBgTabOptions {
   selectedVersion: Illustration | null;
   /** AI-usage attribution (book snapshotId / remix remixId) forwarded into the remove-bg call. */
   attribution?: EditImageAttribution;
+  /** Opt-in double-write directive (parent-resolved path). Undefined → payload omits it. */
+  saveResource?: SaveResourceDirective;
 }
 
-export function useRemoveBgTabState({ selectedVersion, attribution }: UseRemoveBgTabOptions): RemoveBgTabApi {
+export function useRemoveBgTabState({ selectedVersion, attribution, saveResource }: UseRemoveBgTabOptions): RemoveBgTabApi {
   const [model, setModel] = useState<RmbgModel>(DEFAULT_RMBG_MODEL);
   const [outputBg, setOutputBg] = useState<OutputBgMode>(DEFAULT_OUTPUT_BG);
   const [color, setColor] = useState(DEFAULT_OUTPUT_COLOR);
@@ -79,6 +82,7 @@ export function useRemoveBgTabState({ selectedVersion, attribution }: UseRemoveB
         model,
         backgroundColor,
         ...(attribution ?? {}),
+        ...(saveResource ? { saveResource } : {}),
       });
       if (!res.success || !res.data) {
         const failure = res as ImageApiFailure;
@@ -96,7 +100,7 @@ export function useRemoveBgTabState({ selectedVersion, attribution }: UseRemoveB
       log.info('commit', 'remove bg success', { processingMs: ok.meta?.processingTime });
       return { imageUrl: ok.data!.imageUrl, aiRequestId: ok.data!.aiRequestId };
     },
-    [model, outputBg, color, attribution],
+    [model, outputBg, color, attribution, saveResource],
   );
 
   const ParamsPanel = useMemo<ReactNode>(

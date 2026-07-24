@@ -19,6 +19,8 @@
 
 import { callImageApi, type ImageApiFailure } from './image-api-client';
 import { createLogger } from '@/utils/logger';
+import type { SaveResourceDirective, SaveResourceOutcomeFields } from '@/types/save-resource';
+import { warnIfSaveResourceFailed } from '@/utils/save-resource-path';
 
 const log = createLogger('API', 'SketchStageApi');
 
@@ -56,6 +58,8 @@ export interface GenerateBaseStageSheetParams {
   modelParams?: StageModelParams; // allowlist group `sketch-base`
   /** Attribution-only snapshot version id → ai_service_logs.snapshot_id (book cost). */
   snapshotId?: string;
+  /** Opt-in auto-persist directive — attached to the body only when defined. */
+  saveResource?: SaveResourceDirective;
 }
 
 export interface GenerateBaseStageSheetResult {
@@ -67,7 +71,7 @@ export interface GenerateBaseStageSheetResult {
     grid: StageSheetGrid;
     /** Soft ref → ai_service_logs.id — raw sheet = direct Gemini output (provenance). */
     aiRequestId?: string;
-  };
+  } & SaveResourceOutcomeFields;
   error?: string;
   meta?: { processingTime?: number; mimeType?: string; tokenUsage?: number; model?: string; temperature?: number };
 }
@@ -80,21 +84,25 @@ export interface GenerateBaseStageSheetResult {
 export async function callGenerateBaseStageSheet(
   params: GenerateBaseStageSheetParams,
 ): Promise<GenerateBaseStageSheetResult | ImageApiFailure> {
-  const { modelParams, referenceImages, stylePrompt, snapshotId, ...required } = params;
+  const { modelParams, referenceImages, stylePrompt, snapshotId, saveResource, ...required } = params;
   log.info('callGenerateBaseStageSheet', 'start', {
     stageKey: params.stageKey,
     refCount: referenceImages?.length ?? 0,
     hasModelParams: !!modelParams,
   });
   // Body is extra="forbid" with optional fields — absent keys (not `undefined`) keep it minimal.
-  return callImageApi<GenerateBaseStageSheetResult>(BASE_STAGE_SHEET_ENDPOINT, {
+  const res = await callImageApi<GenerateBaseStageSheetResult>(BASE_STAGE_SHEET_ENDPOINT, {
     ...required,
     ...(stylePrompt ? { stylePrompt } : {}),
     ...(referenceImages && referenceImages.length > 0 ? { referenceImages } : {}),
     ...(modelParams ? { modelParams } : {}),
     // Attribution-only — forward snapshotId so the AI-usage logger stamps book cost.
     ...(snapshotId ? { snapshotId } : {}),
+    // Opt-in auto-persist — attach only when defined (strict backward-compat).
+    ...(saveResource ? { saveResource } : {}),
   });
+  warnIfSaveResourceFailed(log.warn, 'callGenerateBaseStageSheet', res);
+  return res;
 }
 
 // ── 12 — generate-stage-variant-sheet (SNAPSHOT-READING) ───────────────────────────────────────
@@ -106,6 +114,8 @@ export interface GenerateStageVariantSheetParams {
   entityKey: string; // sketch.stages[].key (the stageKey)
   variantKey: string; // MUST be non-base (base → 422 CANNOT_GENERATE_BASE_VARIANT — use 11)
   modelParams?: StageModelParams; // allowlist group `sketch-variant` (no seed)
+  /** Opt-in auto-persist directive — attached to the body only when defined. */
+  saveResource?: SaveResourceDirective;
 }
 
 /** Audit block (debug resolve/skip of reference mentions) — mirror 08/09. */
@@ -126,7 +136,7 @@ export interface GenerateStageVariantSheetResult {
     references?: StageVariantSheetReferences;
     /** Soft ref → ai_service_logs.id — raw sheet = direct Gemini output (provenance). */
     aiRequestId?: string;
-  };
+  } & SaveResourceOutcomeFields;
   error?: string;
   meta?: { processingTime?: number; mimeType?: string; tokenUsage?: number; model?: string; temperature?: number };
 }
@@ -141,12 +151,17 @@ export async function callGenerateStageVariantSheet({
   entityKey,
   variantKey,
   modelParams,
+  saveResource,
 }: GenerateStageVariantSheetParams): Promise<GenerateStageVariantSheetResult | ImageApiFailure> {
   log.info('callGenerateStageVariantSheet', 'start', { entityKey, variantKey, hasModelParams: !!modelParams });
-  return callImageApi<GenerateStageVariantSheetResult>(STAGE_VARIANT_SHEET_ENDPOINT, {
+  const res = await callImageApi<GenerateStageVariantSheetResult>(STAGE_VARIANT_SHEET_ENDPOINT, {
     snapshotId,
     entityKey,
     variantKey,
     ...(modelParams ? { modelParams } : {}),
+    // Opt-in auto-persist — attach only when defined (strict backward-compat).
+    ...(saveResource ? { saveResource } : {}),
   });
+  warnIfSaveResourceFailed(log.warn, 'callGenerateStageVariantSheet', res);
+  return res;
 }

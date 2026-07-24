@@ -27,6 +27,7 @@ import { createLogger } from '@/utils/logger';
 import { callOutpaintImage } from '@/apis/retouch-api';
 import type { ImageApiFailure } from '@/apis/image-api-client';
 import type { Illustration } from '@/types/prop-types';
+import type { SaveResourceDirective } from '@/types/save-resource';
 import {
   OUTPAINT_MODEL_OPTIONS,
   OUTPAINT_DEFAULT_MODEL,
@@ -73,9 +74,11 @@ interface UseOutpaintTabOptions {
   selectedVersion: Illustration | null;
   /** AI-usage attribution (book snapshotId / remix remixId) forwarded into the outpaint call. */
   attribution?: EditImageAttribution;
+  /** Opt-in double-write directive (parent-resolved path). Undefined → payload omits it. */
+  saveResource?: SaveResourceDirective;
 }
 
-export function useOutpaintTabState({ selectedVersion, attribution }: UseOutpaintTabOptions): OutpaintTabApi {
+export function useOutpaintTabState({ selectedVersion, attribution, saveResource }: UseOutpaintTabOptions): OutpaintTabApi {
   const [model, setModel] = useState<OutpaintModel>(OUTPAINT_DEFAULT_MODEL);
   const [direction, setDirection] = useState<ExpandDirection>('all');
   const [ratio, setRatio] = useState<number>(OUTPAINT_RATIO.default);
@@ -88,6 +91,7 @@ export function useOutpaintTabState({ selectedVersion, attribution }: UseOutpain
       const payload = {
         ...buildOutpaintPayload(model, direction, ratio, prompt, version.media_url),
         ...(attribution ?? {}), // book snapshotId / remix remixId (attribution-only)
+        ...(saveResource ? { saveResource } : {}),
       };
       log.info('commit', 'outpaint start', {
         imageUrl: version.media_url.slice(0, 60),
@@ -116,7 +120,7 @@ export function useOutpaintTabState({ selectedVersion, attribution }: UseOutpain
       });
       return { imageUrl: res.data.imageUrl, aiRequestId: res.data.aiRequestId };
     },
-    [model, direction, ratio, prompt, attribution],
+    [model, direction, ratio, prompt, attribution, saveResource],
   );
 
   const previewOverlay = useCallback(

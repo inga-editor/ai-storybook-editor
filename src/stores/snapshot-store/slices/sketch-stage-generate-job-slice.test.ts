@@ -296,11 +296,13 @@ describe('startStageVariantSheetGenerate (12 — SNAPSHOT-READING)', () => {
 
     expect(flushSnapshot).toHaveBeenCalled();
     expect(flushSnapshot.mock.invocationCallOrder[0]).toBeLessThan(mockedVariantGen.mock.invocationCallOrder[0]);
-    expect(mockedVariantGen.mock.calls[0][0]).toEqual({
+    expect(mockedVariantGen.mock.calls[0][0]).toMatchObject({
       snapshotId: 'snap-1',
       entityKey: 'forest',
       variantKey: 'storm',
     }); // ⚡ NO artStyleId — style comes from the BASE_VARIANT anchor
+    // Phase 03: saveResource added for BE-first double-write opt-in
+    expect(mockedVariantGen.mock.calls[0][0]).toHaveProperty('saveResource');
   });
 
   it('COLLAB: gateway whole-stage flush BEFORE generate (keeps the lock — no releaseIfAcquired)', async () => {
@@ -493,5 +495,39 @@ describe('recropStageBaseSheet / recropStageVariantSheet (cut-only re-runs)', ()
     expect(toast.warning).toHaveBeenCalledWith('Some cells may be misaligned');
     expect(stageOf(store).base.styles[0].crops).toHaveLength(2);
     expect(store.getState().stageSheetGenerateOp).toBeNull();
+  });
+
+  describe('saveResource wiring — opt-in BE-first double-write', () => {
+    it('passes saveResource with correct stage variant anchor', async () => {
+      const stageForTest = readyStage();
+      const { store } = createTestStore('snap-stage', [stageForTest]);
+      mockedVariantGen.mockResolvedValueOnce(okVariantGen('gen.png'));
+      mockedCut.mockResolvedValueOnce(okCut(['c1.png', 'c2.png']));
+
+      store.getState().startStageVariantSheetGenerate('forest', 'storm');
+      await tick();
+      await tick();
+
+      const genArg = mockedVariantGen.mock.calls[0][0];
+      expect(genArg.saveResource).toMatchObject({
+        type: 'image_version',
+        path: expect.stringContaining('table:snapshots/id:snap-stage/col:sketch/key:stages/find:key=forest/key:variants/find:key=storm'),
+        action: 'create',
+      });
+    });
+
+    it('omits saveResource when snapshotId is null (not opted in)', async () => {
+      const stageForTest = readyStage();
+      const { store } = createTestStore(null, [stageForTest]);
+      mockedVariantGen.mockResolvedValueOnce(okVariantGen('gen.png'));
+      mockedCut.mockResolvedValueOnce(okCut(['c1.png']));
+
+      store.getState().startStageVariantSheetGenerate('forest', 'storm');
+      await tick();
+      await tick();
+
+      // When snapshotId is null, generate should not be called
+      expect(mockedVariantGen).not.toHaveBeenCalled();
+    });
   });
 });

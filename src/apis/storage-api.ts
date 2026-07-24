@@ -7,6 +7,7 @@ import {
   MIN_SUPPORTED_RATIO,
 } from '@/constants/aspect-ratio-constants';
 import { normalizeImage } from './image-api';
+import type { SaveResourceDirective, SaveResourceOutcomeFields } from '@/types/save-resource';
 
 const log = createLogger('API', 'Storage');
 
@@ -24,7 +25,7 @@ const AUDIO_TYPES = ['audio/mpeg', 'audio/wav', 'audio/ogg', 'audio/webm', 'audi
 const AUTO_PIC_MAX_SIZE = 50 * 1024 * 1024; // 50MB — webm HD; .gif blocked (validation session 1)
 const AUTO_PIC_TYPES = ['image/webp', 'video/webm'];
 
-export interface UploadResult {
+export interface UploadResult extends SaveResourceOutcomeFields {
   publicUrl: string;
   path: string;
   ratio?: AspectRatio;
@@ -113,6 +114,7 @@ export class ImageTooTallError extends Error {
 export async function uploadImageToStorageWithNormalize(
   file: File,
   outputPrefix = 'uploads',
+  saveResource?: SaveResourceDirective,
 ): Promise<UploadResult> {
   if (!IMAGE_TYPES.includes(file.type)) {
     throw new Error(`Unsupported file type: ${file.type}. Allowed: ${IMAGE_TYPES.join(', ')}`);
@@ -123,7 +125,9 @@ export async function uploadImageToStorageWithNormalize(
 
   log.info('uploadImageToStorageWithNormalize', 'start', { name: file.name, size: file.size, type: file.type, outputPrefix });
 
-  const result = await normalizeImage(file, outputPrefix);
+  // Thread the opt-in directive into the multipart normalize call; normalizeImage handles the
+  // soft-fail warn. The persist outcome flags travel back on UploadResult for the caller/slice.
+  const result = await normalizeImage(file, outputPrefix, saveResource);
 
   if (result.success) {
     log.info('uploadImageToStorageWithNormalize', 'done', {
@@ -133,7 +137,14 @@ export async function uploadImageToStorageWithNormalize(
       wasConverted: result.data.wasConverted,
       wasPassthrough: result.data.wasPassthrough,
     });
-    return { publicUrl: result.data.publicUrl, path: result.data.path, ratio: result.data.ratio ?? undefined };
+    return {
+      publicUrl: result.data.publicUrl,
+      path: result.data.path,
+      ratio: result.data.ratio ?? undefined,
+      saved: result.data.saved,
+      saveError: result.data.saveError,
+      snapshotId: result.data.snapshotId,
+    };
   }
 
   if (result.errorCode === 'IMAGE_TOO_TALL') {

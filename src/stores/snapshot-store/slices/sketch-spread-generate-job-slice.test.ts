@@ -365,4 +365,55 @@ describe('SketchSpreadGenerateJobSlice', () => {
     expect(job.status).toBe('completed');
     expect(job.tasks[0].status).toBe('pending'); // never ran
   });
+
+  describe('saveResource wiring — opt-in BE-first double-write', () => {
+    it('passes saveResource with correct spread image anchor for full page', async () => {
+      store.getState().setSketchSpreads([spread('sp-1')]);
+      mockedCall.mockResolvedValue(ok('gen.png') as never);
+
+      start(['sp-1']);
+      await tick();
+
+      const callArg = mockedCall.mock.calls[0][0];
+      expect(callArg.saveResource).toMatchObject({
+        type: 'image_version',
+        path: expect.stringContaining('table:snapshots/id:snap-1/col:sketch/spread:sp-1/key:images/find:id='),
+        action: 'create',
+      });
+    });
+
+    it('passes saveResource for left page (2-page spread)', async () => {
+      store.getState().setSketchSpreads([twoPageSpread('sp-2')]);
+      const dLeft = deferred<ReturnType<typeof ok>>();
+      mockedCall.mockReturnValueOnce(dLeft.promise as never);
+
+      start(['sp-2']);
+      await tick();
+
+      // First call is for 'left' page
+      expect(mockedCall).toHaveBeenCalledTimes(1);
+      const callArg = mockedCall.mock.calls[0][0];
+      expect(callArg.page).toBe('left');
+      expect(callArg.saveResource).toMatchObject({
+        type: 'image_version',
+        action: 'create',
+      });
+
+      dLeft.resolve(ok('left.png', 'left'));
+      await tick();
+    });
+
+    it('omits saveResource when snapshotId is null (not opted in)', async () => {
+      ({ store, flushSnapshot } = createTestStore(null));
+      store.getState().setSketchSpreads([spread('sp-3')]);
+      mockedCall.mockResolvedValue(ok('gen.png') as never);
+
+      start(['sp-3']);
+      await tick();
+      await tick();
+
+      // After initial flush, meta.id is still null, so generate should not include saveResource
+      expect(mockedCall).not.toHaveBeenCalled(); // aborted due to no snapshot id
+    });
+  });
 });

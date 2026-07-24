@@ -36,6 +36,7 @@ import type { ImageApiFailure } from '@/apis/image-api-client';
 // resource-lock-store is a leaf store (loaded before the slices); unit tests mock it.
 import { useResourceLockStore } from '@/stores/resource-lock-store';
 import { flushSketchStageUnderLock } from './collab-sketch-stage-save-helper';
+import { buildImageVersionSaveResource } from '@/utils/save-resource-path';
 import { toast } from 'sonner';
 import { createLogger } from '@/utils/logger';
 
@@ -303,6 +304,14 @@ export const createSketchStageGenerateJobSlice: StateCreator<
         snapshotId,
         entityKey: stageKey,
         variantKey,
+        // Opt-in auto-persist (BE-first double-write): prepend the raw sheet version into
+        // stages[stageKey].variants[variantKey].illustrations[] — FLAT (NO raw_sheet). Same node
+        // setSketchStageVariantIllustrations writes below. snapshotId non-null here (guarded above).
+        saveResource: buildImageVersionSaveResource(
+          `col:sketch/key:stages/find:key=${stageKey}/key:variants/find:key=${variantKey}`,
+          snapshotId,
+          'create',
+        ),
       });
       if (opStale(target)) return;
       if (!gen.success || !gen.data) throw new Error(classifyError(gen));

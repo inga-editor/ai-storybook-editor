@@ -266,6 +266,7 @@ export interface SketchSlice {
     pageType: SketchPageType,
     mediaUrl: string,
     aiRequestId?: string, // provenance soft ref → ai_service_logs.id (absent = NULL/uploaded)
+    imageId?: string, // pre-minted node id — spread-generate job shares it with the saveResource directive
   ) => void;
   /** Re-select an EXISTING per-page image version by media_url (clears the prior selection).
    *  Used by the Edit modal when the user re-picks an older variant (no new version appended). */

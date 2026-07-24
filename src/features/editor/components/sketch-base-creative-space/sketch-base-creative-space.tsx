@@ -36,6 +36,7 @@ import {
   useBaseSheetGenerateStatus,
   useBaseSheetGenerateOps,
   useSnapshotActions,
+  useSnapshotId,
 } from '@/stores/snapshot-store/selectors';
 import { useSnapshotStore } from '@/stores/snapshot-store';
 import { useSketchStyleId, useCurrentBookId } from '@/stores/book-store';
@@ -60,6 +61,8 @@ import { LockedByOtherOverlay } from '@/features/editor/components/shared-compon
 import { SketchDegradedBanner } from '@/features/editor/components/sketch-degraded-banner';
 import { useSketchSheetDegraded } from '@/stores/snapshot-store';
 import { sheetOf, type BaseKind, type SketchBaseStyle } from '@/types/sketch';
+import type { SaveResourceDirective } from '@/types/save-resource';
+import { buildImageVersionSaveResource } from '@/utils/save-resource-path';
 import { createLogger } from '@/utils/logger';
 import { BaseKindSidebar } from './base-kind-sidebar';
 import { BaseSheetContentArea } from './base-sheet-content-area';
@@ -111,6 +114,8 @@ export function SketchBaseSpace() {
   const propStyles = useSketchBaseStyles('props');
   // book.sketchstyle_id (art_styles.type=0) — REQUIRED to generate; the modal gates on it.
   const artStyleId = useSketchStyleId();
+  // Book-edit context (Sketch space is never remix) → the opt-in saveResource snapshot root.
+  const snapshotId = useSnapshotId();
   const { setSketchBaseStyleSelected, setSketchBaseEntities, autoSaveSnapshot } = useSnapshotActions();
   // Base entity keys per kind — drive the content-area crop cards AND the import replace-confirm.
   const charEntityKeys = useSketchBaseEntityKeys('characters');
@@ -415,6 +420,21 @@ export function SketchBaseSpace() {
   // acquire the sheet themselves, so a capture-phase acquire would only flip the shared header to a
   // false "Unsaved" while merely viewing (browse ≠ lock). Peer visibility still comes from the veil.
 
+  // === Phase 04: opt-in saveResource for the Edit path (Raw sheet | one keyed crop) ===
+  // Anchor = base workspace style node: raw → the style's `illustrations`; crop → that entity's
+  // keyed crop. `kind` maps to the sheet key (characters→character_sheet, props→prop_sheet).
+  // Undefined snapshot ⇒ omit. (Extract crop = RESERVED — see the modal mount below.)
+  const editImageSaveResource = useMemo<SaveResourceDirective | undefined>(() => {
+    if (!snapshotId || !editImageTarget) return undefined;
+    const sheetKey = editImageTarget.kind === 'characters' ? 'character_sheet' : 'prop_sheet';
+    const stylePath = `col:sketch/key:base/key:${sheetKey}/key:styles/idx:${editImageTarget.styleIndex}`;
+    const path =
+      editImageTarget.scope === 'raw'
+        ? stylePath
+        : `${stylePath}/key:crops/find:key=${editImageTarget.entityKey}`;
+    return buildImageVersionSaveResource(path, snapshotId, 'edit');
+  }, [snapshotId, editImageTarget]);
+
   return (
     <main className="flex h-full" role="main" aria-label="Sketch base creative space">
       <BaseKindSidebar
@@ -481,9 +501,17 @@ export function SketchBaseSpace() {
         <EditBaseEntityModal kind={editEntityModal.kind} onClose={() => setEditEntityModal(null)} />
       )}
       {editImageTarget && (
-        <SketchBaseEditImageModal target={editImageTarget} onClose={() => setEditImageTarget(null)} />
+        <SketchBaseEditImageModal
+          target={editImageTarget}
+          onClose={() => setEditImageTarget(null)}
+          saveResource={editImageSaveResource}
+        />
       )}
       {extractImageTarget && (
+        // Phase 04 RESERVED: NO saveResource — the base Extract exposes the Crop tab only (CV cut,
+        // no AI provider → no anchor to double-write). Extracted versions persist via onCreateImages
+        // (setSketchBaseCropIllustrations + the sheet held-session release-save). The keyed-crop
+        // 'create' anchor is reserved until an AI Extract seam is enabled here.
         <SketchBaseExtractImageModal
           target={extractImageTarget}
           onClose={() => setExtractImageTarget(null)}

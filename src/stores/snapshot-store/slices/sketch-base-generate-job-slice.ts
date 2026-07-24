@@ -41,10 +41,18 @@ import { flushSketchBaseSheetUnderLock } from './collab-sketch-base-sheet-save-h
 // Grain B (rtype 3/4): a crops replacement on the LOCKED style re-clones every entity's base
 // variant (sketch-slice cloneLockedStyleCropsToBaseVariants) → those entity nodes flush here too.
 import { flushSketchEntityUnderLock } from './collab-sketch-variant-save-helper';
+import { buildImageVersionSaveResource } from '@/utils/save-resource-path';
 import { toast } from 'sonner';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('Store', 'SketchBaseGenerateJobSlice');
+
+/** kind → base-sheet member key (mirrors `sheetOf`: characters→character_sheet, props→prop_sheet).
+ *  Drives the `image_version` save-directive anchor `col:sketch/key:base/key:<sheet>/key:styles/idx`. */
+const BASE_SHEET_KEY: Record<BaseKind, string> = {
+  characters: 'character_sheet',
+  props: 'prop_sheet',
+};
 
 /** Endpoint caps the sheet at 12 cells (1K legibility, [API 05 §Grid]) — content-area blocks first;
  *  this is the defensive net at the slice boundary. */
@@ -241,6 +249,7 @@ export const createSketchBaseGenerateJobSlice: StateCreator<
       }
       const apiRefs: BaseReferenceImage[] = params.referenceImages.map((r) => ({ media_url: r.media_url }));
 
+      const snapshotId = get().meta.id || undefined;
       const result = await callGenerateBaseSheet(kind, {
         entities,
         artStyleId: params.artStyleId,
@@ -248,7 +257,17 @@ export const createSketchBaseGenerateJobSlice: StateCreator<
         referenceImages: apiRefs,
         modelParams: params.modelParams,
         // Attribution-only — book snapshot version id (empty/absent → omit). Never remix here.
-        snapshotId: get().meta.id || undefined,
+        snapshotId,
+        // Opt-in auto-persist (BE-first double-write): prepend the raw sheet version into
+        // styles[styleIndex].illustrations[] — the SAME node addSketchBaseStyleIllustration writes
+        // below. Omitted when the book has no snapshot row yet (client persist stays sole writer).
+        saveResource: snapshotId
+          ? buildImageVersionSaveResource(
+              `col:sketch/key:base/key:${BASE_SHEET_KEY[kind]}/key:styles/idx:${styleIndex}`,
+              snapshotId,
+              'create',
+            )
+          : undefined,
       });
       if (opStale(kind, styleIndex)) return;
       if (!result.success || !result.data) throw new Error(classifyError(result));

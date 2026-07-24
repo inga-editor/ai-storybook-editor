@@ -5,6 +5,8 @@ import { useCallback, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Languages, Mic, MessageSquare } from "lucide-react";
 import { createLogger } from "@/utils/logger";
+import { buildImageVersionSaveResource } from "@/utils/save-resource-path";
+import type { SaveResourceDirective } from "@/types/save-resource";
 import { toastLockRequired } from "@/utils/collab-save-toasts";
 import { TranslateSpreadModal, type ApplyTranslationsPayload } from "./translate-spread-modal";
 import {
@@ -470,6 +472,22 @@ export function ObjectsMainView({
 
   const modals = useObjectModals(selectedSpreadId, actions);
   const { openGenerate, openEdit, openExtract, openEditAudio } = modals;
+
+  // === Phase 04: opt-in saveResource directive (anchor = retouch images node) ===
+  // Only the Edit path is wired: a retouch layer edit writes a new image_version at the existing
+  // image. Snapshot-scoped (Objects is never remix); undefined snapshot ⇒ omit.
+  // RESERVED (comment-only, no directive): Upload (RetouchGenerateImageModal) is snapshot-coupled —
+  // its persist is the held-session saveNow + updateRetouchImage; and Extract Background is a
+  // CREATE-node against a client-minted id not yet accepted by the BE. Both keep client-persist as
+  // the sole path until the store-agnostic generalize task.
+  const editSaveResource = useMemo<SaveResourceDirective | undefined>(() => {
+    if (!snapshotId || !modals.edit.imageId) return undefined;
+    return buildImageVersionSaveResource(
+      `col:illustration/spread:${modals.edit.spreadId}/key:images/find:id=${modals.edit.imageId}`,
+      snapshotId,
+      "edit",
+    );
+  }, [snapshotId, modals.edit.spreadId, modals.edit.imageId]);
 
   const handleExtractCreateImages = useCallback(
     (results: ExtractResult[]) => {
@@ -1110,6 +1128,8 @@ export function ObjectsMainView({
       />
 
       {modals.generate.imageId && (
+        // Phase 04 RESERVED: NO saveResource — object Upload is snapshot-coupled (persist =
+        // held-session saveNow + updateRetouchImage). Deferred to the store-agnostic generalize task.
         <RetouchGenerateImageModal
           open={modals.generate.open}
           onOpenChange={modals.closeGenerate}
@@ -1127,10 +1147,15 @@ export function ObjectsMainView({
           imageId={modals.edit.imageId}
           enabledTools={SPACE_TOOL_MATRIX.object.edit}
           onCommitSave={onCommitSave}
+          saveResource={editSaveResource}
         />
       )}
 
       {modals.extract.image && (
+        // Phase 04 RESERVED: NO saveResource — the Extract Background op is a CREATE-node against a
+        // client-minted image id (`col:illustration/spread/key:images/find:id=<newImageId>`), which
+        // the BE nested-create does not yet accept for retouch layers. Client-spawn (onCreateImages
+        // → buildExtractImages) stays the persist path until that create-node contract lands.
         <ExtractImageModal
           open={modals.extract.open}
           onOpenChange={modals.closeExtract}

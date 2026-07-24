@@ -9,6 +9,7 @@
 // addSketchSpreadImageVersion(spreadId, image.type, url).
 'use client';
 
+import { useMemo } from 'react';
 import { EditImageModal } from '@/features/editor/components/shared-components/edit-image-modal/edit-image-modal';
 import { useSketchPropRefCandidates } from '@/features/editor/components/shared-components/edit-image-modal';
 import { ExtractImageModal } from '@/features/editor/components/shared-components/extract-image-modal/extract-image-modal';
@@ -17,6 +18,8 @@ import { useSnapshotId } from '@/stores/snapshot-store/selectors';
 import { SKETCH_PAGE_GEOMETRY } from '@/types/sketch';
 import type { SketchSpreadImage } from '@/types/sketch';
 import type { CropPreset } from '@/types/editor';
+import type { SaveResourceDirective } from '@/types/save-resource';
+import { buildImageVersionSaveResource } from '@/utils/save-resource-path';
 import { createLogger } from '@/utils/logger';
 import {
   toIllustrations,
@@ -66,6 +69,21 @@ export function SketchImageToolsModals({
   // Book-edit context (Sketch space is never remix) → attribute AI edits by snapshotId.
   const snapshotId = useSnapshotId();
 
+  // Phase 04: opt-in saveResource for the Edit path — a sketch page-image edit writes a new
+  // image_version at that page node (`col:sketch/spread/key:images/find:id`). Undefined snapshot ⇒
+  // omit. Memoized so a fresh directive object per render doesn't churn the modal's tab-hook deps.
+  const editSaveResource = useMemo<SaveResourceDirective | undefined>(
+    () =>
+      snapshotId
+        ? buildImageVersionSaveResource(
+            `col:sketch/spread:${spreadId}/key:images/find:id=${image.id}`,
+            snapshotId,
+            'edit',
+          )
+        : undefined,
+    [snapshotId, spreadId, image.id],
+  );
+
   const handleOpenChange = (open: boolean) => {
     if (!open) onClose();
   };
@@ -83,6 +101,7 @@ export function SketchImageToolsModals({
         initialTool="inpaint"
         referenceImageCandidates={referenceImageCandidates}
         attribution={{ snapshotId: snapshotId ?? undefined }}
+        saveResource={editSaveResource}
         onUpdateIllustrations={(next) => {
           // The modal emits this for BOTH a fresh edit (new url → append a version) AND any
           // variant re-selection (existing url → flip is_selected). Route each to its own write;
@@ -111,6 +130,10 @@ export function SketchImageToolsModals({
     );
   }
 
+  // Phase 04 RESERVED: NO saveResource on Extract — the sketch Extract exposes the Crop tab only
+  // (CV cut, no AI provider call → no anchor to double-write). The extracted cells persist as new
+  // page-image versions via onCreateImages/onPersistVersion (client-owned). The 'create' anchor
+  // (`col:sketch/spread/key:images/find:id`) is reserved until an AI Extract seam is enabled here.
   return (
     <ExtractImageModal
       open

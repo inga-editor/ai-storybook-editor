@@ -20,6 +20,8 @@
 import { callImageApi, type ImageApiFailure } from './image-api-client';
 import type { BaseKind } from '@/types/sketch';
 import { createLogger } from '@/utils/logger';
+import type { SaveResourceDirective, SaveResourceOutcomeFields } from '@/types/save-resource';
+import { warnIfSaveResourceFailed } from '@/utils/save-resource-path';
 
 const log = createLogger('API', 'SketchVariantApi');
 
@@ -50,6 +52,8 @@ export interface GenerateVariantSheetParams {
   variantKey: string; // sketch.{...}[].variants[].key — MUST be non-base (base → 422)
   /** ⚡ artStyleId DROPPED (backend extra=forbid). Optional model override only; omit → DB default. */
   modelParams?: VariantModelParams;
+  /** Opt-in auto-persist directive — attached to the body only when defined. */
+  saveResource?: SaveResourceDirective;
 }
 
 /** Fixed 4-cell / 1-row / 21:9 grid echoed by generate (per 08 §Result — cols:4, rows:1). Pass-through. */
@@ -79,7 +83,7 @@ export interface GenerateVariantSheetResult {
     references?: VariantSheetReferences;
     /** Soft ref → ai_service_logs.id — raw sheet = direct Gemini output (provenance). */
     aiRequestId?: string;
-  };
+  } & SaveResourceOutcomeFields;
   error?: string;
   meta?: { processingTime?: number; mimeType?: string; tokenUsage?: number; model?: string };
 }
@@ -138,18 +142,22 @@ export interface CropSheetRowResult {
  */
 export async function callGenerateVariantSheet(
   kind: BaseKind,
-  { snapshotId, entityKey, variantKey, modelParams }: GenerateVariantSheetParams,
+  { snapshotId, entityKey, variantKey, modelParams, saveResource }: GenerateVariantSheetParams,
 ): Promise<GenerateVariantSheetResult | ImageApiFailure> {
   const path = VARIANT_SHEET_ENDPOINT[kind];
   log.info('callGenerateVariantSheet', 'start', { kind, entityKey, variantKey, hasModelParams: !!modelParams });
-  return callImageApi<GenerateVariantSheetResult>(path, {
+  const res = await callImageApi<GenerateVariantSheetResult>(path, {
     snapshotId,
     entityKey,
     variantKey,
     // Only include modelParams when present — the body is extra="forbid" but the field is optional,
     // so an absent key (not `undefined`) keeps the request byte-minimal → backend uses its DB default.
     ...(modelParams ? { modelParams } : {}),
+    // Opt-in auto-persist — attach only when defined (strict backward-compat).
+    ...(saveResource ? { saveResource } : {}),
   });
+  warnIfSaveResourceFailed(log.warn, 'callGenerateVariantSheet', res);
+  return res;
 }
 
 /**

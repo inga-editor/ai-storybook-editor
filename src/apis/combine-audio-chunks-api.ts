@@ -1,5 +1,7 @@
 import { createLogger } from '@/utils/logger';
 import type { WordTiming } from '@/types/spread-types';
+import type { SaveResourceDirective, SaveResourceOutcomeFields } from '@/types/save-resource';
+import { warnIfSaveResourceFailed } from '@/utils/save-resource-path';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // combine-audio-chunks API client
@@ -41,6 +43,8 @@ export interface CombineAudioChunksRequest {
   scriptSeparator?: string;
   /** Defaults to 'mp3_44100_128' on server. */
   outputFormat?: CombineAudioChunksOutputFormat;
+  /** Opt-in auto-persist directive — forwarded to the body only when defined (JSON.stringify drops undefined). */
+  saveResource?: SaveResourceDirective;
 }
 
 export interface CombineAudioChunksMeta {
@@ -66,7 +70,7 @@ export interface CombineAudioChunksSuccess {
     chunkOffsetsMs: number[];
     /** chunks.map(c => c.script).join(scriptSeparator) — server echo for FE verify. */
     joinedScript: string;
-  };
+  } & SaveResourceOutcomeFields;
   meta?: CombineAudioChunksMeta;
 }
 
@@ -328,7 +332,9 @@ export async function callCombineAudioChunks(
       pathKey: body.meta?.pathKey,
     });
 
-    return { success: true, data, meta: body.meta };
+    const result: CombineAudioChunksResult = { success: true, data, meta: body.meta };
+    warnIfSaveResourceFailed(log.warn, 'callCombineAudioChunks', result);
+    return result;
   } catch (err) {
     const name = (err as { name?: string } | null)?.name;
     if (options?.signal?.aborted) {

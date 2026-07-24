@@ -39,6 +39,8 @@ import {
   mergeItems,
 } from '@/utils/template-layout-utils';
 import { createLogger } from '@/utils/logger';
+import { buildImageVersionSaveResource } from '@/utils/save-resource-path';
+import type { SaveResourceDirective } from '@/types/save-resource';
 import { toastLockRequired } from '@/utils/collab-save-toasts';
 import { useInteractionLayerContext } from '@/features/editor/contexts/interaction-layer-provider';
 import { useGlobalHotkey } from '@/features/editor/contexts/use-global-hotkey';
@@ -686,6 +688,28 @@ export function SpreadsMainView({
     [onItemSelect]
   );
 
+  // === Phase 04: opt-in saveResource directives (anchor = illustration raw_images node) ===
+  // Edit → new image_version at the selected raw image; Upload (Generate modal's Upload mode) →
+  // the same raw_images anchor, 'upload' action. Snapshot-scoped (Spreads is never remix);
+  // undefined snapshot ⇒ omit (caller sends no opt-in double-write directive).
+  const editSaveResource = useMemo<SaveResourceDirective | undefined>(() => {
+    if (!snapshotId || !editModalImageId) return undefined;
+    return buildImageVersionSaveResource(
+      `col:illustration/spread:${selectedSpreadId}/key:raw_images/find:id=${editModalImageId}`,
+      snapshotId,
+      'edit',
+    );
+  }, [snapshotId, selectedSpreadId, editModalImageId]);
+
+  const uploadSaveResource = useMemo<SaveResourceDirective | undefined>(() => {
+    if (!snapshotId || !generateModalImageId) return undefined;
+    return buildImageVersionSaveResource(
+      `col:illustration/spread:${selectedSpreadId}/key:raw_images/find:id=${generateModalImageId}`,
+      snapshotId,
+      'upload',
+    );
+  }, [snapshotId, selectedSpreadId, generateModalImageId]);
+
   return (
     <>
       <CanvasSpreadView
@@ -737,6 +761,7 @@ export function SpreadsMainView({
           onUpdateImage={(updates) => {
             handleGenerateImageUpdate(generateModalImage.id, updates);
           }}
+          saveResource={uploadSaveResource}
         />
       )}
 
@@ -748,10 +773,14 @@ export function SpreadsMainView({
           imageId={editModalImageId}
           enabledTools={SPACE_TOOL_MATRIX.raw.edit}
           onCommitSave={onCommitSave}
+          saveResource={editSaveResource}
         />
       )}
 
       {extractModalImage && (
+        // Phase 04: NO saveResource — Spreads raw Extract exposes Crop/Texts tabs only (client-spawn
+        // via onCreateImages/onCreateTexts). The AI Background tab (the only save_resource seam) is
+        // "Coming soon" here, so there is no anchor to double-write. Client-spawn stays the persist path.
         <ExtractImageModal
           open={extractModalOpen}
           onOpenChange={setExtractModalOpen}

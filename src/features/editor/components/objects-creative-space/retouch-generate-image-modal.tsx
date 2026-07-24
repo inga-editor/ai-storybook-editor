@@ -13,6 +13,7 @@ import {
 } from "@/features/editor/components/shared-components";
 import { useRetouchImageById, useSnapshotActions } from "@/stores/snapshot-store/selectors";
 import type { SpreadImage } from "@/types/canvas-types";
+import type { SaveResourceDirective } from "@/types/save-resource";
 import { createLogger } from "@/utils/logger";
 
 const log = createLogger("Editor", "RetouchGenerateImageModal");
@@ -26,6 +27,9 @@ interface RetouchGenerateImageModalProps {
    *  immediately while the lock is held, so an upload isn't lost if the user never switches spreads.
    *  Absent ⇒ persisted on the session's release-time save-if-dirty. */
   onCommitSave?: () => Promise<boolean>;
+  /** Opt-in double-write directive — pass-through to GenerateImageModal (Upload mode; path resolved
+   *  by the opener, Phase 04). Undefined → omitted. */
+  saveResource?: SaveResourceDirective;
 }
 
 export function RetouchGenerateImageModal({
@@ -34,6 +38,7 @@ export function RetouchGenerateImageModal({
   spreadId,
   imageId,
   onCommitSave,
+  saveResource,
 }: RetouchGenerateImageModalProps) {
   const image = useRetouchImageById(spreadId, imageId);
   const { updateRetouchImage } = useSnapshotActions();
@@ -68,6 +73,7 @@ export function RetouchGenerateImageModal({
       onUpdateImage={handleUpdate}
       enabledModes={SPACE_TOOL_MATRIX.object.generate}
       uploadEntityType="retouch_image"
+      saveResource={saveResource}
     />
   );
 }

@@ -722,4 +722,87 @@ describe('SketchBaseGenerateJobSlice', () => {
     expect(cropArg.pathPrefix).toBe('sketches/base/characters');
     expect(cropArg.cellCount).toBe(1);
   });
+
+  describe('saveResource wiring — opt-in BE-first double-write', () => {
+    it('passes saveResource with correct base style anchor for character', async () => {
+      const { store } = createTestStore('snap-base');
+      const baseEntity: SketchEntity = {
+        key: 'hero',
+        variants: [{ key: 'base', description: '', visual_design: 'mighty warrior', art_language: '' }],
+      };
+      store.getState().setSketchEntities('characters', [baseEntity]);
+
+      mockedGenerateCall.mockResolvedValueOnce(okGenerate('gen.png'));
+      mockedCropCall.mockResolvedValueOnce(okCropRow([{ cell: 1, imageUrl: 'crop.png' }]));
+
+      store.getState().startBaseSheetGenerate({
+        kind: 'characters',
+        mode: 'add',
+        stylePrompt: 'test prompt',
+        referenceImages: [],
+        artStyleId: 'style-1',
+      });
+      await tick();
+
+      const genArg = mockedGenerateCall.mock.calls[0][1];
+      expect(genArg.saveResource).toMatchObject({
+        type: 'image_version',
+        path: expect.stringContaining('table:snapshots/id:snap-base/col:sketch/key:base/key:character_sheet/key:styles/idx:'),
+        action: 'create',
+      });
+    });
+
+    it('passes saveResource with correct base style anchor for props', async () => {
+      const { store } = createTestStore('snap-prop');
+      const baseEntity: SketchEntity = {
+        key: 'sword',
+        variants: [{ key: 'base', description: '', visual_design: 'mighty sword', art_language: '' }],
+      };
+      store.getState().setSketchEntities('props', [baseEntity]);
+
+      mockedGenerateCall.mockResolvedValueOnce(okGenerate('gen.png'));
+      mockedCropCall.mockResolvedValueOnce(okCropRow([{ cell: 1, imageUrl: 'crop.png' }]));
+
+      store.getState().startBaseSheetGenerate({
+        kind: 'props',
+        mode: 'add',
+        stylePrompt: 'test prompt',
+        referenceImages: [],
+        artStyleId: 'style-1',
+      });
+      await tick();
+
+      const genArg = mockedGenerateCall.mock.calls[0][1];
+      expect(genArg.saveResource).toMatchObject({
+        type: 'image_version',
+        path: expect.stringContaining('table:snapshots/id:snap-prop/col:sketch/key:base/key:prop_sheet/key:styles/idx:'),
+        action: 'create',
+      });
+    });
+
+    it('omits saveResource when snapshotId is null (not opted in)', async () => {
+      const { store } = createTestStore(null);
+      const baseEntity: SketchEntity = {
+        key: 'hero',
+        variants: [{ key: 'base', description: '', visual_design: 'mighty warrior', art_language: '' }],
+      };
+      store.getState().setSketchEntities('characters', [baseEntity]);
+
+      mockedGenerateCall.mockResolvedValueOnce(okGenerate('gen.png'));
+      mockedCropCall.mockResolvedValueOnce(okCropRow([{ cell: 1, imageUrl: 'crop.png' }]));
+
+      store.getState().startBaseSheetGenerate({
+        kind: 'characters',
+        mode: 'add',
+        stylePrompt: 'test prompt',
+        referenceImages: [],
+        artStyleId: 'style-1',
+      });
+      await tick();
+
+      // When snapshotId is null, saveResource should be undefined (not opted in)
+      const genArg = mockedGenerateCall.mock.calls[0][1];
+      expect(genArg.saveResource).toBeUndefined();
+    });
+  });
 });

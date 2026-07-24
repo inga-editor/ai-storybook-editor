@@ -19,6 +19,7 @@ import {
 import type { EditToolKey } from "@/features/editor/components/shared-components/edit-image-modal";
 import { useRetouchImageById, useSnapshotActions, useSnapshotId } from "@/stores/snapshot-store/selectors";
 import type { Illustration } from "@/types/prop-types";
+import type { SaveResourceDirective } from "@/types/save-resource";
 import { createLogger } from "@/utils/logger";
 
 const log = createLogger("Editor", "RetouchEditImageModal");
@@ -34,6 +35,9 @@ interface RetouchEditImageModalProps {
    *  (which includes this image) WHILE the lock is held, then rebases the session baseline. Absent
    *  ⇒ the commit is only persisted on the session's release-time save-if-dirty. */
   onCommitSave?: () => Promise<boolean>;
+  /** Opt-in double-write directive — pass-through to EditImageModal (path resolved by the opener,
+   *  Phase 04). Undefined → omitted. */
+  saveResource?: SaveResourceDirective;
 }
 
 export function RetouchEditImageModal({
@@ -43,6 +47,7 @@ export function RetouchEditImageModal({
   imageId,
   enabledTools,
   onCommitSave,
+  saveResource,
 }: RetouchEditImageModalProps) {
   const image = useRetouchImageById(spreadId, imageId);
   const { updateRetouchImage } = useSnapshotActions();
@@ -82,6 +87,7 @@ export function RetouchEditImageModal({
       enabledTools={enabledTools}
       referenceImageCandidates={referenceImageCandidates}
       attribution={{ snapshotId: snapshotId ?? undefined }}
+      saveResource={saveResource}
     />
   );
 }

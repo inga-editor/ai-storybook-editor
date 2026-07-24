@@ -16,6 +16,7 @@ import { SPACE_TOOL_MATRIX } from '@/features/editor/components/shared-component
 import { useSketchBaseStyles, useSnapshotActions, useSnapshotId } from '@/stores/snapshot-store/selectors';
 import { titleCase } from '@/features/editor/components/sketch-variants-creative-space/sketch-variants-constants';
 import type { Illustration } from '@/types/prop-types';
+import type { SaveResourceDirective } from '@/types/save-resource';
 import { createLogger } from '@/utils/logger';
 import { nounForKind, type EditImageTarget } from './sketch-base-constants';
 import { persistBaseEntityCloneIfLocked } from './persist-base-entity-clone';
@@ -30,9 +31,12 @@ function effectiveUrl(illustrations: Illustration[]): string {
 export interface SketchBaseEditImageModalProps {
   target: EditImageTarget;
   onClose: () => void;
+  /** Opt-in double-write directive — pass-through to EditImageModal (path resolved by the opener,
+   *  Phase 04). Undefined → omitted. */
+  saveResource?: SaveResourceDirective;
 }
 
-export function SketchBaseEditImageModal({ target, onClose }: SketchBaseEditImageModalProps) {
+export function SketchBaseEditImageModal({ target, onClose, saveResource }: SketchBaseEditImageModalProps) {
   const styles = useSketchBaseStyles(target.kind);
   const { setSketchBaseStyleIllustrations, setSketchBaseCropIllustrations, recropBaseSheet } =
     useSnapshotActions();
@@ -106,6 +110,7 @@ export function SketchBaseEditImageModal({ target, onClose }: SketchBaseEditImag
       initialTool="inpaint"
       referenceImageCandidates={referenceImageCandidates}
       attribution={{ snapshotId: snapshotId ?? undefined }}
+      saveResource={saveResource}
     />
   );
 }

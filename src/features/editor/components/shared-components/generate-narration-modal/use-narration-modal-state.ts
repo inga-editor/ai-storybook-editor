@@ -16,6 +16,7 @@ import type {
   TextboxAudio,
   WordTiming,
 } from '@/types/spread-types';
+import type { SaveResourceDirective } from '@/types/save-resource';
 import type { Voice } from '@/types/voice';
 
 import type {
@@ -41,6 +42,11 @@ export interface UseNarrationModalStateParams {
   defaultNarratorVoiceId: string | null;
   voicesById: Map<string, Voice>;
   onAudioChange: (audio: TextboxAudio) => void;
+  /** Anchor context for opt-in save_resource — the spread + textbox this modal edits. */
+  spreadId: string;
+  textboxId: string;
+  /** BCP-ish locale key (`en_US`) — the textbox language content currently edited. */
+  currentLanguage: string;
 }
 
 export interface UseNarrationModalStateReturn {
@@ -77,6 +83,18 @@ function makeClientId(): string {
     return crypto.randomUUID();
   }
   return `chunk-${Math.random().toString(36).slice(2, 10)}-${Date.now().toString(36)}`;
+}
+
+/** Full snapshot anchor down to the per-locale textbox audio object. Empty context ⇒ null
+ *  (opt-out — client omits the field, client persist still lands via BE-first bubble). */
+function buildTextboxLocaleRoot(
+  snapshotId: string,
+  spreadId: string,
+  textboxId: string,
+  lang: string,
+): string | null {
+  if (!snapshotId || !spreadId || !textboxId || !lang) return null;
+  return `table:snapshots/id:${snapshotId}/col:illustration/spread:${spreadId}/key:textboxes/find:id=${textboxId}/locale:${lang}`;
 }
 
 function buildSeedDraft(voiceId: string | null, scriptSeed: string): ChunkDraft {
@@ -137,6 +155,9 @@ export function useNarrationModalState(
     defaultNarratorVoiceId,
     voicesById,
     onAudioChange,
+    spreadId,
+    textboxId,
+    currentLanguage,
   } = params;
 
   const [chunks, setChunks] = useState<ChunkDraft[]>([]);
@@ -421,12 +442,31 @@ export function useNarrationModalState(
         scriptLength: target.script.length,
       });
 
+      // chunkIdx = position in the same chunks[] the modal renders — maps 1:1 to the
+      // persisted audio.chunks[] slot the BE writes at (draftFromPersisted preserves order).
+      const chunkIdx = snapshot.findIndex((c) => c.client_id === clientId);
+      const snapshotId = useSnapshotStore.getState().meta.id || '';
+      const localeRoot = buildTextboxLocaleRoot(
+        snapshotId,
+        spreadId,
+        textboxId,
+        currentLanguage,
+      );
+      const saveResource: SaveResourceDirective | undefined =
+        localeRoot && chunkIdx >= 0
+          ? {
+              type: 'textbox_audio_chunk',
+              path: `${localeRoot}/key:audio/key:chunks/idx:${chunkIdx}`,
+            }
+          : undefined;
+
       const outcome = await runGenerateChunk({
         chunk: target,
         voicesById,
         signal: controller.signal,
         // Attribution-only — spread narration is book-scoped (empty/absent → omit).
-        snapshotId: useSnapshotStore.getState().meta.id || undefined,
+        snapshotId: snapshotId || undefined,
+        saveResource,
       });
 
       if (abortRef.current === controller) abortRef.current = null;
@@ -477,7 +517,14 @@ export function useNarrationModalState(
       setCombinedError(null);
       return { ok: true };
     },
-    [voicesById, updateChunk, combinedAudioUrl],
+    [
+      voicesById,
+      updateChunk,
+      combinedAudioUrl,
+      spreadId,
+      textboxId,
+      currentLanguage,
+    ],
   );
 
   // ── Refresh combined ──
@@ -526,9 +573,23 @@ export function useNarrationModalState(
       chunkCount: snapshot.length,
     });
 
+    // Combine directive anchors at the locale (no idx). Only reachable on the
+    // >=2-chunk path — the 1-chunk shortcut returned above and sends NO directive.
+    const snapshotId = useSnapshotStore.getState().meta.id || '';
+    const localeRoot = buildTextboxLocaleRoot(
+      snapshotId,
+      spreadId,
+      textboxId,
+      currentLanguage,
+    );
+    const saveResource: SaveResourceDirective | undefined = localeRoot
+      ? { type: 'textbox_combined_audio', path: localeRoot }
+      : undefined;
+
     const outcome = await runCombineChunks({
       chunks: snapshot,
       signal: controller.signal,
+      saveResource,
     });
     if (abortRef.current === controller) abortRef.current = null;
     setIsMergingCombined(false);
@@ -550,7 +611,7 @@ export function useNarrationModalState(
     setCombinedWordTimings(outcome.words);
     setCombinedSelectionDirty(false);
     setCombinedAutoPlayToken((t) => t + 1);
-  }, [isMergingCombined]);
+  }, [isMergingCombined, spreadId, textboxId, currentLanguage]);
 
   // ── Derived ──
   const anyGenerating = chunks.some((c) => c.ui.isGenerating);

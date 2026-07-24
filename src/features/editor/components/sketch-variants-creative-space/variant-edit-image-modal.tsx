@@ -19,6 +19,7 @@ import {
 import { SPACE_TOOL_MATRIX } from '@/features/editor/components/shared-components/image-tools-space-matrix';
 import { useSketchVariantByKey, useSnapshotActions, useSnapshotId } from '@/stores/snapshot-store/selectors';
 import type { Illustration } from '@/types/prop-types';
+import type { SaveResourceDirective } from '@/types/save-resource';
 import { createLogger } from '@/utils/logger';
 import { titleCase, type EditImageTarget } from './sketch-variants-constants';
 
@@ -32,9 +33,12 @@ function effectiveUrl(illustrations: Illustration[]): string {
 export interface VariantEditImageModalProps {
   target: EditImageTarget;
   onClose: () => void;
+  /** Opt-in double-write directive — pass-through to EditImageModal (path resolved by the opener,
+   *  Phase 04). Undefined → omitted. */
+  saveResource?: SaveResourceDirective;
 }
 
-export function VariantEditImageModal({ target, onClose }: VariantEditImageModalProps) {
+export function VariantEditImageModal({ target, onClose, saveResource }: VariantEditImageModalProps) {
   const variant = useSketchVariantByKey(target.kind, target.entityKey, target.variantKey);
   const { setSketchVariantRawSheetIllustrations, setSketchVariantCropIllustrations, recropVariantSheet } =
     useSnapshotActions();
@@ -116,6 +120,7 @@ export function VariantEditImageModal({ target, onClose }: VariantEditImageModal
       initialTool="inpaint"
       referenceImageCandidates={referenceImageCandidates}
       attribution={{ snapshotId: snapshotId ?? undefined }}
+      saveResource={saveResource}
     />
   );
 }

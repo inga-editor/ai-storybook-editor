@@ -501,7 +501,11 @@ export const useHumansStore = create<HumansStore>()(
               log.warn('runProfilePipeline', 'nobgImage missing before normalize', { clientId });
               return;
             }
-            const norm = await normalizeHuman(profile.nobgImage, '3D');
+            // Opt-in auto-persist — absolute humans table target (patches visual_profiles[].convertedImage).
+            const norm = await normalizeHuman(profile.nobgImage, '3D', {
+              type: 'human_profile_image',
+              path: `table:humans/id:${humanId}`,
+            });
             if (!norm.success) {
               log.error('runProfilePipeline', 'normalize failed', { clientId, errorCode: norm.errorCode });
               toast.error(mapPipelineError(norm));
@@ -524,7 +528,11 @@ export const useHumansStore = create<HumansStore>()(
             log.warn('runProfilePipeline', 'profile/convertedImage missing before extract', { clientId });
             return;
           }
-          const ext = await extractHumanTraits(profile.convertedImage, 'en');
+          // Opt-in auto-persist — absolute humans table target (patches visual_profiles[].traits[]).
+          const ext = await extractHumanTraits(profile.convertedImage, 'en', {
+            type: 'human_traits',
+            path: `table:humans/id:${humanId}`,
+          });
           if (!ext.success) {
             log.error('runProfilePipeline', 'extract failed', { clientId, errorCode: ext.errorCode });
             toast.error(mapPipelineError(ext));

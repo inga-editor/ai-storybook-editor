@@ -18,6 +18,7 @@ import { appendMediaVersions } from '@/features/editor/components/shared-compone
 import { useSketchVariantByKey, useSnapshotActions } from '@/stores/snapshot-store/selectors';
 import type { Illustration } from '@/types/prop-types';
 import type { Geometry, SpreadImage } from '@/types/spread-types';
+import type { SaveResourceDirective } from '@/types/save-resource';
 import { createLogger } from '@/utils/logger';
 import { titleCase, type ExtractImageTarget } from './sketch-variants-constants';
 
@@ -38,9 +39,13 @@ function effectiveUrl(illustrations: Illustration[]): string | undefined {
 export interface VariantExtractImageModalProps {
   target: ExtractImageTarget;
   onClose: () => void;
+  /** Opt-in double-write directive — pass-through to ExtractImageModal (Background tab; path resolved
+   *  by the opener, Phase 04). This space enables the Crop tab only, so v1 has no effective target.
+   *  Undefined → omitted. */
+  saveResource?: SaveResourceDirective;
 }
 
-export function VariantExtractImageModal({ target, onClose }: VariantExtractImageModalProps) {
+export function VariantExtractImageModal({ target, onClose, saveResource }: VariantExtractImageModalProps) {
   const variant = useSketchVariantByKey(target.kind, target.entityKey, target.variantKey);
   const { setSketchVariantCropIllustrations } = useSnapshotActions();
   const presets = useCropPresetManager();
@@ -95,6 +100,7 @@ export function VariantExtractImageModal({ target, onClose }: VariantExtractImag
       onUpsertCropPreset={presets.onUpsertCropPreset}
       onDeleteCropPreset={presets.onDeleteCropPreset}
       onCreateImages={handleCreate}
+      saveResource={saveResource}
     />
   );
 }

@@ -19,6 +19,7 @@ import { useSketchBaseStyles, useSnapshotActions } from '@/stores/snapshot-store
 import { titleCase } from '@/features/editor/components/sketch-variants-creative-space/sketch-variants-constants';
 import type { Illustration } from '@/types/prop-types';
 import type { Geometry, SpreadImage } from '@/types/spread-types';
+import type { SaveResourceDirective } from '@/types/save-resource';
 import { createLogger } from '@/utils/logger';
 import { type ExtractImageTarget } from './sketch-base-constants';
 import { persistBaseEntityCloneIfLocked } from './persist-base-entity-clone';
@@ -40,9 +41,13 @@ function effectiveUrl(illustrations: Illustration[]): string | undefined {
 export interface SketchBaseExtractImageModalProps {
   target: ExtractImageTarget;
   onClose: () => void;
+  /** Opt-in double-write directive — pass-through to ExtractImageModal (Background tab; path resolved
+   *  by the opener, Phase 04). This space enables the Crop tab only, so v1 has no effective target.
+   *  Undefined → omitted. */
+  saveResource?: SaveResourceDirective;
 }
 
-export function SketchBaseExtractImageModal({ target, onClose }: SketchBaseExtractImageModalProps) {
+export function SketchBaseExtractImageModal({ target, onClose, saveResource }: SketchBaseExtractImageModalProps) {
   const styles = useSketchBaseStyles(target.kind);
   const { setSketchBaseCropIllustrations } = useSnapshotActions();
   const presets = useCropPresetManager();
@@ -93,6 +98,7 @@ export function SketchBaseExtractImageModal({ target, onClose }: SketchBaseExtra
       onUpsertCropPreset={presets.onUpsertCropPreset}
       onDeleteCropPreset={presets.onDeleteCropPreset}
       onCreateImages={handleCreate}
+      saveResource={saveResource}
     />
   );
 }

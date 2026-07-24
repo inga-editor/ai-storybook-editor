@@ -66,6 +66,8 @@ export function GenerateMusicModal({ onClose, onSaved }: GenerateMusicModalProps
         tags: normalizeTags(form.tags),
         forceInstrumental: true,
         seed,
+        // Opt-in auto-persist — absolute table target (Backend B insert). Client warns on soft-fail.
+        saveResource: { type: 'music_track', path: 'table:musics' },
       });
       if (r.success) {
         log.info('generate', 'success', {

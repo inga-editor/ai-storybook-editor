@@ -58,6 +58,7 @@ export function ObjectsTextToolbar<TSpread extends BaseSpread>({
   // --- Context destructuring ---
   const {
     item,
+    spreadId,
     onUpdate,
     onDelete,
     onSplitTextbox,
@@ -310,6 +311,8 @@ export function ObjectsTextToolbar<TSpread extends BaseSpread>({
             textboxText={content?.text ?? ""}
             existingAudio={audio ?? null}
             currentLanguage={langCode}
+            spreadId={spreadId}
+            textboxId={item.id}
             onAudioChange={handleNarrationAudioChange}
           />
         )}

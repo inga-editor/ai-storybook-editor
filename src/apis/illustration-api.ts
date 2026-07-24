@@ -1,5 +1,7 @@
 import { callImageApi, type ImageApiFailure } from './image-api-client';
 import { createLogger } from '@/utils/logger';
+import type { SaveResourceDirective, SaveResourceOutcomeFields } from '@/types/save-resource';
+import { warnIfSaveResourceFailed } from '@/utils/save-resource-path';
 
 const log = createLogger('API', 'IllustrationApi');
 
@@ -41,11 +43,13 @@ export interface GenerateCharacterBaseParams {
   imageSize?: string;
   /** Attribution-only snapshot version id → ai_service_logs.snapshot_id (book cost). */
   snapshotId?: string;
+  /** Opt-in auto-persist directive — forwarded to the body only when defined (JSON.stringify drops undefined). */
+  saveResource?: SaveResourceDirective;
 }
 
 export interface GenerateCharacterBaseResult {
   success: boolean;
-  data?: { imageUrl: string; storagePath: string; aiRequestId?: string };
+  data?: { imageUrl: string; storagePath: string; aiRequestId?: string } & SaveResourceOutcomeFields;
   error?: string;
   meta?: { processingTime?: number; mimeType?: string; tokenUsage?: number };
 }
@@ -69,11 +73,13 @@ export interface GenerateCharacterVariantParams {
   imageSize?: string;
   /** Attribution-only snapshot version id → ai_service_logs.snapshot_id (book cost). */
   snapshotId?: string;
+  /** Opt-in auto-persist directive — forwarded to the body only when defined (JSON.stringify drops undefined). */
+  saveResource?: SaveResourceDirective;
 }
 
 export interface GenerateCharacterVariantResult {
   success: boolean;
-  data?: { imageUrl: string; storagePath: string; aiRequestId?: string };
+  data?: { imageUrl: string; storagePath: string; aiRequestId?: string } & SaveResourceOutcomeFields;
   error?: string;
   meta?: { processingTime?: number; mimeType?: string; tokenUsage?: number };
 }
@@ -87,10 +93,12 @@ export async function callGenerateCharacterBase(
     characterKey: params.characterKey,
     refCount: params.referenceImages?.length ?? 0,
   });
-  return callImageApi<GenerateCharacterBaseResult>(
+  const res = await callImageApi<GenerateCharacterBaseResult>(
     '/api/illustration/generate-character-base',
     params
   );
+  warnIfSaveResourceFailed(log.warn, 'callGenerateCharacterBase', res);
+  return res;
 }
 
 // --- Prop Base Types ---
@@ -109,11 +117,13 @@ export interface GeneratePropBaseParams {
   imageSize?: string;
   /** Attribution-only snapshot version id → ai_service_logs.snapshot_id (book cost). */
   snapshotId?: string;
+  /** Opt-in auto-persist directive — forwarded to the body only when defined (JSON.stringify drops undefined). */
+  saveResource?: SaveResourceDirective;
 }
 
 export interface GeneratePropBaseResult {
   success: boolean;
-  data?: { imageUrl: string; storagePath: string; aiRequestId?: string };
+  data?: { imageUrl: string; storagePath: string; aiRequestId?: string } & SaveResourceOutcomeFields;
   error?: string;
   meta?: { processingTime?: number; mimeType?: string; tokenUsage?: number };
 }
@@ -127,10 +137,12 @@ export async function callGeneratePropBase(
     propKey: params.propKey,
     refCount: params.referenceImages?.length ?? 0,
   });
-  return callImageApi<GeneratePropBaseResult>(
+  const res = await callImageApi<GeneratePropBaseResult>(
     '/api/illustration/generate-prop-base',
     params
   );
+  warnIfSaveResourceFailed(log.warn, 'callGeneratePropBase', res);
+  return res;
 }
 
 // --- Prop Variant Types ---
@@ -147,11 +159,13 @@ export interface GeneratePropVariantParams {
   imageSize?: string;
   /** Attribution-only snapshot version id → ai_service_logs.snapshot_id (book cost). */
   snapshotId?: string;
+  /** Opt-in auto-persist directive — forwarded to the body only when defined (JSON.stringify drops undefined). */
+  saveResource?: SaveResourceDirective;
 }
 
 export interface GeneratePropVariantResult {
   success: boolean;
-  data?: { imageUrl: string; storagePath: string; aiRequestId?: string };
+  data?: { imageUrl: string; storagePath: string; aiRequestId?: string } & SaveResourceOutcomeFields;
   error?: string;
   meta?: { processingTime?: number; mimeType?: string; tokenUsage?: number };
 }
@@ -166,10 +180,12 @@ export async function callGeneratePropVariant(
     variantKey: params.variantKey,
     refCount: params.additionalReferenceImages?.length ?? 0,
   });
-  return callImageApi<GeneratePropVariantResult>(
+  const res = await callImageApi<GeneratePropVariantResult>(
     '/api/illustration/generate-prop-variant',
     params
   );
+  warnIfSaveResourceFailed(log.warn, 'callGeneratePropVariant', res);
+  return res;
 }
 
 // --- Stage Base Types ---
@@ -191,11 +207,13 @@ export interface GenerateStageBaseParams {
   imageSize?: string;
   /** Attribution-only snapshot version id → ai_service_logs.snapshot_id (book cost). */
   snapshotId?: string;
+  /** Opt-in auto-persist directive — forwarded to the body only when defined (JSON.stringify drops undefined). */
+  saveResource?: SaveResourceDirective;
 }
 
 export interface GenerateStageBaseResult {
   success: boolean;
-  data?: { imageUrl: string; storagePath: string; aiRequestId?: string };
+  data?: { imageUrl: string; storagePath: string; aiRequestId?: string } & SaveResourceOutcomeFields;
   error?: string;
   meta?: { processingTime?: number; mimeType?: string; tokenUsage?: number };
 }
@@ -209,10 +227,12 @@ export async function callGenerateStageBase(
     stageKey: params.stageKey,
     refCount: params.referenceImages?.length ?? 0,
   });
-  return callImageApi<GenerateStageBaseResult>(
+  const res = await callImageApi<GenerateStageBaseResult>(
     '/api/illustration/generate-stage-base',
     params
   );
+  warnIfSaveResourceFailed(log.warn, 'callGenerateStageBase', res);
+  return res;
 }
 
 // --- Stage Variant Types ---
@@ -232,11 +252,13 @@ export interface GenerateStageVariantParams {
   imageSize?: string;
   /** Attribution-only snapshot version id → ai_service_logs.snapshot_id (book cost). */
   snapshotId?: string;
+  /** Opt-in auto-persist directive — forwarded to the body only when defined (JSON.stringify drops undefined). */
+  saveResource?: SaveResourceDirective;
 }
 
 export interface GenerateStageVariantResult {
   success: boolean;
-  data?: { imageUrl: string; storagePath: string; aiRequestId?: string };
+  data?: { imageUrl: string; storagePath: string; aiRequestId?: string } & SaveResourceOutcomeFields;
   error?: string;
   meta?: { processingTime?: number; mimeType?: string; tokenUsage?: number };
 }
@@ -251,10 +273,12 @@ export async function callGenerateStageVariant(
     variantKey: params.variantKey,
     refCount: params.additionalReferenceImages?.length ?? 0,
   });
-  return callImageApi<GenerateStageVariantResult>(
+  const res = await callImageApi<GenerateStageVariantResult>(
     '/api/illustration/generate-stage-variant',
     params
   );
+  warnIfSaveResourceFailed(log.warn, 'callGenerateStageVariant', res);
+  return res;
 }
 
 // --- Scene Types ---
@@ -273,11 +297,13 @@ export interface GenerateSceneParams {
   edgeTreatment?: string;
   /** Snapshot id (= meta.id) so the backend can resolve `@<key>/<variant>` mentions → entity reference images. */
   snapshotId?: string;
+  /** Opt-in auto-persist directive — forwarded to the body only when defined (JSON.stringify drops undefined). */
+  saveResource?: SaveResourceDirective;
 }
 
 export interface GenerateSceneResult {
   success: boolean;
-  data?: { imageUrl: string; storagePath: string; aiRequestId?: string };
+  data?: { imageUrl: string; storagePath: string; aiRequestId?: string } & SaveResourceOutcomeFields;
   error?: string;
   meta?: { processingTime?: number; mimeType?: string; tokenUsage?: number };
 }
@@ -291,10 +317,12 @@ export async function callGenerateScene(
     hasStageVariantImage: !!params.stageVariantImageUrl,
     refCount: params.referenceImages?.length ?? 0,
   });
-  return callImageApi<GenerateSceneResult>(
+  const res = await callImageApi<GenerateSceneResult>(
     '/api/illustration/generate-scene',
     params
   );
+  warnIfSaveResourceFailed(log.warn, 'callGenerateScene', res);
+  return res;
 }
 
 export async function callGenerateCharacterVariant(
@@ -305,8 +333,10 @@ export async function callGenerateCharacterVariant(
     variantKey: params.variantKey,
     refCount: params.additionalReferenceImages?.length ?? 0,
   });
-  return callImageApi<GenerateCharacterVariantResult>(
+  const res = await callImageApi<GenerateCharacterVariantResult>(
     '/api/illustration/generate-character-variant',
     params
   );
+  warnIfSaveResourceFailed(log.warn, 'callGenerateCharacterVariant', res);
+  return res;
 }

@@ -42,6 +42,7 @@ import { clampGeometry } from "../shared-toolbar-components";
 import { createLogger } from "@/utils/logger";
 import { coerceIllustrationType } from "@/types/prop-types";
 import type { SpreadImage } from "@/types/spread-types";
+import type { SaveResourceDirective } from "@/types/save-resource";
 import {
   SWAP_MODAL_TOKENS,
   Z_INDEX,
@@ -78,6 +79,10 @@ interface GenerateImageModalProps {
   /** Target section for the Upload-mode prepend. Defaults to 'illustration_image' (raw_images,
    *  spreads space); Objects passes 'retouch_image' so uploads land in the retouch image. */
   uploadEntityType?: ImageTaskEntityType;
+  /** Opt-in double-write directive (parent/opener resolves the path). Threaded into the UPLOAD-mode
+   *  normalize call only. Generate mode does NOT use it — save-on-generate is slice-injected
+   *  (Phase 03). Undefined → the upload payload omits the field. */
+  saveResource?: SaveResourceDirective;
 }
 
 const ACCEPTED_UPLOAD_TYPES = UPLOAD.accept.split(",");
@@ -90,6 +95,7 @@ export function GenerateImageModal({
   onUpdateImage,
   enabledModes,
   uploadEntityType = "illustration_image",
+  saveResource,
 }: GenerateImageModalProps) {
   // Landing mode = leftmost available mode (TABS order: generate, upload). Plain const (cheap)
   // so it can seed useState below + feed resetState. `undefined`/empty → 'generate' (legacy).
@@ -321,9 +327,13 @@ export function GenerateImageModal({
         // appends a server-generated `{timestamp}-{uuid}.png` filename, so no per-
         // spread UUID segment is needed (and the regex rejects digit-leading
         // segments). Matches the sibling spreads-image-toolbar uploader.
+        // Opt-in double-write: thread the parent-resolved directive into the normalize call. The
+        // soft-fail warn (data.saved === false) is emitted once inside normalizeImage → storage-api
+        // (DRY — shared warnIfSaveResourceFailed), so no duplicate warn here. Undefined → omitted.
         const { publicUrl, ratio } = await uploadImageToStorageWithNormalize(
           file,
           "illustrations",
+          saveResource,
         );
 
         addUploadedIllustration({
@@ -358,7 +368,7 @@ export function GenerateImageModal({
         setIsUploading(false);
       }
     },
-    [spreadId, image.id, image.geometry, canvasAspectRatio, addUploadedIllustration, onUpdateImage, uploadEntityType],
+    [spreadId, image.id, image.geometry, canvasAspectRatio, addUploadedIllustration, onUpdateImage, uploadEntityType, saveResource],
   );
 
   const handleUploadInputChange = useCallback(

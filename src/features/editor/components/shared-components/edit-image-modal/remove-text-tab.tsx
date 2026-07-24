@@ -18,6 +18,7 @@ import { createLogger } from '@/utils/logger';
 import { callRemoveTextImage, type RemoveTextImageResult } from '@/apis/retouch-api';
 import type { ImageApiFailure } from '@/apis/image-api-client';
 import type { Illustration } from '@/types/prop-types';
+import type { SaveResourceDirective } from '@/types/save-resource';
 import {
   REMOVE_TEXT_MODEL_OPTIONS,
   DEFAULT_REMOVE_TEXT_MODEL,
@@ -50,9 +51,11 @@ interface UseRemoveTextTabOptions {
   selectedVersion: Illustration | null;
   /** AI-usage attribution (book snapshotId / remix remixId) forwarded into the remove-text call. */
   attribution?: EditImageAttribution;
+  /** Opt-in double-write directive (parent-resolved path). Undefined → payload omits it. */
+  saveResource?: SaveResourceDirective;
 }
 
-export function useRemoveTextTabState({ selectedVersion, attribution }: UseRemoveTextTabOptions): RemoveTextTabApi {
+export function useRemoveTextTabState({ selectedVersion, attribution, saveResource }: UseRemoveTextTabOptions): RemoveTextTabApi {
   const [model, setModel] = useState<RemoveTextModel>(DEFAULT_REMOVE_TEXT_MODEL);
 
   const canCommit = !!selectedVersion;
@@ -64,7 +67,12 @@ export function useRemoveTextTabState({ selectedVersion, attribution }: UseRemov
         model,
       });
 
-      const res = await callRemoveTextImage({ imageUrl: version.media_url, model, ...(attribution ?? {}) });
+      const res = await callRemoveTextImage({
+        imageUrl: version.media_url,
+        model,
+        ...(attribution ?? {}),
+        ...(saveResource ? { saveResource } : {}),
+      });
       if (!res.success || !res.data) {
         const failure = res as ImageApiFailure;
         log.warn('commit', 'remove text failed', {
@@ -81,7 +89,7 @@ export function useRemoveTextTabState({ selectedVersion, attribution }: UseRemov
       log.info('commit', 'remove text success', { processingMs: ok.meta?.processingTime });
       return { imageUrl: ok.data.imageUrl, aiRequestId: ok.data.aiRequestId };
     },
-    [model, attribution],
+    [model, attribution, saveResource],
   );
 
   const ParamsPanel = useMemo<ReactNode>(

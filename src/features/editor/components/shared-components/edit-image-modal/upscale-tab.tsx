@@ -23,6 +23,7 @@ import { createLogger } from '@/utils/logger';
 import { callImageUpscale } from '@/apis/image-api';
 import type { ImageApiFailure } from '@/apis/image-api-client';
 import type { Illustration } from '@/types/prop-types';
+import type { SaveResourceDirective } from '@/types/save-resource';
 import {
   UPSCALE_MODEL_OPTIONS,
   DEFAULT_UPSCALE_MODEL,
@@ -64,9 +65,11 @@ interface UseUpscaleTabOptions {
   selectedVersion: Illustration | null;
   /** AI-usage attribution (book snapshotId / remix remixId) forwarded into the upscale call. */
   attribution?: EditImageAttribution;
+  /** Opt-in double-write directive (parent-resolved path). Undefined → payload omits it. */
+  saveResource?: SaveResourceDirective;
 }
 
-export function useUpscaleTabState({ selectedVersion, attribution }: UseUpscaleTabOptions): UpscaleTabApi {
+export function useUpscaleTabState({ selectedVersion, attribution, saveResource }: UseUpscaleTabOptions): UpscaleTabApi {
   const [model, setModel] = useState<UpscaleModel>(DEFAULT_UPSCALE_MODEL);
   const [scale, setScale] = useState<number>(SCALE.default);
   const [faceEnhance, setFaceEnhance] = useState<boolean>(DEFAULT_FACE_ENHANCE);
@@ -107,6 +110,7 @@ export function useUpscaleTabState({ selectedVersion, attribution }: UseUpscaleT
       const payload = {
         ...buildUpscalePayload(model, scale, faceEnhance, version.media_url, grain),
         ...(attribution ?? {}), // book snapshotId / remix remixId (attribution-only)
+        ...(saveResource ? { saveResource } : {}),
       };
       log.info('commit', 'upscale start', {
         imageUrl: version.media_url.slice(0, 60),
@@ -139,7 +143,7 @@ export function useUpscaleTabState({ selectedVersion, attribution }: UseUpscaleT
       });
       return { imageUrl: res.data.imageUrl, aiRequestId: res.data.aiRequestId };
     },
-    [model, scale, faceEnhance, grainEnabled, grainAmp, grainBlur, attribution],
+    [model, scale, faceEnhance, grainEnabled, grainAmp, grainBlur, attribution, saveResource],
   );
 
   const ParamsPanel = useMemo<ReactNode>(
