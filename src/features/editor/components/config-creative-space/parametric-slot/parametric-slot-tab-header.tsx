@@ -1,6 +1,7 @@
 // parametric-slot-tab-header.tsx
-// Segmented tabs (CHARACTERS / COUNTRY / RELIGION) for ConfigParametricSlotSettings.
-// Local UI state — does not persist. Mirrors musics-sounds/tab-header.tsx.
+// Segmented tabs (CHARACTERS / PHOTOS / SHARED) for ConfigParametricSlotSettings.
+// SHARED bundles the country + religion sections. Local UI state — does not
+// persist. Mirrors musics-sounds/tab-header.tsx.
 
 import type { ParametricSlotTab } from '../parametric-slot-helpers';
 import { cn } from '@/utils/utils';
@@ -12,8 +13,8 @@ interface TabDef {
 
 const TABS: ReadonlyArray<TabDef> = [
   { key: 'characters', label: 'CHARACTERS' },
-  { key: 'country', label: 'COUNTRY' },
-  { key: 'religion', label: 'RELIGION' },
+  { key: 'photos', label: 'PHOTOS' },
+  { key: 'shared', label: 'SHARED' },
 ];
 
 export interface ParametricSlotTabHeaderProps {

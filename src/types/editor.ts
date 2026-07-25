@@ -357,6 +357,14 @@ export interface ParametricCharacterEntry {
   age_max: number | null; // enabled → both non-null, age_min ≤ age_max
 }
 
+export interface ParametricPhotoEntry {
+  key: string; // auto "photo_{N}" (smallest unused N, unique) — read-only in UI
+  is_enabled: boolean; // OFF keeps the 3 mode flags (only delete removes the entry)
+  original: boolean; // mode: the book's original image
+  real: boolean; // mode: reader's uploaded photo shown as-is
+  styled: boolean; // mode: reader's photo restyled (e.g. book art style)
+}
+
 export interface ParametricCountryValue {
   code: string; // ISO 3166-1 alpha-2, uppercase (e.g. 'VN')
   is_enabled: boolean;
@@ -369,6 +377,7 @@ export interface ParametricReligionValue {
 
 export interface BookParametricSlot {
   characters: ParametricCharacterEntry[];
+  photos: ParametricPhotoEntry[]; // user-created photo slots (not snapshot-derived)
   country: { is_enabled: boolean; values: ParametricCountryValue[] };
   religion: { is_enabled: boolean; values: ParametricReligionValue[] };
 }

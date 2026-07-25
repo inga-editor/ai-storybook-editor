@@ -7,12 +7,15 @@
 // Contract:
 // - `parametric_slot` column is nullable → readers coalesce to DEFAULT_PARAMETRIC_SLOT.
 // - Character entry present in characters[] = enabled (no is_enabled flag).
+// - photos[] entries are user-created (auto key photo_N) and carry is_enabled —
+//   they have no snapshot source to derive a disabled row from.
 // - country/religion seed lists materialize into DB only on first master-toggle ON.
 
 import type {
   BookParametricSlot,
   ParametricCharacterEntry,
   ParametricCountryValue,
+  ParametricPhotoEntry,
   ParametricReligionValue,
 } from '@/types/editor';
 import { createLogger } from '@/utils/logger';
@@ -21,19 +24,28 @@ const log = createLogger('Utils', 'ParametricSlot');
 
 // ── Tab keys (local UI state, not persisted) ──────────────────────────────────
 
-export type ParametricSlotTab = 'characters' | 'country' | 'religion';
+export type ParametricSlotTab = 'characters' | 'photos' | 'shared';
 export const PARAMETRIC_DEFAULT_TAB: ParametricSlotTab = 'characters';
 
-/** Axes backed by a user-defined value list (share ParametricValueList). */
+/** Axes backed by a user-defined value list (2 stacked sections on the SHARED tab). */
 export type ParametricAxis = 'country' | 'religion';
 
 // ── Defaults ──────────────────────────────────────────────────────────────────
 
 export const DEFAULT_PARAMETRIC_SLOT: BookParametricSlot = {
   characters: [],
+  photos: [],
   country: { is_enabled: false, values: [] },
   religion: { is_enabled: false, values: [] },
 };
+
+// "+ Add" photo seeds all 3 mode flags ON (matches mock — 3 checked checkboxes).
+export const DEFAULT_PHOTO_FLAGS = {
+  is_enabled: true,
+  original: true,
+  real: true,
+  styled: true,
+} as const;
 
 export const DEFAULT_AGE_RANGE = { age_min: 0, age_max: 15 } as const;
 export const AGE_HARD_LIMITS = { min: 0, max: 100 } as const;
@@ -65,6 +77,18 @@ export function seedCountryValues(): ParametricCountryValue[] {
 
 export function seedReligionValues(): ParametricReligionValue[] {
   return SEED_RELIGIONS.map((name) => ({ name, is_enabled: true }));
+}
+
+// ── Photo key allocation ──────────────────────────────────────────────────────
+
+/** Next auto photo key: "photo_{N}" with the smallest positive N not in use.
+ *  Deleted keys ARE reused (design §4.2 — accepted v1 trade-off: a dangling
+ *  media/execution ref to the old key rebinds to the new slot). */
+export function nextPhotoKey(existing: ParametricPhotoEntry[]): string {
+  const used = new Set(existing.map((p) => p.key));
+  let n = 1;
+  while (used.has(`photo_${n}`)) n += 1;
+  return `photo_${n}`;
 }
 
 // ── Gender seed (empty snapshot gender → null axis) ───────────────────────────
@@ -146,9 +170,36 @@ export function normalizeParametricSlot(raw: unknown): BookParametricSlot | null
   const r = raw as Partial<BookParametricSlot>;
   return {
     characters: normalizeCharacters(r.characters),
+    photos: normalizePhotos(r.photos),
     country: normalizeCountryAxis(r.country),
     religion: normalizeReligionAxis(r.religion),
   };
+}
+
+function normalizePhotos(raw: unknown): ParametricPhotoEntry[] {
+  if (!Array.isArray(raw)) return [];
+  const out: ParametricPhotoEntry[] = [];
+  const seen = new Set<string>();
+  for (const p of raw) {
+    if (!p || typeof p !== 'object') continue;
+    const entry = p as Partial<ParametricPhotoEntry>;
+    if (typeof entry.key !== 'string' || entry.key.trim().length === 0) continue;
+    const key = entry.key.trim();
+    if (seen.has(key)) {
+      log.warn('normalizePhotos', 'duplicate key skipped', { key });
+      continue;
+    }
+    seen.add(key);
+    // Absent booleans default true (same tolerance as values[].is_enabled).
+    out.push({
+      key,
+      is_enabled: typeof entry.is_enabled === 'boolean' ? entry.is_enabled : true,
+      original: typeof entry.original === 'boolean' ? entry.original : true,
+      real: typeof entry.real === 'boolean' ? entry.real : true,
+      styled: typeof entry.styled === 'boolean' ? entry.styled : true,
+    });
+  }
+  return out;
 }
 
 function normalizeCharacters(raw: unknown): ParametricCharacterEntry[] {

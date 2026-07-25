@@ -1,8 +1,10 @@
 // config-parametric-slot-settings.tsx — root panel for the Parametric Slot config
-// section. 3 segmented sub-tabs (CHARACTERS / COUNTRY / RELIGION). Characters derive
+// section. 3 segmented sub-tabs (CHARACTERS / PHOTOS / SHARED). Characters derive
 // from snapshot.characters[] (entry present in slot = enabled — NO is_enabled flag,
-// unlike remix); country/religion are user-defined value lists sharing
-// ParametricValueList. Every change persists immediately via updateBook (no Apply).
+// unlike remix); photos are user-created slots (auto key photo_N, per-entry
+// is_enabled); SHARED stacks the country + religion user-defined value lists
+// (2 ParametricValueList sections). Every change persists immediately via
+// updateBook (no Apply).
 // Age steppers debounce ~400ms and flush on unmount / tab-switch / character-OFF;
 // all other controls write per click. Design ref: 12-config-parametric-slot-settings.md.
 // LWW note: each handler persists the full next slot (no merge/refetch), same as
@@ -27,9 +29,11 @@ import type { Character } from '@/types/character-types';
 import {
   DEFAULT_AGE_RANGE,
   DEFAULT_PARAMETRIC_SLOT,
+  DEFAULT_PHOTO_FLAGS,
   PARAMETRIC_DEFAULT_TAB,
   buildDisplayValues,
   clampAge,
+  nextPhotoKey,
   normalizeGenderSeed,
   normalizeParametricSlot,
   seedCountryValues,
@@ -41,7 +45,9 @@ import {
 } from './parametric-slot-helpers';
 import { ParametricSlotTabHeader } from './parametric-slot/parametric-slot-tab-header';
 import { CharacterParametricRow } from './parametric-slot/character-parametric-row';
+import { PhotoParametricRow, type PhotoFlag } from './parametric-slot/photo-parametric-row';
 import { ParametricValueList } from './parametric-slot/parametric-value-list';
+import { Plus } from 'lucide-react';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('Editor', 'ConfigParametricSlotSettings');
@@ -225,6 +231,40 @@ export function ConfigParametricSlotSettings() {
     scheduleFlush();
   };
 
+  // ── Photo handlers (user-created slots, auto key photo_N) ───────────────────
+  const addPhoto = () => {
+    const base = readCurrentSlot();
+    const key = nextPhotoKey(base.photos);
+    log.info('addPhoto', 'append slot', { key });
+    persist({ ...base, photos: [...base.photos, { key, ...DEFAULT_PHOTO_FLAGS }] });
+  };
+
+  const setPhotoEnabled = (key: string, next: boolean) => {
+    const base = readCurrentSlot();
+    log.info('setPhotoEnabled', 'toggle slot', { key, next });
+    persist({
+      ...base,
+      photos: base.photos.map((p) => (p.key === key ? { ...p, is_enabled: next } : p)),
+    });
+  };
+
+  const setPhotoFlag = (key: string, flag: PhotoFlag, next: boolean) => {
+    const base = readCurrentSlot();
+    log.info('setPhotoFlag', 'toggle mode', { key, flag, next });
+    // All 3 flags false is valid (no hard validator) — execution layer treats the
+    // slot as disabled (design §4.4).
+    persist({
+      ...base,
+      photos: base.photos.map((p) => (p.key === key ? { ...p, [flag]: next } : p)),
+    });
+  };
+
+  const deletePhoto = (key: string) => {
+    const base = readCurrentSlot();
+    log.info('deletePhoto', 'remove slot', { key });
+    persist({ ...base, photos: base.photos.filter((p) => p.key !== key) });
+  };
+
   // ── Country / Religion handlers (per-axis branches keep value types exact) ──
   const toggleAxis = (axis: 'country' | 'religion', next: boolean) => {
     const base = readCurrentSlot();
@@ -318,36 +358,63 @@ export function ConfigParametricSlotSettings() {
             </div>
           ))}
 
-        {activeTab === 'country' && (
-          <ParametricValueList
-            axisLabel="country"
-            isEnabled={slot.country.is_enabled}
-            values={country.values}
-            isPreviewSeed={country.isPreviewSeed}
-            inputPlaceholder="country code"
-            addButtonLabel="Add country"
-            validate={(raw) => validateCountryCode(raw, existingCountryCodes)}
-            onMasterToggle={(next) => toggleAxis('country', next)}
-            onValueToggle={(label, next) => toggleValue('country', label, next)}
-            onValueDelete={(label) => deleteValue('country', label)}
-            onValueAdd={(label, checked) => addValue('country', label, checked)}
-          />
+        {activeTab === 'photos' && (
+          <div className="flex flex-col gap-2">
+            {slot.photos.length === 0 ? (
+              <p className="text-xs italic text-muted-foreground">No photo slots yet</p>
+            ) : (
+              <div className="flex flex-col">
+                {slot.photos.map((p) => (
+                  <PhotoParametricRow
+                    key={p.key}
+                    entry={p}
+                    onToggle={(next) => setPhotoEnabled(p.key, next)}
+                    onFlagToggle={(flag, next) => setPhotoFlag(p.key, flag, next)}
+                    onDelete={() => deletePhoto(p.key)}
+                  />
+                ))}
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={addPhoto}
+              className="flex w-fit items-center gap-1.5 text-xs font-medium text-primary transition-colors hover:text-primary/80"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              Add
+            </button>
+          </div>
         )}
 
-        {activeTab === 'religion' && (
-          <ParametricValueList
-            axisLabel="religion"
-            isEnabled={slot.religion.is_enabled}
-            values={religion.values}
-            isPreviewSeed={religion.isPreviewSeed}
-            inputPlaceholder="religion"
-            addButtonLabel="Add religion"
-            validate={(raw) => validateReligionName(raw, existingReligionNames)}
-            onMasterToggle={(next) => toggleAxis('religion', next)}
-            onValueToggle={(label, next) => toggleValue('religion', label, next)}
-            onValueDelete={(label) => deleteValue('religion', label)}
-            onValueAdd={(label, checked) => addValue('religion', label, checked)}
-          />
+        {activeTab === 'shared' && (
+          <div className="flex flex-col gap-6">
+            <ParametricValueList
+              axisLabel="country"
+              isEnabled={slot.country.is_enabled}
+              values={country.values}
+              isPreviewSeed={country.isPreviewSeed}
+              inputPlaceholder="country code"
+              addButtonLabel="Add"
+              validate={(raw) => validateCountryCode(raw, existingCountryCodes)}
+              onMasterToggle={(next) => toggleAxis('country', next)}
+              onValueToggle={(label, next) => toggleValue('country', label, next)}
+              onValueDelete={(label) => deleteValue('country', label)}
+              onValueAdd={(label, checked) => addValue('country', label, checked)}
+            />
+            <ParametricValueList
+              axisLabel="religion"
+              isEnabled={slot.religion.is_enabled}
+              values={religion.values}
+              isPreviewSeed={religion.isPreviewSeed}
+              inputPlaceholder="religion"
+              addButtonLabel="Add"
+              validate={(raw) => validateReligionName(raw, existingReligionNames)}
+              onMasterToggle={(next) => toggleAxis('religion', next)}
+              onValueToggle={(label, next) => toggleValue('religion', label, next)}
+              onValueDelete={(label) => deleteValue('religion', label)}
+              onValueAdd={(label, checked) => addValue('religion', label, checked)}
+            />
+          </div>
         )}
       </div>
     </div>

@@ -1,16 +1,19 @@
 // parametric-slot-helpers.test.ts — Unit tests for pure parametric-slot helpers:
-// validators, seed builders, gender seed, clampAge, normalizeParametricSlot
-// (null/partial/idempotent/edge), and buildDisplayValues (preview-seed vs persisted).
+// validators, seed builders, gender seed, clampAge, nextPhotoKey,
+// normalizeParametricSlot (null/partial/idempotent/edge), and buildDisplayValues
+// (preview-seed vs persisted).
 // vitest only — NO node builtins (tsc -b type-checks with vite/client types).
 
 import { describe, it, expect } from 'vitest';
 import {
   AGE_HARD_LIMITS,
   DEFAULT_PARAMETRIC_SLOT,
+  DEFAULT_PHOTO_FLAGS,
   SEED_COUNTRY_CODES,
   SEED_RELIGIONS,
   buildDisplayValues,
   clampAge,
+  nextPhotoKey,
   normalizeGenderSeed,
   normalizeParametricSlot,
   seedCountryValues,
@@ -97,6 +100,23 @@ describe('clampAge', () => {
   });
 });
 
+describe('nextPhotoKey', () => {
+  const photo = (key: string) => ({ key, ...DEFAULT_PHOTO_FLAGS });
+  it('empty list → photo_1', () => {
+    expect(nextPhotoKey([])).toBe('photo_1');
+  });
+  it('appends after contiguous keys', () => {
+    expect(nextPhotoKey([photo('photo_1'), photo('photo_2')])).toBe('photo_3');
+  });
+  it('reuses the smallest gap after a delete', () => {
+    expect(nextPhotoKey([photo('photo_2'), photo('photo_3')])).toBe('photo_1');
+    expect(nextPhotoKey([photo('photo_1'), photo('photo_3')])).toBe('photo_2');
+  });
+  it('ignores non-pattern keys', () => {
+    expect(nextPhotoKey([photo('custom'), photo('photo_1')])).toBe('photo_2');
+  });
+});
+
 describe('normalizeParametricSlot', () => {
   it('null / undefined → null (preserves empty-state)', () => {
     expect(normalizeParametricSlot(null)).toBeNull();
@@ -113,8 +133,23 @@ describe('normalizeParametricSlot', () => {
   it('fills missing axes / arrays', () => {
     const n = normalizeParametricSlot({ characters: undefined, country: { is_enabled: true } });
     expect(n?.characters).toEqual([]);
+    expect(n?.photos).toEqual([]);
     expect(n?.country).toEqual({ is_enabled: true, values: [] });
     expect(n?.religion).toEqual({ is_enabled: false, values: [] });
+  });
+  it('photos: drops keyless, de-dupes keys, defaults absent flags to true', () => {
+    const n = normalizeParametricSlot({
+      photos: [
+        { key: 'photo_1', is_enabled: false, original: true, real: false, styled: true },
+        { original: false },
+        { key: 'photo_1', real: false },
+        { key: 'photo_2' },
+      ],
+    });
+    expect(n?.photos).toEqual([
+      { key: 'photo_1', is_enabled: false, original: true, real: false, styled: true },
+      { key: 'photo_2', is_enabled: true, original: true, real: true, styled: true },
+    ]);
   });
   it('drops entries without a key; de-dupes character keys (first wins)', () => {
     const n = normalizeParametricSlot({
@@ -158,6 +193,7 @@ describe('normalizeParametricSlot', () => {
   it('is idempotent (round-trips a normalized value)', () => {
     const once = normalizeParametricSlot({
       characters: [{ key: 'a', name: 'A', gender: null, age_min: 2, age_max: 8 }],
+      photos: [{ key: 'photo_1', is_enabled: false, original: true, real: false, styled: true }],
       country: { is_enabled: true, values: [{ code: 'vn', is_enabled: true }] },
       religion: { is_enabled: false, values: [] },
     });
@@ -183,6 +219,7 @@ describe('buildDisplayValues', () => {
   it('master ON → maps persisted values, isPreviewSeed false', () => {
     const slot: BookParametricSlot = {
       characters: [],
+      photos: [],
       country: { is_enabled: true, values: [{ code: 'VN', is_enabled: true }, { code: 'US', is_enabled: false }] },
       religion: { is_enabled: false, values: [] },
     };
@@ -197,6 +234,7 @@ describe('buildDisplayValues', () => {
   it('master OFF but values present → persisted (NOT preview seed)', () => {
     const slot: BookParametricSlot = {
       characters: [],
+      photos: [],
       country: { is_enabled: false, values: [{ code: 'VN', is_enabled: true }] },
       religion: { is_enabled: false, values: [] },
     };
@@ -208,6 +246,7 @@ describe('buildDisplayValues', () => {
   it('master ON but empty values (external data) → empty list, NOT re-seeded', () => {
     const slot: BookParametricSlot = {
       characters: [],
+      photos: [],
       country: { is_enabled: true, values: [] },
       religion: { is_enabled: false, values: [] },
     };
