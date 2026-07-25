@@ -942,6 +942,17 @@ export function ObjectsMainView({
     [cloneRawImage]
   );
 
+  // Persist the held retouch sub-tree when a spread-level modal closes. saveNow()
+  // self-guards — it no-ops when the lock isn't held, the node was deleted, or nothing
+  // changed (dequal vs baseline) — so firing on every close is safe regardless of
+  // whether the user actually edited anything (no per-modal dirty tracking needed).
+  const commitOnModalClose = useCallback(() => {
+    if (!onCommitSave) return;
+    void onCommitSave().then((ok) => {
+      if (!ok) log.warn("commitOnModalClose", "save-on-close skipped/rejected", {});
+    });
+  }, [onCommitSave]);
+
   const renderRetouchTextToolbar = useCallback(
     (context: TextToolbarContext<BaseSpread>) => (
       <ObjectsTextToolbar
@@ -950,9 +961,10 @@ export function ObjectsMainView({
           onSplitTextbox: () =>
             splitTextbox(selectedSpreadId, context.item, { deleteSource: true, inheritVisibility: true }),
         }}
+        onCommitSave={onCommitSave}
       />
     ),
-    [selectedSpreadId, splitTextbox]
+    [selectedSpreadId, splitTextbox, onCommitSave]
   );
 
 
@@ -1182,7 +1194,10 @@ export function ObjectsMainView({
       {selectedSpread && (
         <TranslateSpreadModal
           isOpen={translateModalOpen}
-          onClose={() => setTranslateModalOpen(false)}
+          onClose={() => {
+            setTranslateModalOpen(false);
+            commitOnModalClose();
+          }}
           spreadId={selectedSpreadId}
           textboxes={selectedSpread.textboxes ?? []}
           originalLang={originalLanguage}
@@ -1196,7 +1211,10 @@ export function ObjectsMainView({
       {selectedSpread && (
         <EnhanceSpreadNarrationModal
           isOpen={narrationSpreadModalOpen}
-          onClose={() => setNarrationSpreadModalOpen(false)}
+          onClose={() => {
+            setNarrationSpreadModalOpen(false);
+            commitOnModalClose();
+          }}
           spreadId={selectedSpreadId}
           textboxes={selectedSpread.textboxes ?? []}
           editorLang={langCode}
@@ -1211,7 +1229,10 @@ export function ObjectsMainView({
       {selectedSpread && (
         <EnhanceImageAnnotationModal
           isOpen={annotationModalOpen}
-          onClose={() => setAnnotationModalOpen(false)}
+          onClose={() => {
+            setAnnotationModalOpen(false);
+            commitOnModalClose();
+          }}
           spreadId={selectedSpreadId}
           images={annotationImages}
           language={annotationLanguage}

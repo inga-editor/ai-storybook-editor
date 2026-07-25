@@ -44,10 +44,14 @@ const log = createLogger("Editor", "ObjectsTextToolbar");
 
 interface ObjectsTextToolbarProps<TSpread extends BaseSpread> {
   context: TextToolbarContext<TSpread>;
+  /** Held-session commit (retouch saveNow). Fired when the narration modal closes so the
+   *  per-mutation audio bubbles are persisted as one save. No-op when not held / not dirty. */
+  onCommitSave?: () => Promise<boolean>;
 }
 
 export function ObjectsTextToolbar<TSpread extends BaseSpread>({
   context,
+  onCommitSave,
 }: ObjectsTextToolbarProps<TSpread>) {
   // --- Refs ---
   const toolbarRef = useRef<HTMLDivElement>(null);
@@ -306,7 +310,16 @@ export function ObjectsTextToolbar<TSpread extends BaseSpread>({
         {isGenerateModalOpen && (
           <GenerateNarrationModal
             isOpen={isGenerateModalOpen}
-            onClose={() => setIsGenerateModalOpen(false)}
+            onClose={() => {
+              setIsGenerateModalOpen(false);
+              if (onCommitSave)
+                void onCommitSave().then((ok) => {
+                  if (!ok)
+                    log.warn("narrationClose", "save-on-close skipped/rejected", {
+                      itemId: item.id,
+                    });
+                });
+            }}
             textboxTitle={item.title}
             textboxText={content?.text ?? ""}
             existingAudio={audio ?? null}
