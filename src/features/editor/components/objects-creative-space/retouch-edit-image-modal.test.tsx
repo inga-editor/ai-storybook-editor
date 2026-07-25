@@ -11,13 +11,12 @@ import { render, screen, fireEvent, cleanup } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Stub the heavy EditImageModal → one button that fires onUpdateIllustrations (commit path).
-// `useIllustrationPropRefCandidates` is a barrel export the connector now also imports (Inpaint
-// reference-image candidates) — stub it too or the connector's hook call throws.
+// The connector imports NOTHING else from this barrel since 2026-07-25 (the Inpaint tab resolves its
+// own reference candidates via the provenance API — 04-inpaint-tab.md §8.7).
 vi.mock('@/features/editor/components/shared-components/edit-image-modal', () => ({
   EditImageModal: ({ onUpdateIllustrations }: { onUpdateIllustrations: (n: unknown[]) => void }) => (
     <button onClick={() => onUpdateIllustrations([{ media_url: 'v2.png', is_selected: true }])}>commit</button>
   ),
-  useIllustrationPropRefCandidates: () => [],
 }));
 
 const FIXTURE_NODE = { id: 'img1', title: 'Img', media_url: 'v1.png', illustrations: [] };

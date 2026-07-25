@@ -115,11 +115,13 @@ export const INPAINT_PROMPT_MAX = 2000;
 /** Client pre-flight cap: composite PNG decoded bytes must stay ≤ this (mirrors API 10MB cap)
  *  → abort BEFORE the call (no 400 round-trip). `base64.length * 0.75` ≈ decoded bytes. */
 export const REGION_MAX_DECODED_BYTES = 10 * 1024 * 1024;
-/** Reference-image cap (04-inpaint-tab.md §8) — picked prop-variants + uploads GỘP into ONE list;
+/** Reference-image cap (04-inpaint-tab.md §8) — picked provenance refs + uploads GỘP into ONE list;
  *  = the edit-object-image `referenceImages` max. */
 export const INPAINT_REF_MAX = 5;
-/** Max chars of a reference-image `description` (API cap). */
-export const INPAINT_REF_DESC_MAX = 200;
+/** Hop cap when walking the `original_url` chain backwards looking for an ancestor's
+ *  `ai_request_id` (04-inpaint-tab.md §8.3). Bounds a long/legacy edit chain; combined with the
+ *  visited-set it also stops a cyclic chain. */
+export const INPAINT_PROV_MAX_HOPS = 8;
 
 // ── Outpaint tab (05-outpaint-tab.md §2) ─────────────────────────────────────
 // Re-export the API direction enum so the tab + helpers pull it from this constants surface

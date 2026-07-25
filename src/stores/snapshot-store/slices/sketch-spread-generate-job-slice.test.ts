@@ -380,6 +380,15 @@ describe('SketchSpreadGenerateJobSlice', () => {
         path: expect.stringContaining('table:snapshots/id:snap-1/col:sketch/spread:sp-1/key:images/find:id='),
         action: 'create',
       });
+
+      // ⚡ The pre-minted `imageId` must ALSO reach the client-side node-create (arg 4 of
+      // addSketchSpreadImageVersion, now an options object) — the node the BE nested-creates and
+      // the node prepended here MUST share ONE id, else the double-write duplicates the node.
+      // tsc cannot catch a dropped `imageId` (the whole opts object is optional), so assert it.
+      await tick();
+      await tick();
+      const pathImageId = String(callArg.saveResource?.path).split('find:id=')[1];
+      expect(store.getState().sketch.spreads[0].images[0].id).toBe(pathImageId);
     });
 
     it('passes saveResource for left page (2-page spread)', async () => {

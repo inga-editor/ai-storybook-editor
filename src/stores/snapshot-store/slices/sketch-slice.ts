@@ -11,6 +11,7 @@ import type {
   ArtDirection,
   SketchTextboxContent,
 } from '@/types/sketch';
+import type { IllustrationType } from '@/types/prop-types';
 import { isSketchTextboxContent, sheetOf } from '@/types/sketch';
 import { createLogger } from '@/utils/logger';
 import { DEFAULT_SKETCH } from './sketch-normalize';
@@ -399,12 +400,14 @@ export const createSketchSlice: StateCreator<
   // auto-select it, and clear the previous selection. Creates that page's image container on
   // first generate for the page. Marks dirty so the awaited flushSnapshot() in the spread-generate
   // job persists it before the next page/spread reads it back for consistency.
+  // `opts` (options object, arg 4 — replaced the positional aiRequestId/imageId pair): every
+  // provenance field is written **omit-if-absent**, so a caller that knows nothing (Extract crop,
+  // upload) leaves the entry at the legacy 3-field shape.
   addSketchSpreadImageVersion: (
     spreadId: string,
     pageType: SketchPageType,
     mediaUrl: string,
-    aiRequestId?: string,
-    imageId?: string,
+    opts?: { aiRequestId?: string; imageId?: string; type?: IllustrationType; originalUrl?: string },
   ) =>
     set((state) => {
       const spread = state.sketch.spreads.find((s) => s.id === spreadId);
@@ -412,10 +415,10 @@ export const createSketchSlice: StateCreator<
       let img = spread.images.find((im) => im.type === pageType);
       if (!img) {
         log.debug('addSketchSpreadImageVersion', 'create page image', { spreadId, pageType });
-        // `imageId` lets the spread-generate job pre-mint the node id BEFORE the AI call so the opt-in
-        // saveResource directive addresses the SAME node the BE nested-creates (no duplicate node).
+        // `opts.imageId` lets the spread-generate job pre-mint the node id BEFORE the AI call so the
+        // opt-in saveResource directive addresses the SAME node the BE nested-creates (no duplicate).
         // Absent → mint here (uploads / callers not opting into the BE-first double-write).
-        spread.images.push({ id: imageId ?? crypto.randomUUID(), type: pageType, illustrations: [] });
+        spread.images.push({ id: opts?.imageId ?? crypto.randomUUID(), type: pageType, illustrations: [] });
         img = spread.images[spread.images.length - 1]; // re-read as immer draft proxy
       }
       img.illustrations.forEach((ill) => {
@@ -425,10 +428,18 @@ export const createSketchSlice: StateCreator<
         media_url: mediaUrl,
         created_time: new Date().toISOString(),
         is_selected: true,
-        // Provenance soft ref → ai_service_logs.id (raw spread page = direct Gemini output).
-        ...(aiRequestId ? { ai_request_id: aiRequestId } : {}),
+        // Provenance (full Illustration Entry, DB-CHANGELOG 2026-07-23). Raw generate output passes
+        // aiRequestId only (absent `type` coerces to 'created' on read); an Edit-modal commit passes
+        // all three so Compare + the §8.3 reverse-lookup chain work in this space too.
+        ...(opts?.aiRequestId ? { ai_request_id: opts.aiRequestId } : {}),
+        ...(opts?.type ? { type: opts.type } : {}),
+        ...(opts?.originalUrl ? { original_url: opts.originalUrl } : {}),
       });
-      log.info('addSketchSpreadImageVersion', 'prepend version', { spreadId, pageType });
+      log.info('addSketchSpreadImageVersion', 'prepend version', {
+        spreadId,
+        pageType,
+        hasProvenance: !!(opts?.aiRequestId || opts?.type || opts?.originalUrl), // boolean only — no id values
+      });
       state.sync.isDirty = true;
     }),
 

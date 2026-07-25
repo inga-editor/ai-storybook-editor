@@ -8,10 +8,7 @@
 // — no new matrix column (design decision §4.5, KISS). Landing tool = inpaint.
 
 import { useCallback } from 'react';
-import {
-  EditImageModal,
-  useSketchPropRefCandidates,
-} from '@/features/editor/components/shared-components/edit-image-modal';
+import { EditImageModal } from '@/features/editor/components/shared-components/edit-image-modal';
 import { SPACE_TOOL_MATRIX } from '@/features/editor/components/shared-components/image-tools-space-matrix';
 import { useSketchBaseStyles, useSnapshotActions, useSnapshotId } from '@/stores/snapshot-store/selectors';
 import { titleCase } from '@/features/editor/components/sketch-variants-creative-space/sketch-variants-constants';
@@ -40,8 +37,6 @@ export function SketchBaseEditImageModal({ target, onClose, saveResource }: Sket
   const styles = useSketchBaseStyles(target.kind);
   const { setSketchBaseStyleIllustrations, setSketchBaseCropIllustrations, recropBaseSheet } =
     useSnapshotActions();
-  // Inpaint reference candidates (sketch prop crops). Hook runs BEFORE the early return (Rules of Hooks).
-  const referenceImageCandidates = useSketchPropRefCandidates();
   // Book-edit context (Sketch space is never remix) → attribute AI edits by snapshotId.
   const snapshotId = useSnapshotId();
   const style = styles[target.styleIndex];
@@ -108,7 +103,6 @@ export function SketchBaseEditImageModal({ target, onClose, saveResource }: Sket
       pathPrefix={pathPrefix}
       enabledTools={SPACE_TOOL_MATRIX.sketch.edit}
       initialTool="inpaint"
-      referenceImageCandidates={referenceImageCandidates}
       attribution={{ snapshotId: snapshotId ?? undefined }}
       saveResource={saveResource}
     />

@@ -15,11 +15,11 @@ import {
   DIRECTION_EDGES,
   outpaintFrameInset,
   buildOutpaintPayload,
-  buildPropRefDescription,
+  resolveAiRequestId,
   urlToBase64,
   MAX_REF_BYTES,
 } from './edit-image-modal-utils';
-import { REGION_MAX_DECODED_BYTES } from './edit-image-modal-constants';
+import { INPAINT_PROV_MAX_HOPS, REGION_MAX_DECODED_BYTES } from './edit-image-modal-constants';
 
 const baseVersions: Illustration[] = [
   { media_url: 'https://cdn/a.png', created_time: '2026-01-01T00:00:00.000Z', is_selected: true, type: 'created' },
@@ -289,17 +289,87 @@ describe('buildOutpaintPayload', () => {
   });
 });
 
-describe('buildPropRefDescription', () => {
-  it('composes name + @key/variant mention only (no visual description)', () => {
-    expect(buildPropRefDescription('Nơ đỏ', 'red_bow', 'base')).toBe('Đạo cụ Nơ đỏ - @red_bow/base');
+// resolveAiRequestId — walks the `original_url` chain backwards to the nearest ancestor carrying an
+// `ai_request_id` (04-inpaint-tab.md §8.3). Fixtures are in-file object literals: editor test files
+// type-check against `vite/client` types only, so no node builtin (fs/path) may be imported.
+describe('resolveAiRequestId', () => {
+  const version = (mediaUrl: string, extra: Partial<Illustration> = {}): Illustration => ({
+    media_url: mediaUrl,
+    created_time: '2026-07-25T00:00:00.000Z',
+    is_selected: false,
+    type: 'created',
+    ...extra,
   });
 
-  it('handles a plain ASCII name + non-base variant', () => {
-    expect(buildPropRefDescription('Magic Wand', 'wand', 'glowing')).toBe('Đạo cụ Magic Wand - @wand/glowing');
+  /** Newest-first chain: `v0` is the leaf; every entry's `original_url` points at the NEXT (older)
+   *  entry, and ONLY `idAtIndex` carries an `ai_request_id`. */
+  const buildChain = (length: number, idAtIndex: number): Illustration[] =>
+    Array.from({ length }, (_, i) =>
+      version(`https://cdn/v${i}.png`, {
+        type: i === 0 ? 'created' : 'edited',
+        ...(i < length - 1 ? { original_url: `https://cdn/v${i + 1}.png` } : {}),
+        ...(i === idAtIndex ? { ai_request_id: `req-${i}` } : {}),
+      }),
+    );
+
+  it('returns the version own id without walking (fromAncestor false)', () => {
+    const own = version('https://cdn/a.png', { ai_request_id: 'req-direct' });
+    expect(resolveAiRequestId(own, [own, ...baseVersions])).toEqual({
+      id: 'req-direct',
+      fromAncestor: false,
+    });
   });
 
-  it('falls back verbatim when name equals key (parent-side fallback)', () => {
-    expect(buildPropRefDescription('lantern', 'lantern', 'v1')).toBe('Đạo cụ lantern - @lantern/v1');
+  it('borrows the id of the direct parent one hop up (fromAncestor true)', () => {
+    const parent = version('https://cdn/gen.png', { ai_request_id: 'req-parent' });
+    const child = version('https://cdn/erased.png', {
+      type: 'edited',
+      original_url: 'https://cdn/gen.png',
+    });
+    expect(resolveAiRequestId(child, [child, parent])).toEqual({
+      id: 'req-parent',
+      fromAncestor: true,
+    });
+  });
+
+  it('walks multiple hops to the AI-gen root of the chain', () => {
+    const root = version('https://cdn/gen.png', { ai_request_id: 'req-root' });
+    const mid = version('https://cdn/mid.png', { type: 'edited', original_url: 'https://cdn/gen.png' });
+    const leaf = version('https://cdn/leaf.png', { type: 'edited', original_url: 'https://cdn/mid.png' });
+    expect(resolveAiRequestId(leaf, [leaf, mid, root])).toEqual({
+      id: 'req-root',
+      fromAncestor: true,
+    });
+  });
+
+  it('gives up when original_url points at a url absent from versions (broken chain)', () => {
+    const orphan = version('https://cdn/leaf.png', {
+      type: 'edited',
+      original_url: 'https://cdn/purged.png',
+    });
+    expect(resolveAiRequestId(orphan, [orphan])).toEqual({ id: null, fromAncestor: false });
+  });
+
+  it('terminates on a cycle (A → B → A) instead of hanging', () => {
+    const a = version('https://cdn/a.png', { type: 'edited', original_url: 'https://cdn/b.png' });
+    const b = version('https://cdn/b.png', { type: 'edited', original_url: 'https://cdn/a.png' });
+    expect(resolveAiRequestId(a, [a, b])).toEqual({ id: null, fromAncestor: false });
+  });
+
+  it('stops at the hop cap — an id further back than INPAINT_PROV_MAX_HOPS is not reached', () => {
+    const chain = buildChain(INPAINT_PROV_MAX_HOPS + 2, INPAINT_PROV_MAX_HOPS + 1);
+    expect(resolveAiRequestId(chain[0], chain)).toEqual({ id: null, fromAncestor: false });
+    // Sanity: the walk itself is fine — an id on the LAST hop inside the budget is still found, so
+    // the null above is the cap doing its job, not a broken traversal.
+    const reachable = buildChain(INPAINT_PROV_MAX_HOPS + 2, INPAINT_PROV_MAX_HOPS - 1);
+    expect(resolveAiRequestId(reachable[0], reachable)).toEqual({
+      id: `req-${INPAINT_PROV_MAX_HOPS - 1}`,
+      fromAncestor: true,
+    });
+  });
+
+  it('returns no provenance for a null version', () => {
+    expect(resolveAiRequestId(null, baseVersions)).toEqual({ id: null, fromAncestor: false });
   });
 });
 

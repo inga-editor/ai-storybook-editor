@@ -5,13 +5,12 @@
 //
 // The parent gates mounting (only when an image is selected AND no generate job is running), so
 // this component can assume a live `image`. It never touches the sketch store directly — it emits
-// the resolved url(s) via `onPersistVersion`, which the parent turns into
-// addSketchSpreadImageVersion(spreadId, image.type, url).
+// the resolved url(s) + (Edit path) the committed version's provenance via `onPersistVersion`,
+// which the parent turns into addSketchSpreadImageVersion(spreadId, image.type, url, meta).
 'use client';
 
 import { useMemo } from 'react';
 import { EditImageModal } from '@/features/editor/components/shared-components/edit-image-modal/edit-image-modal';
-import { useSketchPropRefCandidates } from '@/features/editor/components/shared-components/edit-image-modal';
 import { ExtractImageModal } from '@/features/editor/components/shared-components/extract-image-modal/extract-image-modal';
 import { SPACE_TOOL_MATRIX } from '@/features/editor/components/shared-components/image-tools-space-matrix';
 import { useSnapshotId } from '@/stores/snapshot-store/selectors';
@@ -25,6 +24,7 @@ import {
   toIllustrations,
   classifyEditCommit,
   toSpreadImage,
+  type PersistVersionMeta,
 } from './sketch-image-modal-adapters';
 
 const log = createLogger('Editor', 'SketchImageToolsModals');
@@ -42,8 +42,9 @@ export interface SketchImageToolsModalsProps {
   cropPresets: CropPreset[] | undefined;
   onUpsertCropPreset: (preset: CropPreset) => void;
   onDeleteCropPreset: (presetId: string) => void;
-  /** Append `url` as a new version of this page image (parent owns the store write). */
-  onPersistVersion: (url: string) => void;
+  /** Append `url` as a new version of this page image (parent owns the store write). `meta` carries
+   *  the committed version's provenance (Edit path only — Extract crops have none). */
+  onPersistVersion: (url: string, meta?: PersistVersionMeta) => void;
   /** Re-select an EXISTING version (flip is_selected) when the Edit modal re-picks an older
    *  variant — parent owns the store write. */
   onSelectVersion: (url: string) => void;
@@ -64,8 +65,6 @@ export function SketchImageToolsModals({
   onSelectVersion,
   onClose,
 }: SketchImageToolsModalsProps) {
-  // Inpaint reference candidates (sketch prop crops). Unconditional — before the branch return.
-  const referenceImageCandidates = useSketchPropRefCandidates();
   // Book-edit context (Sketch space is never remix) → attribute AI edits by snapshotId.
   const snapshotId = useSnapshotId();
 
@@ -99,7 +98,6 @@ export function SketchImageToolsModals({
         pathPrefix={`sketch/${spreadId}/${image.type}/edited`}
         enabledTools={SPACE_TOOL_MATRIX.sketch.edit}
         initialTool="inpaint"
-        referenceImageCandidates={referenceImageCandidates}
         attribution={{ snapshotId: snapshotId ?? undefined }}
         saveResource={editSaveResource}
         onUpdateIllustrations={(next) => {
@@ -121,10 +119,16 @@ export function SketchImageToolsModals({
             onSelectVersion(commit.url);
             return;
           }
+          // Provenance rides along: the modal's committed entry carries type='edited' +
+          // original_url (+ ai_request_id when the tool actually called AI). classifyEditCommit
+          // already omits absent keys, so the rest-spread IS the meta — nothing fabricated.
+          const { kind: _kind, url, ...meta } = commit;
           log.info('onUpdateIllustrations', 'append edited page-image version', {
             pageType: image.type,
+            // Boolean only — never log the id value.
+            hasAiRequestId: !!meta.aiRequestId,
           });
-          onPersistVersion(commit.url);
+          onPersistVersion(url, meta);
         }}
       />
     );

@@ -728,7 +728,9 @@ export function SketchSpreadCanvas({ spreadId }: SketchSpreadCanvasProps) {
           cropPresets={book?.crop_presets ?? undefined}
           onUpsertCropPreset={handleUpsertCropPreset}
           onDeleteCropPreset={handleDeleteCropPreset}
-          onPersistVersion={(url) => addSketchSpreadImageVersion(spreadId, selImg.type, url)}
+          onPersistVersion={(url, meta) =>
+            addSketchSpreadImageVersion(spreadId, selImg.type, url, meta)
+          }
           onSelectVersion={(url) => selectSketchSpreadImageVersion(spreadId, selImg.type, url)}
           onClose={() => setActiveModal(null)}
         />

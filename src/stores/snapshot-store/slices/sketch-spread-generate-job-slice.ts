@@ -441,7 +441,13 @@ export const createSketchSpreadGenerateJobSlice: StateCreator<
           spreadId: task.spreadId,
           page: pageType,
         });
-        get().addSketchSpreadImageVersion(task.spreadId, pageType, lastUrl, result.data.aiRequestId, imageId);
+        // Options object (arg 4). Semantics UNCHANGED from the old 5-positional call: raw generate
+        // output carries `aiRequestId` + the pre-minted `imageId` only — deliberately NO `type`
+        // (absent coerces to 'created' on read; writing it is a separate, out-of-scope change).
+        get().addSketchSpreadImageVersion(task.spreadId, pageType, lastUrl, {
+          aiRequestId: result.data.aiRequestId,
+          imageId,
+        });
 
         // Resolve the (now-existing) per-page image node + id; acquire its lock if it was deferred
         // (brand-new page), then save DATA-ONLY (log:false) so 'left' lands in the DB before 'right'
@@ -698,7 +704,11 @@ export const createSketchSpreadGenerateJobSlice: StateCreator<
           log.info('runJob', 'spread page done', { jobId, spreadId: task.spreadId, page: pageType });
 
           // Prepend the version (sync.isDirty) into the page's slot (same id as the directive).
-          get().addSketchSpreadImageVersion(task.spreadId, pageType, lastUrl, result.data.aiRequestId, imageId);
+          // Options object (arg 4); semantics unchanged — aiRequestId + imageId only, NO `type`.
+          get().addSketchSpreadImageVersion(task.spreadId, pageType, lastUrl, {
+            aiRequestId: result.data.aiRequestId,
+            imageId,
+          });
 
           // Flush AFTER 'left' (before 'right') — per-page durability only (the backend no longer
           // reads the left page for 'right'; consistency refs died 2026-07-21).

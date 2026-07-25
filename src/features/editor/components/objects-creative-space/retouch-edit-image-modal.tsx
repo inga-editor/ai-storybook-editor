@@ -12,10 +12,7 @@
 // still held (Validation S1 Q3) — so a commit is not lost if the user never switches spreads.
 
 import { useCallback } from "react";
-import {
-  EditImageModal,
-  useIllustrationPropRefCandidates,
-} from "@/features/editor/components/shared-components/edit-image-modal";
+import { EditImageModal } from "@/features/editor/components/shared-components/edit-image-modal";
 import type { EditToolKey } from "@/features/editor/components/shared-components/edit-image-modal";
 import { useRetouchImageById, useSnapshotActions, useSnapshotId } from "@/stores/snapshot-store/selectors";
 import type { Illustration } from "@/types/prop-types";
@@ -53,8 +50,6 @@ export function RetouchEditImageModal({
   const { updateRetouchImage } = useSnapshotActions();
   // Book-edit context (Objects space is never remix) → attribute AI edits by snapshotId.
   const snapshotId = useSnapshotId();
-  // Inpaint reference candidates (book prop variants). Hook runs BEFORE the early return (Rules of Hooks).
-  const referenceImageCandidates = useIllustrationPropRefCandidates();
 
   const handleUpdate = useCallback(
     (next: Illustration[]) => {
@@ -85,7 +80,6 @@ export function RetouchEditImageModal({
       onUpdateIllustrations={handleUpdate}
       pathPrefix={`retouch/${imageId}/erased`}
       enabledTools={enabledTools}
-      referenceImageCandidates={referenceImageCandidates}
       attribution={{ snapshotId: snapshotId ?? undefined }}
       saveResource={saveResource}
     />

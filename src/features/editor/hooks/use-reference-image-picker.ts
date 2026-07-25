@@ -90,7 +90,7 @@ export function useReferenceImagePicker(maxImages = DEFAULT_MAX_IMAGES) {
     [images.length, maxImages]
   );
 
-  // Append pre-converted items (e.g. a picked prop-variant already fetched → base64), respecting the
+  // Append pre-converted items (e.g. a picked provenance ref already fetched → base64), respecting the
   // remaining cap + deduping by `id`. The seam Inpaint's onPick uses; upload path stays separate.
   const addReferenceImages = useCallback(
     (items: PickedReferenceImage[]) => {

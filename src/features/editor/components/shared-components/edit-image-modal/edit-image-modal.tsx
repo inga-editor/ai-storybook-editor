@@ -40,7 +40,6 @@ import {
   prependVersion,
   versionFromMediaUrl,
   mapEditError,
-  type ReferenceImageCandidate,
 } from "./edit-image-modal-utils";
 import { resolveInitialKey } from "../image-tools-space-matrix";
 import { useRemoveBgTabState } from "./remove-bg-tab";
@@ -92,9 +91,10 @@ export interface EditImageModalProps {
    *  3-state header (never hidden): tools absent from the list render disabled + "Not available
    *  in this space"; present-but-unbuilt tools render disabled + "Coming soon". */
   enabledTools?: EditToolKey[];
-  /** Inpaint reference-image candidates (prop-variants) resolved by the parent per space (design
-   *  §8.4). Threaded to the Inpaint tab's picker grid; undefined → picker offers Upload only. */
-  referenceImageCandidates?: ReferenceImageCandidate[];
+  /* Inpaint reference candidates prop: ❌ REMOVED 2026-07-25 — xem 04 §8.7.
+   * The Inpaint picker's grid no longer comes from a parent-resolved prop-variant list; the tab
+   * fetches the refs of the AI call that produced the selected version itself (§8.3). Do NOT
+   * re-add — the modal is intentionally free of any snapshot-store coupling. */
   /** AI-usage attribution threaded into every EDIT commit (book snapshotId / remix remixId).
    *  Dual-context: book mounts pass `{ snapshotId }`, the remix mount passes `{ remixId }`. */
   attribution?: EditImageAttribution;
@@ -115,7 +115,6 @@ export function EditImageModal({
   pathPrefix,
   initialTool,
   enabledTools,
-  referenceImageCandidates,
   attribution,
   saveResource,
   yieldedFrom,
@@ -159,7 +158,17 @@ export function EditImageModal({
   const outpaintState = useOutpaintTabState({ selectedVersion, attribution, saveResource });
   // Erasor = plain upload (no AI endpoint) → intentionally NOT threaded saveResource.
   const erasorState = useEraserTabState({ selectedVersion, pathPrefix, zoom });
-  const inpaintState = useInpaintTabState({ selectedVersion, zoom, referenceImageCandidates, attribution, saveResource });
+  // `versions` feeds the provenance ancestor walk; `isActive` keeps that lookup lazy (design §8.3).
+  // `open &&` matters: several mounts keep this modal MOUNTED with open=false, and their landing tool
+  // can be inpaint — without the guard a closed modal would fire a provenance GET.
+  const inpaintState = useInpaintTabState({
+    selectedVersion,
+    versions,
+    zoom,
+    isActive: open && activeTool === "inpaint",
+    attribution,
+    saveResource,
+  });
 
   // Active "paint" tab — inpaint + erasor share the canvas/commit/undo-redo/confirm path
   // (both expose the same paint surface; resetAll is inpaint-only and used in resetState).

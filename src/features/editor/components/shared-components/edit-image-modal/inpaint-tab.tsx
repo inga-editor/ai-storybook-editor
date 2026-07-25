@@ -17,15 +17,6 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
-import { Slider } from '@/components/ui/slider';
-import { Textarea } from '@/components/ui/textarea';
 import { createLogger } from '@/utils/logger';
 import { callEditObjectImage, type EditObjectImageParams } from '@/apis/retouch-api';
 import type { ImageApiFailure } from '@/apis/image-api-client';
@@ -33,17 +24,12 @@ import type { Illustration } from '@/types/prop-types';
 import type { SaveResourceDirective } from '@/types/save-resource';
 import { type Stroke, norm, paintStrokesOnCtx } from './erase-stroke-engine';
 import {
-  BRUSH,
   INPAINT_BRUSH_DEFAULT,
-  INPAINT_MODEL_OPTIONS,
   INPAINT_DEFAULT_MODEL,
   INPAINT_MARK_COLOR,
   INPAINT_MARK_ALPHA,
   INPAINT_IMAGE_SIZE,
-  INPAINT_PROMPT_MAX,
   INPAINT_REF_MAX,
-  SWAP_MODAL_OUTLINE_BUTTON_CLASS,
-  Z_INDEX,
   type InpaintModel,
   type EditImageAttribution,
   type EditCommitResult,
@@ -56,17 +42,12 @@ import {
   exceedsRegionSizeCap,
   type ReferenceImageCandidate,
 } from './edit-image-modal-utils';
-import { InpaintReferencePicker } from './inpaint-reference-picker';
+import { InpaintParamsPanel } from './inpaint-params-panel';
 import { useInpaintReferences } from './use-inpaint-references';
+import { useInpaintProvenance } from './use-inpaint-provenance';
 
 const log = createLogger('Editor', 'InpaintTab');
 
-// Radix popper copies the content's computed z onto its portal wrapper — without this the
-// dropdown (shadcn default z-50) paints behind the full-screen modal (z-4000). See memory.
-const SELECT_CONTENT_STYLE = { zIndex: Z_INDEX.selectDropdown };
-const DARK_TRIGGER_CLASS = `w-full ${SWAP_MODAL_OUTLINE_BUTTON_CLASS}`;
-const SECTION_LABEL_CLASS =
-  'mb-2 flex items-center justify-between text-xs font-semibold uppercase tracking-wide text-[var(--swap-modal-text-muted)]';
 // Translucent mark color for the brush-preview ring (mark is a soft hint, not a hard mask).
 const BRUSH_RING_FILL = `${INPAINT_MARK_COLOR}80`;
 
@@ -92,11 +73,14 @@ export interface InpaintTabApi {
 
 interface UseInpaintTabOptions {
   selectedVersion: Illustration | null;
+  /** FULL version list — walked backwards via `original_url` to find the nearest ancestor carrying an
+   *  `ai_request_id` (design §8.3), so a derivative still borrows its AI-gen source's refs. */
+  versions: Illustration[];
   /** Shell zoom (50–400) — drives canvas display CSS size + brush-ring cursor scale (⚡H). */
   zoom: number;
-  /** Parent-resolved prop-variant candidates (already filtered to non-null media_url). Undefined
-   *  / empty → the picker only offers Upload. */
-  referenceImageCandidates?: ReferenceImageCandidate[];
+  /** `activeTool === 'inpaint'` — LAZY gate for the provenance lookup: a space that never opens the
+   *  inpaint tab costs 0 provenance requests (design §8.3). */
+  isActive: boolean;
   /** AI-usage attribution (book snapshotId / remix remixId) forwarded into the edit call. */
   attribution?: EditImageAttribution;
   /** Opt-in double-write directive (parent-resolved path). Undefined → payload omits it. */
@@ -105,15 +89,18 @@ interface UseInpaintTabOptions {
 
 export function useInpaintTabState({
   selectedVersion,
+  versions,
   zoom,
-  referenceImageCandidates,
+  isActive,
   attribution,
   saveResource,
 }: UseInpaintTabOptions): InpaintTabApi {
   const [model, setModel] = useState<InpaintModel>(INPAINT_DEFAULT_MODEL);
-  // Reference-image picker + onPick (upload + picked prop-variant GỘP, cap = INPAINT_REF_MAX). Lives
+  // Reference-image picker + onPick (upload + picked provenance refs GỘP, cap = INPAINT_REF_MAX). Lives
   // in a hook so refs persist across version/tab switches; cleared only on modal close (resetAll).
   const refs = useInpaintReferences();
+  // Refs of the AI call that PRODUCED the selected version (resolve → lazy fetch → cache → race).
+  const prov = useInpaintProvenance({ selectedVersion, versions, isActive });
   const [brushSize, setBrushSize] = useState<number>(INPAINT_BRUSH_DEFAULT);
   const [prompt, setPrompt] = useState('');
   const [strokes, setStrokes] = useState<Stroke[]>([]);
@@ -272,12 +259,18 @@ export function useInpaintTabState({
 
   const afterCommit = resetStrokes; // keep prompt + model + refs; only the mask is cleared
 
+  // Destructured for the same reason as `pickReference` below: `refs.clearImages()` / `prov.clearCache()`
+  // would force the WHOLE (per-render fresh) hook objects into the deps, churning resetAll → the shell's
+  // resetState/handleClose on every render. Both are stable `useCallback`s at their source.
+  const { clearImages } = refs;
+  const { clearCache: clearProvenanceCache } = prov;
   const resetAll = useCallback(() => {
     resetStrokes();
     setPrompt('');
     setModel(INPAINT_DEFAULT_MODEL);
-    refs.clearImages(); // modal close → drop reference images too (design §8.5)
-  }, [resetStrokes, refs]);
+    clearImages(); // modal close → drop reference images too (design §8.5)
+    clearProvenanceCache(); // …and the provenance cache (never outlives the modal — §8 security)
+  }, [resetStrokes, clearImages, clearProvenanceCache]);
 
   // ── Commit: composite mark (if drawn) → Gemini edit (design §3) ────────────────
   const commit = useCallback(
@@ -316,8 +309,8 @@ export function useInpaintTabState({
         payload.regionAnnotation = { base64Data: regionB64, mimeType: 'image/png' };
       }
 
-      // Reference images (picked prop-variant + upload GỘP). Only sent when non-empty; picked items
-      // carry `description` (identity mention), uploads omit it.
+      // Reference images (picked provenance refs + upload GỘP). Only sent when non-empty. NO item
+      // carries `description` today (§8.1); the spread stays for upstream ReferenceImage compat.
       if (refs.images.length > 0) {
         payload.referenceImages = refs.images.map((i) => ({
           base64Data: i.base64Data,
@@ -354,72 +347,75 @@ export function useInpaintTabState({
     [prompt, model, strokes, refs.images, attribution, saveResource],
   );
 
-  // ── ParamsPanel (Model + Brush + Prompt — no History UI) ──────────────────────
+  // Bind the resolved aiRequestId into the pick call (the picker stays provenance-id agnostic — it
+  // just hands back the clicked candidate). No id ⇒ the grid can't be rendered, so this is a guard
+  // against a stale click only. `onPick` is destructured on purpose: `refs.onPick(...)` would make
+  // the React Compiler infer the WHOLE (per-render fresh) `refs` object as the dep, which would
+  // churn this callback — and with it the memoized ParamsPanel — on every brush-move render.
+  const { onPick: pickReference } = refs;
+  const provAiRequestId = prov.aiRequestId;
+  const handlePickProvenance = useCallback(
+    (candidate: ReferenceImageCandidate) => {
+      if (!provAiRequestId) {
+        log.debug('handlePickProvenance', 'ignored — no resolved aiRequestId');
+        return;
+      }
+      void pickReference(candidate, provAiRequestId);
+    },
+    [provAiRequestId, pickReference],
+  );
+
+  // ── ParamsPanel (Model + Brush + Reference Images + Prompt — no History UI) ────
+  // The picker owns the 5-state provenance UI (§8.2), so the whole `prov` view is threaded through:
+  // `status` picks the branch, `source`/`resolvedFromAncestor` the caption lines, `errorCode` +
+  // `httpStatus` the error message, `aiRequestId` the `prov:{id}:{index}` dedupe key.
   const ParamsPanel = useMemo<ReactNode>(
     () => (
-      <div className="flex flex-col gap-5 px-4 py-4">
-        <section>
-          <p className={SECTION_LABEL_CLASS}>Model</p>
-          <Select value={model} onValueChange={(v) => setModel(v as InpaintModel)}>
-            <SelectTrigger className={DARK_TRIGGER_CLASS} aria-label="Inpaint model">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent style={SELECT_CONTENT_STYLE}>
-              {INPAINT_MODEL_OPTIONS.map((opt) => (
-                <SelectItem key={opt} value={opt}>
-                  {opt}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </section>
-
-        <section>
-          <p className={SECTION_LABEL_CLASS}>
-            <span>Brush Size</span>
-            <span className="normal-case tabular-nums text-[var(--swap-modal-text-secondary)]">
-              {brushSize}px
-            </span>
-          </p>
-          <Slider
-            value={[brushSize]}
-            min={BRUSH.min}
-            max={BRUSH.max}
-            step={BRUSH.step}
-            onValueChange={(v) => setBrushSize(v[0] ?? INPAINT_BRUSH_DEFAULT)}
-            aria-label="Brush size"
-          />
-        </section>
-
-        <InpaintReferencePicker
-          images={refs.images}
-          candidates={referenceImageCandidates ?? []}
-          max={INPAINT_REF_MAX}
-          fileInputRef={refs.inputRef}
-          onOpenUpload={refs.openPicker}
-          onFilesSelected={refs.handleFilesSelected}
-          onPick={refs.onPick}
-          onRemove={refs.removeImage}
-        />
-
-        <section>
-          <p className={SECTION_LABEL_CLASS}>Prompt</p>
-          <Textarea
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-            maxLength={INPAINT_PROMPT_MAX}
-            rows={3}
-            placeholder="Describe what to paint in the marked region…"
-            aria-label="Inpaint prompt"
-            className="resize-none border-[var(--swap-modal-border-strong)] bg-[var(--swap-modal-surface-hover)] text-[var(--swap-modal-text-primary)] placeholder:text-[var(--swap-modal-text-muted)] focus-visible:ring-[var(--swap-modal-accent)]"
-          />
-          <p className="mt-1 text-right text-[11px] tabular-nums text-[var(--swap-modal-text-muted)]">
-            {prompt.length}/{INPAINT_PROMPT_MAX}
-          </p>
-        </section>
-      </div>
+      <InpaintParamsPanel
+        model={model}
+        onModelChange={setModel}
+        brushSize={brushSize}
+        onBrushSizeChange={setBrushSize}
+        prompt={prompt}
+        onPromptChange={setPrompt}
+        picker={{
+          images: refs.images,
+          max: INPAINT_REF_MAX,
+          fileInputRef: refs.inputRef,
+          onOpenUpload: refs.openPicker,
+          onFilesSelected: refs.handleFilesSelected,
+          onRemove: refs.removeImage,
+          provenanceStatus: prov.status,
+          candidates: prov.candidates,
+          aiRequestId: prov.aiRequestId,
+          resolvedFromAncestor: prov.resolvedFromAncestor,
+          source: prov.source,
+          errorCode: prov.errorCode,
+          httpStatus: prov.httpStatus,
+          onPick: handlePickProvenance,
+          onRetry: prov.retry,
+        }}
+      />
     ),
-    [model, brushSize, prompt, refs.images, refs.inputRef, refs.openPicker, refs.handleFilesSelected, refs.removeImage, refs.onPick, referenceImageCandidates],
+    [
+      model,
+      brushSize,
+      prompt,
+      refs.images,
+      refs.inputRef,
+      refs.openPicker,
+      refs.handleFilesSelected,
+      refs.removeImage,
+      prov.status,
+      prov.candidates,
+      prov.aiRequestId,
+      prov.resolvedFromAncestor,
+      prov.source,
+      prov.errorCode,
+      prov.httpStatus,
+      prov.retry,
+      handlePickProvenance,
+    ],
   );
 
   // ── CanvasLayer (rendered in the shell stage when canvasMode='paint') ─────────

@@ -297,6 +297,56 @@ describe('SketchSlice spread actions', () => {
     expect(right.illustrations[0].media_url).toBe('https://x/right.png');
   });
 
+  // ⚡ opts (arg 4, options object — replaced the old positional aiRequestId/imageId pair).
+  // Full provenance = an Edit-modal commit routed through the sketch adapters.
+  it('addSketchSpreadImageVersion writes the full provenance triple from opts', () => {
+    seed(spread('a'));
+    store.getState().addSketchSpreadImageVersion('a', 'full', 'https://x/edited.png', {
+      aiRequestId: 'req-9',
+      imageId: 'img-preminted',
+      type: 'edited',
+      originalUrl: 'https://x/gen.png',
+    });
+    const img = store.getState().sketch.spreads[0].images[0];
+    // `imageId` is honoured for the freshly-created page-image node (BE-first double-write).
+    expect(img.id).toBe('img-preminted');
+    expect(img.illustrations[0]).toMatchObject({
+      media_url: 'https://x/edited.png',
+      is_selected: true,
+      ai_request_id: 'req-9',
+      type: 'edited',
+      original_url: 'https://x/gen.png',
+    });
+  });
+
+  // omit-if-absent: no `opts` ⇒ the 3 provenance keys must be ABSENT, not `undefined` (an
+  // `undefined` key would serialize into the snapshot JSONB as an explicit null field).
+  it('addSketchSpreadImageVersion omits provenance keys entirely when opts is absent', () => {
+    seed(spread('a'));
+    store.getState().addSketchSpreadImageVersion('a', 'full', 'https://x/plain.png');
+    const entry = store.getState().sketch.spreads[0].images[0].illustrations[0];
+    expect('ai_request_id' in entry).toBe(false);
+    expect('type' in entry).toBe(false);
+    expect('original_url' in entry).toBe(false);
+    // Legacy 3-field shape preserved verbatim. NOTE (by design): this exhaustive key assertion —
+    // and the partial-opts case below — MUST be updated in the same commit as the deferred
+    // "generate writes type:'created'" follow-up. A break there is expected, not a regression.
+    expect(Object.keys(entry).sort()).toEqual(['created_time', 'is_selected', 'media_url']);
+  });
+
+  // Partial opts (raw generate output: aiRequestId + imageId, deliberately NO `type`).
+  it('addSketchSpreadImageVersion writes only the provenance fields present in opts', () => {
+    seed(spread('a'));
+    store.getState().addSketchSpreadImageVersion('a', 'left', 'https://x/gen.png', {
+      aiRequestId: 'req-1',
+      imageId: 'img-1',
+    });
+    const entry = store.getState().sketch.spreads[0].images[0].illustrations[0];
+    expect(entry.ai_request_id).toBe('req-1');
+    expect('type' in entry).toBe(false);
+    expect('original_url' in entry).toBe(false);
+  });
+
   it('updateSketchPageArtDirection merges patch into the page matched by type', () => {
     seed(spread('a', ['left', 'right']));
     store.getState().updateSketchPageArtDirection('a', 'right', { stage: 'forest', camera: 'wide' });

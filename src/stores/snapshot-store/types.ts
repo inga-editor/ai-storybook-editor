@@ -20,7 +20,7 @@ import type {
 } from '@/types/sketch';
 import type { ManuscriptDummy, DummySpread } from '@/types/dummy';
 import type { IllustrationData, Section, Branch, BranchSetting, BranchLocalizedContent } from '@/types/illustration-types';
-import type { Prop, PropVariant, PropSound, Illustration, ImageReference } from '@/types/prop-types';
+import type { Prop, PropVariant, PropSound, Illustration, IllustrationType, ImageReference } from '@/types/prop-types';
 import type { Character, CharacterVariant, CharacterVoiceSetting } from '@/types/character-types';
 import type { Stage, StageVariant, StageSound } from '@/types/stage-types';
 import type {
@@ -260,13 +260,25 @@ export interface SketchSlice {
   deleteSketchSpread: (id: string) => void;
   reorderSketchSpreads: (from: number, to: number) => void;
   /** Prepend a generated version onto the spread's PER-PAGE image (keyed by page `type`),
-   *  creating that page's image container on first generate. */
+   *  creating that page's image container on first generate.
+   *  `opts` (all optional, each written **omit-if-absent** — a missing field never becomes a
+   *  literal `undefined` key in the snapshot entry): */
   addSketchSpreadImageVersion: (
     spreadId: string,
     pageType: SketchPageType,
     mediaUrl: string,
-    aiRequestId?: string, // provenance soft ref → ai_service_logs.id (absent = NULL/uploaded)
-    imageId?: string, // pre-minted node id — spread-generate job shares it with the saveResource directive
+    opts?: {
+      /** Provenance soft ref → ai_service_logs.id (absent = NULL/uploaded/legacy). */
+      aiRequestId?: string;
+      /** Pre-minted node id — the spread-generate job shares it with the saveResource directive
+       *  so the BE nested-create and this client prepend address the SAME node. */
+      imageId?: string;
+      /** Provenance discriminator ('created' | 'uploaded' | 'edited'); absent coerces to 'created'
+       *  on read. Set by the Edit-modal commit path (→ 'edited'), enabling the Compare toggle. */
+      type?: IllustrationType;
+      /** Pre-edit source URL — set ⇔ type='edited'. Feeds the §8.3 reverse-lookup chain. */
+      originalUrl?: string;
+    },
   ) => void;
   /** Re-select an EXISTING per-page image version by media_url (clears the prior selection).
    *  Used by the Edit modal when the user re-picks an older variant (no new version appended). */

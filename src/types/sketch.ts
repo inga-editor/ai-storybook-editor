@@ -7,7 +7,7 @@
 import type { Geometry, Typography } from './spread-types';
 // Canonical illustration entry + style reference are REUSED from prop-types (single source);
 // base sheets, crops and per-variant imagery all share the edit-image-modal Illustration shape.
-import type { Illustration, ImageReference } from './prop-types';
+import type { Illustration, IllustrationType, ImageReference } from './prop-types';
 
 export type SketchEntityKind = 'characters' | 'props' | 'stages';
 /** Base sheet workspace covers character + prop only (stage generates directly, no base sheet). */
@@ -199,6 +199,13 @@ export interface SketchSpreadIllustration {
   media_url: string;
   created_time: string; // ISO-8601
   is_selected: boolean;
+  /** ⚡ Provenance discriminator — DB already stores sketch `illustrations[]` as the FULL
+   *  Illustration Entry (DB-CHANGELOG 2026-07-23), so the FE type must not be narrower.
+   *  Absent = legacy / raw generate output (`coerceIllustrationType` reads it as 'created'). */
+  type?: IllustrationType;
+  /** Pre-edit source URL — set ⇔ type='edited'. Feeds the Compare toggle + the §8.3
+   *  reverse-lookup chain (edit-image-modal `resolveAiRequestId`). Provenance-only. */
+  original_url?: string;
   /** Provenance soft ref → ai_service_logs.id (cost attribution). Set for AI-generated pages;
    *  absent = NULL (legacy/uploaded). Dangling-tolerant (id may precede the log row insert). */
   ai_request_id?: string;

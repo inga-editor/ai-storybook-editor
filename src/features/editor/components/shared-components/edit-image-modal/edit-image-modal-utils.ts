@@ -17,6 +17,7 @@ import {
   UPSCALE_MODEL_CAPS,
   REGION_MAX_DECODED_BYTES,
   OUTPAINT_IMAGE_SIZE,
+  INPAINT_PROV_MAX_HOPS,
 } from './edit-image-modal-constants';
 import { type Stroke, paintStrokesOnCtx } from './erase-stroke-engine';
 
@@ -298,22 +299,24 @@ export function compositeMark(
 
 // ── Inpaint reference images (04-inpaint-tab.md §8.1/§8.3/§8.4) ────────────────
 
-/** Accepted MIME whitelist for a reference image (picked prop-variant OR upload) — mirrors the
+/** Accepted MIME whitelist for a reference image (picked provenance ref OR upload) — mirrors the
  *  picker's upload gate AND the edit-object-image contract. Exported so `urlToBase64` and the
  *  picker validate against ONE list (DRY). */
 export const ACCEPTED_REF_TYPES = ['image/png', 'image/jpeg', 'image/webp'] as const;
 /** Decoded-byte cap for a reference image (mirror the API 10MB cap). */
 export const MAX_REF_BYTES = 10 * 1024 * 1024;
 
-/** Parent-provided pickable reference — one prop variant with a resolvable image. `id` is the
- *  stable `${propKey}/${variantKey}`; `ref` the short `@key/variant` label; `description` is
- *  composed by `buildPropRefDescription` (name + mention only). `media_url` is the effective URL
- *  (the parent has already filtered null entries out — the modal assumes it is non-null). */
+/** One pickable reference image = one entry of `data.images[]` from the provenance API
+ *  (⚡2026-07-25 redesign — was a parent-resolved prop-variant). `index` is 1-based within the
+ *  original call's `ref_files[]` and drives the CLIENT-ONLY `Ảnh #k` label; `url` is a public
+ *  Storage URL (`storybook-assets/ai-logs/{sha256}.{ext}`) fetched → base64 on pick. The optional
+ *  fields can legitimately be absent (a ref logged verbatim from a source URL). */
 export interface ReferenceImageCandidate {
-  id: string;
-  media_url: string;
-  ref: string;
-  description: string;
+  index: number;
+  url: string;
+  mimeType?: string;
+  bytes?: number;
+  sha256?: string;
 }
 
 /** A picked reference-image item held in the picker state. Widens the canonical `ReferenceImage`
@@ -321,21 +324,62 @@ export interface ReferenceImageCandidate {
  *  so the existing `useReferenceImagePicker` consumers (which read only the 3 base fields) are
  *  unaffected (widen-safe). */
 export interface PickedReferenceImage extends ReferenceImage {
-  /** 'upload:<uuid>' (upload) | 'prop:<candidate.id>' (picked) — the dedupe key. */
+  /** 'upload:<uuid>' (upload) | 'prov:<aiRequestId>:<index>' (picked) — the dedupe key. */
   id?: string;
-  /** Chip <img> src — upload: data-URI; picked: candidate.media_url (Storage URL). */
+  /** Chip <img> src — upload: data-URI; picked: candidate.url (public Storage URL). */
   thumbUrl?: string;
-  /** picked → candidate.description; upload → undefined (uploads carry no identity mention). */
+  /** Kept for type compatibility with upstream `ReferenceImage` consumers. ⚡2026-07-25: the Inpaint
+   *  tab NEVER sets it — a provenance ref only carries a POSITIONAL label of the OLD call, which
+   *  would mis-align the new call's image map (design §8.1). */
   description?: string;
-  source?: 'upload' | 'prop';
+  source?: 'upload' | 'provenance';
 }
 
-/** Reference-image description = prop NAME + a short @key/variant mention ONLY (design §8.4 — user
- *  decision 2026-07-22). Deliberately does NOT append the prop's visual_description/description: the
- *  reference IMAGE already carries the appearance, and prose about it tends to confuse the model's
- *  identity read. Pure. */
-export function buildPropRefDescription(propName: string, propKey: string, variantKey: string): string {
-  return `Đạo cụ ${propName} - @${propKey}/${variantKey}`;
+/** Result of `resolveAiRequestId`. `fromAncestor` = the id came from a PARENT version (walked the
+ *  `original_url` chain) → the picker captions "(từ bản gốc)". */
+export interface ResolvedAiRequestId {
+  id: string | null;
+  fromAncestor: boolean;
+}
+
+/** Resolve the `ai_request_id` that owns `version`'s provenance (design §8.3) — PURE, no I/O.
+ *  `version.ai_request_id` is absent for anything that is not the direct output of an AI call
+ *  (upload, Erasor commit, CV crop, legacy entry), so we walk the `original_url` chain backwards to
+ *  the nearest ancestor that HAS one: an erased/cropped derivative still borrows the refs of the
+ *  AI-gen image it descends from. Bounded by `INPAINT_PROV_MAX_HOPS` + a visited-set (cyclic or
+ *  absurdly long chain → treated as "no provenance", never a hang). */
+export function resolveAiRequestId(
+  version: Illustration | null,
+  versions: Illustration[],
+): ResolvedAiRequestId {
+  if (!version) return { id: null, fromAncestor: false };
+
+  const seen = new Set<string>();
+  let cur: Illustration | undefined = version;
+  let hops = 0;
+
+  while (cur && hops < INPAINT_PROV_MAX_HOPS) {
+    if (cur.ai_request_id) return { id: cur.ai_request_id, fromAncestor: hops > 0 };
+    if (!cur.original_url || seen.has(cur.original_url)) {
+      log.debug('resolveAiRequestId', 'chain ended', {
+        hops,
+        reason: cur.original_url ? 'cycle' : 'chain-root',
+      });
+      return { id: null, fromAncestor: false };
+    }
+    seen.add(cur.original_url);
+    // Explicit annotation: the closure below feeds `cur`, so an inferred type here would be
+    // circular (TS7022).
+    const parentUrl: string = cur.original_url;
+    cur = versions.find((v) => v.media_url === parentUrl);
+    hops++;
+  }
+
+  log.debug('resolveAiRequestId', 'no provenance in chain', {
+    hops,
+    reason: hops >= INPAINT_PROV_MAX_HOPS ? 'hop-cap' : 'dangling-parent',
+  });
+  return { id: null, fromAncestor: false };
 }
 
 /** Fetch a Storage URL → base64 (WITHOUT the `data:` prefix) + its MIME, so a picked prop-variant
