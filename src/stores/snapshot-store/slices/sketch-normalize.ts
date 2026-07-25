@@ -47,6 +47,7 @@ import {
   asEntityArray,
   asStageArray,
   coerceEntity,
+  coerceLineupTabs,
   coerceStage,
   coerceStyle,
   isPlainObject,
@@ -78,6 +79,7 @@ export const DEFAULT_SKETCH: Sketch = {
   props: [],
   stages: [],
   spreads: [],
+  lineups: [],
 };
 
 /**
@@ -450,6 +452,23 @@ export function normalizeSketch(
       [],
       report,
     ),
+    // Lineup tabs are CONFIG (no artwork) → FAIL-OPEN by design (plan Validation S1):
+    // NOT `safeResource` — `lineups` is deliberately NOT a SketchResourceKey, so a failure
+    // here must never quarantine/degrade (a coarse 'sketch' reset would block EVERY step-1
+    // write). Local try/catch → [] + a `cls:'report'` heads-up under the existing 'sketch' key.
+    lineups: (() => {
+      try {
+        return coerceLineupTabs(raw.lineups, report);
+      } catch (err) {
+        report({
+          resource: 'sketch',
+          cls: 'report',
+          path: 'lineups',
+          message: `sketch.lineups — dữ liệu gây lỗi khi đọc (${err instanceof Error ? err.message : String(err)}) — đã dùng danh sách rỗng`,
+        });
+        return [];
+      }
+    })(),
   };
 }
 
@@ -463,6 +482,7 @@ export function normalizeSketch(
  *   ['stages'] / ['stages','1']          → stage array / node (rtype 5 — 2026-07-18 stage shape)
  *   ['base'] / ['base','character_sheet'] → base workspace / one sheet (rtype 11)
  *   ['spreads'] / ['spreads','0']        → spread collection / node (rtype 6)
+ *   ['lineups']                          → lineup tabs whole array (rtype 12 — 2026-07-25)
  * Deeper paths (page image / textbox child writes) pass through — leaf payloads the canvas
  * validates itself. `null`/`undefined` pass through (remove semantics). Cheap, and idempotent
  * once ids exist (a legacy image missing `id` is minted one on first pass only).
@@ -497,6 +517,12 @@ export function coerceSketchNode(
       return normalizeSheet(value, resource, onAnomaly);
     }
     return value;
+  }
+
+  if (head === 'lineups') {
+    // rtype 12 writes the WHOLE `sketch.lineups` array (collection-scope column-root) —
+    // the only addressable grain is path ['lineups']. Fail-open coercer (see normalizeSketch).
+    return path.length === 1 ? coerceLineupTabs(value, onAnomaly) : value;
   }
 
   if (head === 'spreads') {

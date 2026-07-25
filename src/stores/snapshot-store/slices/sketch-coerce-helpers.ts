@@ -12,6 +12,8 @@ import type {
   SketchVariant,
   SketchVariantCrop,
   SketchBaseStyle,
+  SketchLineupEntry,
+  SketchLineupTab,
   SketchStage,
   SketchStageStyle,
   SketchStageVariant,
@@ -358,4 +360,76 @@ export function coerceStyle(raw: unknown): SketchBaseStyle {
     illustrations: Array.isArray(r.illustrations) ? (r.illustrations as Illustration[]) : [],
     crops: Array.isArray(r.crops) ? (r.crops as SketchBaseStyle['crops']) : [],
   };
+}
+
+// ── Lineup tabs (sketch.lineups[] — rtype 12, 2026-07-25) ────────────────────────────────────
+
+const LINEUP_ENTRY_KINDS: readonly string[] = ['characters', 'props'];
+const LINEUP_TAB_NAME_MAX = 60; // mirror the modal's maxLength (defense-in-depth vs peer/DB data)
+
+/**
+ * Coerce a raw `sketch.lineups` blob → SketchLineupTab[] (peer/DB data — whitelist only).
+ *
+ * The lineup node is CONFIG (no artwork, cheap to rebuild) → deliberately FAIL-OPEN, never
+ * quarantine/degrade (plan Validation S1 — `lineups` is NOT a SketchResourceKey):
+ *  - ABSENT (null/undefined) → [] with NO anomaly (a book without tabs is legitimate).
+ *  - non-array container → [] + ONE `cls:'report'` anomaly under the coarse 'sketch' key
+ *    (heads-up toast; NOT 'reset' — a 'sketch' reset would block EVERY step-1 write).
+ *  - garbage elements (non-object / unreadable id/name) → dropped, log debug only.
+ *  - entries: whitelist {kind, entity_key, variant_key}; dedupe by the full triple (keep FIRST —
+ *    append order preserved). Dangling entries (deleted entity/variant) are KEPT — schema-valid;
+ *    render-time skip + manual cleanup is the contract.
+ *  - duplicate tab ids → keep the first occurrence.
+ */
+export function coerceLineupTabs(
+  raw: unknown,
+  onAnomaly: SketchAnomalyReporter = noopAnomalyReporter,
+): SketchLineupTab[] {
+  if (raw == null) return []; // legitimately new — no anomaly
+  if (!Array.isArray(raw)) {
+    onAnomaly({
+      resource: 'sketch',
+      cls: 'report',
+      path: 'lineups',
+      message: `sketch.lineups có kiểu "${typeNameOf(raw)}" thay vì array — đã dùng danh sách rỗng`,
+    });
+    return [];
+  }
+  const seenTabIds = new Set<string>();
+  const tabs: SketchLineupTab[] = [];
+  for (const el of raw) {
+    if (!isPlainObject(el) || typeof el.id !== 'string' || el.id === '' || typeof el.name !== 'string') {
+      log.debug('coerceLineupTabs', 'dropped malformed tab element', { type: typeNameOf(el) });
+      continue;
+    }
+    if (seenTabIds.has(el.id)) {
+      log.debug('coerceLineupTabs', 'dropped duplicate tab id (kept first)', { tabId: el.id });
+      continue;
+    }
+    seenTabIds.add(el.id);
+    const seenEntryRefs = new Set<string>();
+    const entries: SketchLineupEntry[] = [];
+    for (const e of Array.isArray(el.entries) ? el.entries : []) {
+      if (
+        !isPlainObject(e) ||
+        typeof e.kind !== 'string' ||
+        !LINEUP_ENTRY_KINDS.includes(e.kind) ||
+        typeof e.entity_key !== 'string' ||
+        typeof e.variant_key !== 'string'
+      ) {
+        log.debug('coerceLineupTabs', 'dropped malformed entry', { tabId: el.id });
+        continue;
+      }
+      const refKey = `${e.kind}:@${e.entity_key}/${e.variant_key}`;
+      if (seenEntryRefs.has(refKey)) continue; // dedupe — keep first (append order preserved)
+      seenEntryRefs.add(refKey);
+      entries.push({
+        kind: e.kind as SketchLineupEntry['kind'],
+        entity_key: e.entity_key,
+        variant_key: e.variant_key,
+      });
+    }
+    tabs.push({ id: el.id, name: el.name.trim().slice(0, LINEUP_TAB_NAME_MAX), entries });
+  }
+  return tabs;
 }

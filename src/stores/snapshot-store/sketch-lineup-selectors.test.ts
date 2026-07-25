@@ -11,8 +11,8 @@ vi.mock('@/apis/supabase', () => ({
 }));
 
 import { useSnapshotStore } from '@/stores/snapshot-store';
-import { effectiveCropUrl, useSketchLineupEntries } from '@/stores/snapshot-store/selectors';
-import type { SketchEntity, SketchVariant, SketchVariantCrop } from '@/types/sketch';
+import { effectiveCropUrl, useSketchLineupEntries, useSketchLineups } from '@/stores/snapshot-store/selectors';
+import type { SketchEntity, SketchLineupTab, SketchVariant, SketchVariantCrop } from '@/types/sketch';
 import type { Illustration } from '@/types/prop-types';
 
 const illustration = (media_url: string, is_selected = false): Illustration => ({
@@ -113,7 +113,7 @@ describe('useSketchLineupEntries', () => {
         kind: 'characters',
         entityKey: 'elara',
         variantKey: 'base',
-        ref: '@elara/base',
+        ref: 'characters:@elara/base',
         imageUrl: 'elara-base.png',
         heightCm: 110,
       },
@@ -121,7 +121,7 @@ describe('useSketchLineupEntries', () => {
         kind: 'characters',
         entityKey: 'elara',
         variantKey: 'fairy',
-        ref: '@elara/fairy',
+        ref: 'characters:@elara/fairy',
         imageUrl: 'elara-fairy.png',
         heightCm: 95.5, // number pass-through — no parsing/rounding in the selector
       },
@@ -129,7 +129,7 @@ describe('useSketchLineupEntries', () => {
         kind: 'characters',
         entityKey: 'malakor',
         variantKey: 'base',
-        ref: '@malakor/base',
+        ref: 'characters:@malakor/base',
         imageUrl: null,
         heightCm: 200,
       },
@@ -139,7 +139,7 @@ describe('useSketchLineupEntries', () => {
   it('maps an absent height to null (row → not selectable)', () => {
     const { result } = renderHook(() => useSketchLineupEntries('props'));
     setSketchEntities('props', [{ key: 'magic-wand', variants: [variant('base')] }]);
-    expect(result.current[0]).toMatchObject({ ref: '@magic-wand/base', imageUrl: null, heightCm: null });
+    expect(result.current[0]).toMatchObject({ ref: 'props:@magic-wand/base', imageUrl: null, heightCm: null });
   });
 
   it('keeps a stable ref while the raw slice is unchanged (useMemo keyed on the raw ref)', () => {
@@ -156,8 +156,57 @@ describe('useSketchLineupEntries', () => {
     setSketchEntities('props', [{ key: 'magic-wand', variants: [variant('base')] }]);
     const { result: chars } = renderHook(() => useSketchLineupEntries('characters'));
     const { result: props } = renderHook(() => useSketchLineupEntries('props'));
-    expect(chars.current.map((e) => e.ref)).toEqual(['@elara/base']);
-    expect(props.current.map((e) => e.ref)).toEqual(['@magic-wand/base']);
+    expect(chars.current.map((e) => e.ref)).toEqual(['characters:@elara/base']);
+    expect(props.current.map((e) => e.ref)).toEqual(['props:@magic-wand/base']);
     expect(props.current[0].kind).toBe('props');
+  });
+
+  it('kind prefix disambiguates the SAME entity/variant key across kinds', () => {
+    // Regression guard for the 2026-07-25 ref format change: pre-change refs were
+    // "@armor/base" for BOTH — checking one would toggle the other.
+    setSketchEntities('characters', [{ key: 'armor', variants: [variant('base')] }]);
+    setSketchEntities('props', [{ key: 'armor', variants: [variant('base')] }]);
+    const { result: chars } = renderHook(() => useSketchLineupEntries('characters'));
+    const { result: props } = renderHook(() => useSketchLineupEntries('props'));
+    expect(chars.current[0].ref).toBe('characters:@armor/base');
+    expect(props.current[0].ref).toBe('props:@armor/base');
+    expect(chars.current[0].ref).not.toBe(props.current[0].ref);
+  });
+});
+
+describe('useSketchLineups', () => {
+  const setLineups = (lineups: SketchLineupTab[] | undefined) => {
+    act(() => {
+      useSnapshotStore.setState((s) => {
+        s.sketch.lineups = lineups as SketchLineupTab[];
+      });
+    });
+  };
+
+  it('returns the raw persisted tabs array', () => {
+    const tabs: SketchLineupTab[] = [
+      { id: 't1', name: 'Lineup', entries: [{ kind: 'characters', entity_key: 'elara', variant_key: 'base' }] },
+    ];
+    setLineups(tabs);
+    const { result } = renderHook(() => useSketchLineups());
+    expect(result.current).toHaveLength(1);
+    expect(result.current[0].id).toBe('t1');
+  });
+
+  it('returns the SAME ref across renders while state is unchanged (anti-loop)', () => {
+    setLineups([{ id: 't1', name: 'Lineup', entries: [] }]);
+    const { result, rerender } = renderHook(() => useSketchLineups());
+    const first = result.current;
+    rerender();
+    expect(result.current).toBe(first);
+  });
+
+  it('falls back to a STABLE module-constant empty array when lineups is absent', () => {
+    setLineups(undefined);
+    const { result, rerender } = renderHook(() => useSketchLineups());
+    expect(result.current).toEqual([]);
+    const first = result.current;
+    rerender();
+    expect(result.current).toBe(first); // `?? []` inline would mint a fresh array each render
   });
 });

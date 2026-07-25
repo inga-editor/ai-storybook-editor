@@ -16,6 +16,8 @@ import type {
   SketchPageType,
   ArtDirection,
   SketchTextboxContent,
+  SketchLineupEntry,
+  SketchLineupTab,
   VariantRef,
 } from '@/types/sketch';
 import type { ManuscriptDummy, DummySpread } from '@/types/dummy';
@@ -299,6 +301,21 @@ export interface SketchSlice {
     patch: Partial<SketchTextboxContent>,
   ) => void;
   deleteSketchTextbox: (spreadId: string, textboxId: string) => void;
+}
+
+// ── SketchLineupSlice — lineup tabs (sketch.lineups[], rtype 12 collab node — 2026-07-25) ────
+// Pure write sinks for the multi-tab lineup config (slices/sketch-lineup-slice.ts). Tab-cap /
+// last-tab guards live in the UI; every setter marks sync.isDirty (solo persist path).
+export interface SketchLineupSlice {
+  /** Append a tab. `virtualTab` seeds `[virtualTab, tab]` when the array is still empty —
+   *  first materialization must keep the on-screen virtual tab as tab 1. */
+  addSketchLineupTab: (tab: SketchLineupTab, virtualTab?: SketchLineupTab) => void;
+  /** Rename by id (identity `id` NEVER changes). Unknown id → no-op. */
+  renameSketchLineupTab: (tabId: string, name: string) => void;
+  /** Remove by id. NO last-tab guard here — that is a UI rule. */
+  removeSketchLineupTab: (tabId: string) => void;
+  /** Replace a tab's whole entries[] (append-order membership, no display semantics). */
+  setSketchLineupTabEntries: (tabId: string, entries: SketchLineupEntry[]) => void;
 }
 
 // ── SketchStageSlice — 2026-07-18 stage model (per-stage base.styles[] + 2-cell sheets) ──────
@@ -1000,7 +1017,7 @@ export interface SketchStageGenerateJobSlice {
   dismissStageSheetGenerateError: () => void;
 }
 
-export type SnapshotStore = DocsSlice & SketchSlice & SketchStageSlice & MetaSlice & FetchSlice & DummiesSlice & IllustrationSlice & RetouchSlice & TypographyApplySlice & QuizSlice & PropsSlice & CharactersSlice & StagesSlice & ImageTaskSlice & SketchSpreadGenerateJobSlice & SketchBaseGenerateJobSlice & SketchVariantGenerateJobSlice & SketchStageGenerateJobSlice & {
+export type SnapshotStore = DocsSlice & SketchSlice & SketchLineupSlice & SketchStageSlice & MetaSlice & FetchSlice & DummiesSlice & IllustrationSlice & RetouchSlice & TypographyApplySlice & QuizSlice & PropsSlice & CharactersSlice & StagesSlice & ImageTaskSlice & SketchSpreadGenerateJobSlice & SketchBaseGenerateJobSlice & SketchVariantGenerateJobSlice & SketchStageGenerateJobSlice & {
   initSnapshot: (data: { docs?: ManuscriptDoc[]; sketch?: Sketch; dummies?: ManuscriptDummy[]; illustration?: IllustrationData; props?: Prop[]; characters?: Character[]; stages?: Stage[]; meta?: Partial<SnapshotMeta> }) => void;
   resetSnapshot: () => void;
 };

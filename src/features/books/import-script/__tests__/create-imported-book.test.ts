@@ -62,6 +62,7 @@ const SNAPSHOT: ImportedSketchSnapshot = {
     props: [],
     stages: [],
     spreads: [],
+    lineups: [],
   },
   characters: [],
   props: [],

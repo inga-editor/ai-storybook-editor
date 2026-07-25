@@ -13,12 +13,12 @@
 //     (design §2.3). A 5 cm prop rendering tiny is the honest answer, not a bug: no min-size.
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Users } from 'lucide-react';
 import { cn } from '@/utils/utils';
 import { createLogger } from '@/utils/logger';
-import type { LineupEntry } from '@/types/sketch';
+import type { LineupEntry, SketchLineupTab } from '@/types/sketch';
 import { ZoomControl } from '@/features/editor/components/shared-components/zoom-control';
-import { ZOOM } from './lineup-constants';
+import { ZOOM, mentionOf } from './lineup-constants';
+import { LineupTabStrip } from './lineup-tab-strip';
 import {
   LINEUP_LAYOUT,
   LINEUP_ZOOM_STEP,
@@ -30,14 +30,41 @@ import {
 const log = createLogger('Editor', 'LineupContentArea');
 
 export interface LineupContentAreaProps {
-  /** Checked AND selectable entries only, in sidebar order. */
+  /** Checked AND selectable entries only, in SIDEBAR order (Validation S1 — render-time
+   *  ordering; the persisted entries[] append-order carries no display semantics). */
   entries: LineupEntry[];
   /** 25..200; 100 = ruler fits the viewport height. */
   zoom: number;
   onChangeZoom: (zoom: number) => void;
+  // ── Multi-tab (2026-07-25): the header hosts the tab strip + dangling chip ──
+  /** Effective tabs (persisted, or the single virtual tab before first save). */
+  tabs: SketchLineupTab[];
+  activeTabId: string;
+  /** Write affordances greyed (peer lock). Tab SELECT + zoom stay live. */
+  writeDisabled: boolean;
+  /** Members of the active tab that cannot render (deleted entity/variant or no image/height). */
+  danglingCount: number;
+  onSelectTab: (tabId: string) => void;
+  onRequestRenameTab: (tabId: string) => void;
+  onRequestDeleteTab: (tabId: string) => void;
+  onCreateTab: () => void;
+  onCleanupDangling: () => void;
 }
 
-export function LineupContentArea({ entries, zoom, onChangeZoom }: LineupContentAreaProps) {
+export function LineupContentArea({
+  entries,
+  zoom,
+  onChangeZoom,
+  tabs,
+  activeTabId,
+  writeDisabled,
+  danglingCount,
+  onSelectTab,
+  onRequestRenameTab,
+  onRequestDeleteTab,
+  onCreateTab,
+  onCleanupDangling,
+}: LineupContentAreaProps) {
   const stageRef = useRef<HTMLDivElement | null>(null);
   // Measured, not computed: the stage height is `{zoom}%` of the scroll container, so only the
   // browser knows it. 0 until the observer fires — computeLineupScale guards that first frame.
@@ -78,12 +105,32 @@ export function LineupContentArea({ entries, zoom, onChangeZoom }: LineupContent
       className="flex h-full min-w-[480px] flex-1 flex-col bg-muted/20"
       aria-label="Lineup canvas"
     >
-      {/* Header — static badge + zoom. NO ✏ (design §2.4). */}
-      <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-4 py-2">
-        <span className="inline-flex items-center gap-1.5 rounded-md bg-primary/10 px-2 py-1 text-sm font-medium text-primary">
-          <Users className="h-4 w-4" aria-hidden="true" />
-          Lineup
-        </span>
+      {/* Header — ONE ~48px row (design 02 §2.1): tab strip (left, flexes + x-scrolls) ·
+          dangling chip (appears only when > 0) · zoom (right). NO ✏ (design §2.4). */}
+      <div className="flex h-12 shrink-0 items-center gap-3 border-b border-border px-4">
+        <LineupTabStrip
+          tabs={tabs}
+          activeTabId={activeTabId}
+          disabled={writeDisabled}
+          onSelectTab={onSelectTab}
+          onRequestRenameTab={onRequestRenameTab}
+          onRequestDeleteTab={onRequestDeleteTab}
+          onCreateTab={onCreateTab}
+        />
+        {danglingCount > 0 && (
+          <span className="inline-flex shrink-0 items-center gap-1.5 rounded-md bg-amber-500/10 px-2 py-1 text-xs text-amber-600 dark:text-amber-400">
+            {danglingCount} mục không khả dụng ·
+            <button
+              type="button"
+              disabled={writeDisabled}
+              title={writeDisabled ? 'Another editor is editing the Lineup' : 'Remove unavailable entries from this tab'}
+              className={cn('font-medium underline-offset-2', writeDisabled ? 'opacity-50' : 'hover:underline')}
+              onClick={onCleanupDangling}
+            >
+              Dọn
+            </button>
+          </span>
+        )}
         <ZoomControl
           value={zoom}
           onChange={onChangeZoom}
@@ -104,7 +151,11 @@ export function LineupContentArea({ entries, zoom, onChangeZoom }: LineupContent
           INLINE axis only, leaving clientH still scrollbar-dependent. Verified in Chromium.)
           overflow-y stays `auto`: a v-bar only steals WIDTH, and nothing derives from width — no
           loop. Invisible on macOS/overlay scrollbars either way; this is for Windows/Linux. */}
-      <div className="relative flex-1 overflow-x-scroll overflow-y-auto">
+      <div
+        className="relative flex-1 overflow-x-scroll overflow-y-auto"
+        role="tabpanel"
+        aria-labelledby={`lineup-tab-${activeTabId}`}
+      >
         {/* Stage. `w-max min-w-full` lets the crop row dictate the width (so the ruler spans the
             whole scrollable area for free) while still filling the viewport when it is narrower.
             `isolate` pins the z-band locally: the ruler must paint over the images, and a stray
@@ -202,7 +253,8 @@ function LineupCrop({
   staggerPx: number;
 }) {
   const [status, setStatus] = useState<CropStatus>('loading');
-  const label = `${entry.ref}, ${entry.heightCm ?? 0} cm`;
+  // Display uses the design's mention form; `entry.ref` stays identity-only (review M2).
+  const label = `${mentionOf(entry)}, ${entry.heightCm ?? 0} cm`;
   // `entries` are pre-filtered to selectable, so a null URL is defensive only.
   const failed = status === 'error' || entry.imageUrl == null;
 
@@ -223,7 +275,7 @@ function LineupCrop({
           className="flex h-full items-center justify-center overflow-hidden rounded border border-dashed border-muted-foreground/50 bg-muted/30 px-1"
           style={{ width: Math.max(48, Math.round(heightPx * 0.45)) }}
         >
-          <span className="truncate text-[10px] text-muted-foreground">{entry.ref}</span>
+          <span className="truncate text-[10px] text-muted-foreground">{mentionOf(entry)}</span>
         </div>
       ) : (
         <>
@@ -259,7 +311,7 @@ function LineupCrop({
         className="pointer-events-none absolute left-1/2 top-full -translate-x-1/2 whitespace-nowrap text-sm text-muted-foreground"
         style={{ marginTop: staggerPx + 6 }}
       >
-        {entry.ref}
+        {mentionOf(entry)}
       </span>
     </div>
   );

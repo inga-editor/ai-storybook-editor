@@ -66,6 +66,7 @@ describe('normalizeSketch (shape mapping)', () => {
       props: [],
       stages: [{ key: 'st1', base: { styles: [] }, variants: [{ key: 'v', description: '', visual_design: 'd', art_language: '', illustrations: [], crops: [] }] }],
       spreads: [{ id: 'sp1', images: [], pages: [], textboxes: [] }],
+      lineups: [{ id: 't1', name: 'Lineup', entries: [{ kind: 'characters', entity_key: 'c1', variant_key: 'base' }] }],
     };
     expect(normalizeSketch(valid)).toEqual(valid);
   });
@@ -83,6 +84,7 @@ describe('normalizeSketch (shape mapping)', () => {
       props: [],
       stages: [],
       spreads: [],
+      lineups: [],
     });
   });
 

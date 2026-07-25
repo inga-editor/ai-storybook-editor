@@ -243,6 +243,7 @@ export function assembleSketchSnapshot(
     props: projectSketchEntities(parsed.props),
     stages: projectSketchStages(parsed.stages),
     spreads,
+    lineups: [], // no tabs at import — the Lineup space materializes on first save
   };
 
   log.info('assembleSketchSnapshot', 'done', {

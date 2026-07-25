@@ -98,9 +98,33 @@ export interface LineupEntry {
   kind: BaseKind;
   entityKey: string;
   variantKey: string; // 'base' INCLUDED (unlike VariantRef consumers)
-  ref: string; // "@{entityKey}/{variantKey}" — unique id (key of checkedRefs)
+  /** "{kind}:@{entityKey}/{variantKey}" — unique id (key of checkedRefs). The kind prefix is
+   *  REQUIRED: entity keys are only unique WITHIN a kind, so character `armor/base` and prop
+   *  `armor/base` must not collide (2026-07-25 — multi-tab persist). */
+  ref: string;
   imageUrl: string | null; // effective locked crop; null = no crop locked yet
   heightCm: number | null; // variants[].height (cm); null = not set yet
+}
+
+// ── Lineup tabs (PERSISTED — sketch.lineups[], rtype 12 collab node, 2026-07-25) ─────────────
+// Multi-tab lineup config: each tab is a named selection of variants across BOTH kinds.
+// snake_case = snapshot JSONB contract (snapshot/structure.md §sketch lineups[]).
+
+/** One checked variant inside a tab. Kind prefix disambiguates entity keys across kinds. */
+export interface SketchLineupEntry {
+  kind: BaseKind;
+  entity_key: string;
+  variant_key: string; // 'base' INCLUDED
+}
+
+export interface SketchLineupTab {
+  id: string; // UUID — the tab's real identity; rename NEVER changes it
+  name: string; // 1..60 chars, NOT unique across tabs
+  /** Membership only, persisted in APPEND order — carries NO display semantics: the canvas
+   *  renders checked entries in SIDEBAR order (Validation S1 2026-07-25, diverges from design
+   *  commit 0635ee5's check-order). Dangling entries (entity/variant deleted elsewhere) are
+   *  KEPT here and skipped at render (manual cleanup via the "Dọn" chip). */
+  entries: SketchLineupEntry[];
 }
 
 // ── Base workspace (generate raw sheets in bulk + crop per entity) ────────────
@@ -297,4 +321,5 @@ export interface Sketch {
   props: SketchEntity[];
   stages: SketchStage[];                        // ⚡ 2026-07-18 — per-stage style workspace + 2-cell variant sheets
   spreads: SketchSpread[];
+  lineups: SketchLineupTab[];                   // ⚡ 2026-07-25 — lineup tabs (rtype 12 collab node); [] until first save
 }

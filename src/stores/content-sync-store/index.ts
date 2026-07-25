@@ -116,6 +116,22 @@ async function fetchSyncNode(
   return coerced;
 }
 
+/**
+ * Is this collection-scope descriptor the `sketch.lineups` whole-array write (rtype 12)?
+ * OR of both signals (plan Validation S1): `resource_type === 12` survives a future write-path
+ * change; the column+path match survives a descriptor that lost its rtype. Exported for tests.
+ */
+export function isLineupCollectionSync(sync: {
+  column: string;
+  path: string[];
+  resource_type?: number;
+}): boolean {
+  return (
+    sync.resource_type === 12 ||
+    (sync.column === 'sketch' && sync.path.length === 1 && sync.path[0] === 'lineups')
+  );
+}
+
 /** Still viewing the version the event targeted? Re-checked AFTER the RPC await so
  *  navigating to another version mid-fetch never merges cross-version (closes R3). */
 function versionStillMatches(eventVersion: string): boolean {
@@ -164,7 +180,17 @@ async function applySync(sync: MetadataSync): Promise<void> {
         const node = await fetchSyncNode(sync.version, sync.column, sync.path);
         if (node === undefined) return; // rpc error — skip
         if (!versionStillMatches(sync.version)) return;
-        if (Array.isArray(node)) {
+        if (Array.isArray(node) && isLineupCollectionSync(sync)) {
+          // ⚡ rtype 12 (sketch.lineups — 2026-07-25): WHOLE-REPLACE, never reconcile-by-id.
+          // reconcileCollectionByIds keeps the LOCAL object for every matching id and adopts only
+          // order/membership — correct for characters/spreads (their content arrives via separate
+          // scope:'node' events), but lineup tabs have NO node-scope event (every write is this
+          // collection-scope save), so a peer's rename / entries change would NEVER land.
+          log.debug('applySync', 'lineups collection — whole-replace branch', { column: sync.column });
+          withRemotePatchGuard(() =>
+            useSnapshotStore.getState().applyRemoteNodePatch(sync.column, sync.path, node),
+          );
+        } else if (Array.isArray(node)) {
           withRemotePatchGuard(() =>
             useSnapshotStore.getState().reconcileCollectionByIds(sync.column, sync.path, node),
           );

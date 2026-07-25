@@ -65,6 +65,7 @@ import { createPropsSlice } from './slices/props-slice';
 import { createCharactersSlice } from './slices/characters-slice';
 import { createStagesSlice } from './slices/stages-slice';
 import { createImageTaskSlice } from './slices/image-task-slice';
+import { createSketchLineupSlice } from './slices/sketch-lineup-slice';
 import { createSketchStageSlice } from './slices/sketch-stage-slice';
 import { createSketchStageGenerateJobSlice } from './slices/sketch-stage-generate-job-slice';
 import { createSketchSpreadGenerateJobSlice } from './slices/sketch-spread-generate-job-slice';
@@ -152,6 +153,7 @@ export const useSnapshotStore = create<SnapshotStore>()(
       immer((...args) => ({
         ...createDocsSlice(...args),
         ...createSketchSlice(...args),
+        ...createSketchLineupSlice(...args),
         ...createSketchStageSlice(...args),
         ...createMetaSlice(...args),
         ...createDummiesSlice(...args),

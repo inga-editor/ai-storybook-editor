@@ -19,6 +19,7 @@ import type {
   BaseEntityText,
   VariantRef,
   LineupEntry,
+  SketchLineupTab,
 } from '@/types/sketch';
 import { sheetOf } from '@/types/sketch';
 import type { ManuscriptDummy, DummySpread } from '@/types/dummy';
@@ -62,6 +63,7 @@ const EMPTY_PROPS: Prop[] = [];
 const EMPTY_CHARACTERS: Character[] = [];
 const EMPTY_STAGES: Stage[] = [];
 const EMPTY_SKETCH_ENTITIES: SketchEntity[] = [];
+const EMPTY_LINEUP_TABS: SketchLineupTab[] = [];
 const EMPTY_SKETCH_STAGES: SketchStage[] = [];
 const EMPTY_STAGE_STYLES: SketchStageStyle[] = [];
 const EMPTY_IMAGE_TASKS: ImageTask[] = [];
@@ -265,7 +267,9 @@ export const useSketchLineupEntries = (kind: BaseKind): LineupEntry[] => {
           kind,
           entityKey: e.key,
           variantKey: v.key,
-          ref: `@${e.key}/${v.key}`,
+          // Kind prefix REQUIRED (2026-07-25): entity keys are only unique WITHIN a kind —
+          // character `armor/base` must not collide with prop `armor/base` in checkedRefs.
+          ref: `${kind}:@${e.key}/${v.key}`,
           imageUrl: effectiveCropUrl(v),
           heightCm: v.height ?? null,
         })),
@@ -273,6 +277,14 @@ export const useSketchLineupEntries = (kind: BaseKind): LineupEntry[] => {
     [entities, kind],
   );
 };
+
+/**
+ * Persisted lineup tabs (`sketch.lineups[]` — rtype 12 node). Returns the STABLE raw ref (plain
+ * selector, Object.is) — never `.map()`/useShallow here (memory: zustand useShallow nested
+ * arrays). Empty fallback is a module constant so "no tabs yet" renders don't loop.
+ */
+export const useSketchLineups = (): SketchLineupTab[] =>
+  useSnapshotStore((s) => s.sketch.lineups ?? EMPTY_LINEUP_TABS);
 
 // Sketch spread selectors — ID-based (mirror illustration spreads: useShallow+map for the id
 // list, whole-object find for a single spread). Drives the sketch-spread creative space.
