@@ -1,23 +1,23 @@
-// lineup-tab-strip.tsx — horizontal tab strip of SketchLineupSpace (design 02-01, 2026-07-25).
-// Pills for every (effective) tab: active = primary filled + Users icon; select on click; rename
-// via double-click OR the ⋯ menu; delete via the ⋯ menu only (confirm handled by the root's
-// AlertDialog). `＋` at the end mirrors the sidebar-header `＋`.
+// lineup-tab-strip.tsx — horizontal tab strip of SketchLineupSpace (design 02-01; 2026-07-26 rework).
+// Pills for every (effective) tab: active = subtle muted box (NO icon, per mock 2026-07-26);
+// inactive = plain muted text. Select on click. Each tab carries an inline ✕ (delete, confirm
+// handled by the root's AlertDialog) to the RIGHT of its name; rename is via DOUBLE-CLICK on the
+// name only (the ⋯ menu was removed — 2026-07-26 user request).
 //
-// Disabled ≠ hidden (memory: never-hide-disabled-ui): peer-lock/greyed states render every
-// control disabled with a reason tooltip. Delete is disabled on the LAST tab; `＋` at the 12-tab
-// cap. The ⋯ menu is built on the existing Popover (no DropdownMenu dependency in this repo —
-// deliberate: no new npm dep for a 2-item menu).
+// The `＋` (new tab) lives ONLY in the sidebar header now (2026-07-26) — it is NOT mirrored here.
+//
+// Disabled ≠ hidden (memory: never-hide-disabled-ui): peer-lock/greyed states render the ✕
+// disabled with a reason tooltip. Delete is disabled on the LAST tab (a book always keeps ≥1 tab).
 //
 // A11y (README §4.5): role=tablist / role=tab + aria-selected; ←/→ move selection (the panel is
 // controlled — selection IS activation); the active pill scrollIntoView on keyboard moves.
 
-import { useRef, useState } from 'react';
-import { MoreHorizontal, Pencil, Plus, Trash2, Users } from 'lucide-react';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { useRef } from 'react';
+import { X } from 'lucide-react';
 import { cn } from '@/utils/utils';
 import { createLogger } from '@/utils/logger';
 import type { SketchLineupTab } from '@/types/sketch';
-import { LINEUP_TAB_LABEL_MAX_PX, LINEUP_TAB_LIMIT } from './lineup-constants';
+import { LINEUP_TAB_LABEL_MAX_PX } from './lineup-constants';
 
 const log = createLogger('Editor', 'LineupTabStrip');
 
@@ -29,7 +29,6 @@ export interface LineupTabStripProps {
   onSelectTab: (tabId: string) => void;
   onRequestRenameTab: (tabId: string) => void;
   onRequestDeleteTab: (tabId: string) => void;
-  onCreateTab: () => void;
 }
 
 export function LineupTabStrip({
@@ -39,12 +38,9 @@ export function LineupTabStrip({
   onSelectTab,
   onRequestRenameTab,
   onRequestDeleteTab,
-  onCreateTab,
 }: LineupTabStripProps) {
-  const [openMenuTabId, setOpenMenuTabId] = useState<string | null>(null);
   const stripRef = useRef<HTMLDivElement | null>(null);
 
-  const atCap = tabs.length >= LINEUP_TAB_LIMIT;
   const lastTab = tabs.length <= 1;
 
   const handleKeyDown = (event: React.KeyboardEvent) => {
@@ -73,8 +69,24 @@ export function LineupTabStrip({
     >
       {tabs.map((tab) => {
         const active = tab.id === activeTabId;
+        // Last tab cannot be deleted; a peer lock greys every ✕. Reason feeds the tooltip.
+        const deleteReason = disabled
+          ? 'Another editor is editing the Lineup'
+          : lastTab
+            ? 'The last tab cannot be deleted'
+            : null;
+        const deleteDisabled = deleteReason != null;
         return (
-          <div key={tab.id} data-tab-id={tab.id} className="flex shrink-0 items-center">
+          <div
+            key={tab.id}
+            data-tab-id={tab.id}
+            className={cn(
+              'flex shrink-0 items-center gap-0.5 rounded-md pr-1',
+              active
+                ? 'bg-muted text-foreground'
+                : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground',
+            )}
+          >
             <button
               type="button"
               role="tab"
@@ -83,10 +95,8 @@ export function LineupTabStrip({
               tabIndex={active ? 0 : -1}
               title={tab.name}
               className={cn(
-                'inline-flex h-8 items-center gap-1.5 truncate rounded-md px-2.5 text-sm',
-                active
-                  ? 'bg-primary font-medium text-primary-foreground'
-                  : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground',
+                'inline-flex h-8 items-center truncate rounded-md pl-2.5 pr-1 text-sm',
+                active && 'font-medium',
               )}
               style={{ maxWidth: LINEUP_TAB_LABEL_MAX_PX }}
               onClick={() => {
@@ -100,90 +110,31 @@ export function LineupTabStrip({
                 onRequestRenameTab(tab.id);
               }}
             >
-              {active && <Users className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />}
               <span className="truncate">{tab.name}</span>
             </button>
 
-            {/* ⋯ menu — active tab only keeps the strip calm; every tab is one click away. */}
-            {active && (
-              <Popover
-                open={openMenuTabId === tab.id}
-                onOpenChange={(open) => setOpenMenuTabId(open ? tab.id : null)}
-              >
-                <PopoverTrigger asChild>
-                  <button
-                    type="button"
-                    aria-label={`Tab actions for ${tab.name}`}
-                    aria-haspopup="menu"
-                    disabled={disabled}
-                    title={disabled ? 'Another editor is editing the Lineup' : 'Tab actions'}
-                    className={cn(
-                      'ml-0.5 inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground',
-                      disabled ? 'opacity-50' : 'hover:bg-muted/60 hover:text-foreground',
-                    )}
-                  >
-                    <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
-                  </button>
-                </PopoverTrigger>
-                <PopoverContent align="start" className="w-40 p-1" role="menu">
-                  <button
-                    type="button"
-                    role="menuitem"
-                    className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-muted"
-                    onClick={() => {
-                      setOpenMenuTabId(null);
-                      onRequestRenameTab(tab.id);
-                    }}
-                  >
-                    <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
-                    Rename
-                  </button>
-                  <button
-                    type="button"
-                    role="menuitem"
-                    disabled={lastTab}
-                    aria-disabled={lastTab}
-                    title={lastTab ? 'The last tab cannot be deleted' : undefined}
-                    className={cn(
-                      'flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm',
-                      lastTab ? 'cursor-not-allowed opacity-50' : 'text-destructive hover:bg-muted',
-                    )}
-                    onClick={() => {
-                      if (lastTab) return;
-                      setOpenMenuTabId(null);
-                      onRequestDeleteTab(tab.id);
-                    }}
-                  >
-                    <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
-                    Delete
-                  </button>
-                </PopoverContent>
-              </Popover>
-            )}
+            {/* ✕ delete — one per tab, right of the name (design 02, 2026-07-26). Never hidden:
+                greyed with a reason on the last tab or under a peer lock. */}
+            <button
+              type="button"
+              aria-label={`Delete tab ${tab.name}`}
+              disabled={deleteDisabled}
+              title={deleteReason ?? 'Delete tab'}
+              className={cn(
+                'inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground',
+                deleteDisabled ? 'opacity-40' : 'hover:bg-foreground/10 hover:text-foreground',
+              )}
+              onClick={() => {
+                if (deleteDisabled) return;
+                log.debug('onRequestDeleteTab', 'delete requested via ✕', { tabId: tab.id });
+                onRequestDeleteTab(tab.id);
+              }}
+            >
+              <X className="h-3.5 w-3.5" aria-hidden="true" />
+            </button>
           </div>
         );
       })}
-
-      {/* ＋ new tab — disabled (never hidden) at the cap or under a peer lock. */}
-      <button
-        type="button"
-        aria-label="New tab"
-        disabled={disabled || atCap}
-        title={
-          disabled
-            ? 'Another editor is editing the Lineup'
-            : atCap
-              ? `Tab limit reached (${LINEUP_TAB_LIMIT})`
-              : 'New tab'
-        }
-        className={cn(
-          'ml-0.5 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground',
-          disabled || atCap ? 'opacity-50' : 'hover:bg-muted/60 hover:text-foreground',
-        )}
-        onClick={onCreateTab}
-      >
-        <Plus className="h-4 w-4" aria-hidden="true" />
-      </button>
     </div>
   );
 }

@@ -47,7 +47,6 @@ export interface LineupContentAreaProps {
   onSelectTab: (tabId: string) => void;
   onRequestRenameTab: (tabId: string) => void;
   onRequestDeleteTab: (tabId: string) => void;
-  onCreateTab: () => void;
   onCleanupDangling: () => void;
 }
 
@@ -62,7 +61,6 @@ export function LineupContentArea({
   onSelectTab,
   onRequestRenameTab,
   onRequestDeleteTab,
-  onCreateTab,
   onCleanupDangling,
 }: LineupContentAreaProps) {
   const stageRef = useRef<HTMLDivElement | null>(null);
@@ -105,9 +103,10 @@ export function LineupContentArea({
       className="flex h-full min-w-[480px] flex-1 flex-col bg-muted/20"
       aria-label="Lineup canvas"
     >
-      {/* Header — ONE ~48px row (design 02 §2.1): tab strip (left, flexes + x-scrolls) ·
-          dangling chip (appears only when > 0) · zoom (right). NO ✏ (design §2.4). */}
-      <div className="flex h-12 shrink-0 items-center gap-3 border-b border-border px-4">
+      {/* Header — ONE h-11 row, aligned with the sidebar header + every other editor space
+          (design 02 §2.1): tab strip (left, flexes + x-scrolls) · dangling chip (appears only when
+          > 0) · zoom (right). NO ✏ (design §2.4); ＋ lives in the sidebar header only. */}
+      <div className="flex h-11 shrink-0 items-center gap-3 border-b border-border px-4">
         <LineupTabStrip
           tabs={tabs}
           activeTabId={activeTabId}
@@ -115,7 +114,6 @@ export function LineupContentArea({
           onSelectTab={onSelectTab}
           onRequestRenameTab={onRequestRenameTab}
           onRequestDeleteTab={onRequestDeleteTab}
-          onCreateTab={onCreateTab}
         />
         {danglingCount > 0 && (
           <span className="inline-flex shrink-0 items-center gap-1.5 rounded-md bg-amber-500/10 px-2 py-1 text-xs text-amber-600 dark:text-amber-400">

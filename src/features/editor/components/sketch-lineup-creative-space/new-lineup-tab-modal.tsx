@@ -1,5 +1,5 @@
 // new-lineup-tab-modal.tsx — ONE dialog, TWO modes (design 03, 2026-07-25): 'create' (＋ from the
-// sidebar header or tab strip) and 'rename' (double-click / ⋯ → Rename). Single name field.
+// sidebar header) and 'rename' (double-click a tab name). Single name field.
 //
 // DUMB by contract: knows nothing about locks, the gateway, or tab identity — the root computes
 // `initialName` (nextTabName for create, current name for rename) and owns the write in

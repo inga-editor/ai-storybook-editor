@@ -322,7 +322,6 @@ export function SketchLineupSpace() {
         onSelectTab={setActiveTabId}
         onRequestRenameTab={(tabId) => setTabDialog({ mode: 'rename', tabId })}
         onRequestDeleteTab={setDeletingTabId}
-        onCreateTab={() => setTabDialog({ mode: 'create' })}
         onCleanupDangling={handleCleanupDangling}
       />
 
