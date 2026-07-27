@@ -28,12 +28,6 @@ export type SaveStatus = 'dirty' | 'auto-saving' | 'auto-saved' | 'manual-saving
 // Editor mode (book vs asset)
 export type EditorMode = 'book' | 'asset';
 
-// User points display
-export interface UserPoints {
-  current: number;
-  total: number;
-}
-
 // Document types for manuscript editing
 export type DocType = 'brief' | 'draft' | 'script' | 'other';
 

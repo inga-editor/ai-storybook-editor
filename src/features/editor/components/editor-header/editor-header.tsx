@@ -1,13 +1,19 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Menu, ChevronRight, Bell, Check, AlertCircle, Loader2, Pencil } from 'lucide-react';
+import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useCurrentStep } from '@/stores/editor-settings-store';
-import { PIPELINE_STEPS } from '@/constants/editor-constants';
+import { PIPELINE_STEPS, BOOK_AI_BUDGET_USD } from '@/constants/editor-constants';
 import { MenuPopover } from './menu-popover';
 import { LanguageSelector } from './language-selector';
+import { CostBreakdownModal } from './cost-breakdown-modal';
+import { CloneBookConfirmDialog } from './clone-book-confirm-dialog';
 import { UndoRedoControls } from '@/features/editor/components/shared-components/undo-redo-controls';
-import type { PipelineStep, SaveStatus, Language, UserPoints, EditorMode } from '@/types/editor';
+import { useCurrentProfile } from '@/features/users/hooks/use-current-profile';
+import { getBookCostBreakdown } from '@/apis/cost-api';
+import type { BookCostBreakdown, BookCostBreakdownMeta } from '@/types/cost';
+import type { PipelineStep, SaveStatus, Language, EditorMode } from '@/types/editor';
 import type { AccessRights } from '@/features/editor/components/collaborators-creative-space/collaboration-space-types';
 import { cn } from '@/utils/utils';
 import { createLogger } from '@/utils/logger';
@@ -16,13 +22,17 @@ const log = createLogger('Editor', 'EditorHeader');
 
 interface EditorHeaderProps {
   bookTitle: string;
+  /** Book whose AI spend the Cost row + modal report on. */
+  bookId: string;
   saveStatus: SaveStatus;
   notificationCount: number;
-  userPoints: UserPoints;
   editorMode: EditorMode;
   onTitleEdit: (newTitle: string) => void;
   onNotificationClick: () => void;
   onNavigateHome: () => void;
+  /** Executes the clone and navigates to the copy. Rejects → the confirm dialog shows the
+   *  message inline and stays open for a retry. */
+  onCloneBook: () => Promise<void>;
   onStepChange: (targetStep: PipelineStep) => void;
   onLanguageChange: (newLang: Language, prevLang: Language) => void;
   /** Persist current unsaved changes into the working-draft snapshot. Invoked
@@ -40,13 +50,14 @@ interface EditorHeaderProps {
 
 export function EditorHeader({
   bookTitle,
+  bookId,
   saveStatus,
   notificationCount,
-  userPoints,
   editorMode,
   onTitleEdit,
   onNotificationClick,
   onNavigateHome,
+  onCloneBook,
   onStepChange,
   onLanguageChange,
   onSave,
@@ -58,6 +69,51 @@ export function EditorHeader({
   const [editTitleValue, setEditTitleValue] = useState(bookTitle);
   const currentStep = useCurrentStep();
 
+  // ── Cost (menu row + modal) ────────────────────────────────────────────────
+  // Kept local: the data is read-only, lives exactly as long as the menu/modal, and lifting it to
+  // EditorPage would only add prop-drilling plus an invalidation nobody needs (spec §4.1).
+  const [isCostModalOpen, setIsCostModalOpen] = useState(false);
+  const [costData, setCostData] = useState<BookCostBreakdown | null>(null);
+  const [costMeta, setCostMeta] = useState<BookCostBreakdownMeta | null>(null);
+  const [costHasError, setCostHasError] = useState(false);
+  /** Once-only prefetch guard — declared here (above the reset block) because the reset MUST
+   *  release it in the same breath as the data. See the prefetch effect for the full contract. */
+  const costFetchedForRef = useRef<string | null>(null);
+
+  const [isCloneConfirmOpen, setIsCloneConfirmOpen] = useState(false);
+  const [isCloning, setIsCloning] = useState(false);
+  const [cloneError, setCloneError] = useState<string | null>(null);
+
+  const menuTriggerRef = useRef<HTMLButtonElement | null>(null);
+
+  // Navigating editor→editor keeps this header MOUNTED and only swaps `bookId`, so the prefetched
+  // figure has to be dropped or the menu would attribute book A's spend to book B. Done during
+  // render (React's "adjusting state when a prop changes"), not in an effect: an effect would paint
+  // the wrong money for one frame, and `react-hooks/set-state-in-effect` rejects it outright.
+  const [costBookId, setCostBookId] = useState(bookId);
+  if (costBookId !== bookId) {
+    setCostBookId(bookId);
+    setCostData(null);
+    setCostMeta(null);
+    setCostHasError(false);
+    // ⚠️ The once-only guard MUST be released together with the data it guards. A→B→A with the
+    // menu closed would otherwise leave the guard still claiming "A" while `costData` is null →
+    // the next menu open skips the fetch and the row is pinned to its skeleton for the rest of
+    // the session. Writing the ref here is a reset-to-initial (no render output reads it), which
+    // is the one ref mutation React sanctions during render.
+    costFetchedForRef.current = null;
+  }
+
+  // Cost is authorized as `admin ∨ owner` server-side (api/cost/01). The FE gate MUST match:
+  // gating on `isOwner` alone would grey the row out for an admin and show a tooltip that is
+  // simply false. `useCurrentProfile` is a session-wide cached store → no extra request.
+  const { role, isLoading: isRoleLoading } = useCurrentProfile();
+  const isAdmin = role === 'admin';
+  const canViewCost = isOwner || isAdmin;
+  // An owner is known to be allowed without waiting for the role fetch; only a non-owner has to
+  // wait to find out whether they are an admin.
+  const isCostPermissionPending = !isOwner && isRoleLoading;
+
   // Non-owner: grey-out step links the viewer isn't granted. Owner short-circuits
   // FIRST → always false → StepBreadcrumb unchanged. Defensive: a non-owner with no
   // rights row disables all steps (matches icon-rail's defensive default).
@@ -65,6 +121,140 @@ export function EditorHeader({
     if (isOwner) return false;
     if (!myRights) return true;
     return myRights.steps[stepKey]?.enabled === false;
+  };
+
+  // ── Lazy cost prefetch ─────────────────────────────────────────────────────
+  // Fires on the FIRST menu open, and only for a viewer allowed to see costs — NOT on page mount:
+  // the menu is a rarely-used surface, so prefetching eagerly would cost one request per editor
+  // visit for nothing. The response feeds BOTH the menu row and the modal (`initialData`), so
+  // opening the modal shows no spinner.
+  //
+  // ⚠️ The call is deliberately remix-INCLUSIVE (the client's only mode): a payload without the
+  // remix scopes could not be reused as the modal's `initialData`, and the "no spinner" property
+  // would be lost.
+  //
+  // The guard is claimed for the session, NOT re-armed after a generate: freshness is pushed back
+  // from the modal via `onDataLoaded` instead of polled here (see `handleCostDataLoaded`).
+  //
+  // No setState runs synchronously in the effect body (React 19 bans it); the in-flight guard is
+  // a ref (declared above, next to the state it guards), and every write happens after the await.
+  useEffect(() => {
+    if (!isMenuOpen) return;
+    if (!canViewCost) {
+      log.debug('costPrefetchEffect', 'skip: viewer cannot see costs', { bookId });
+      return;
+    }
+    if (costFetchedForRef.current === bookId) {
+      log.debug('costPrefetchEffect', 'skip: already fetched for this book', { bookId });
+      return; // reopening must not refetch
+    }
+    costFetchedForRef.current = bookId;
+
+    let cancelled = false;
+    let settled = false;
+    log.debug('costPrefetchEffect', 'menu opened, prefetching cost', { bookId });
+
+    void (async () => {
+      const res = await getBookCostBreakdown(bookId);
+      settled = true;
+      if (cancelled) {
+        log.debug('costPrefetchEffect', 'skip: menu closed before response', { bookId });
+        return;
+      }
+      if (res.ok) {
+        setCostData(res.data);
+        setCostMeta(res.meta);
+        setCostHasError(false);
+        log.info('costPrefetchEffect', 'cost prefetch ok', {
+          bookId,
+          totalCostUsd: res.data.scopes[0]?.totalCostUsd ?? 0,
+          scopeCount: res.data.scopes.length,
+        });
+      } else {
+        // A transient failure must NOT be sticky: without releasing the guard a single timeout
+        // would pin the row to "—" for the whole session, while the modal (which has its own
+        // Retry) could go on to show a real number — two different answers on screen at once.
+        // 403/404 stay claimed: they are deterministic, so retrying on every menu open is waste.
+        if (res.error === 'network') costFetchedForRef.current = null;
+        setCostHasError(true);
+        log.warn('costPrefetchEffect', 'cost prefetch failed', { bookId, errorKind: res.error });
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      // Release the once-only guard when the request never delivered (menu closed mid-flight, or
+      // StrictMode's dev remount) — otherwise the row would be stuck on a skeleton forever.
+      if (!settled) costFetchedForRef.current = null;
+    };
+  }, [isMenuOpen, canViewCost, bookId]);
+
+  // Cost row shows a skeleton until the first response lands. `canViewCost` short-circuits so a
+  // collaborator never sees a spinner for a request that was never sent.
+  const isCostLoading = canViewCost && !costData && !costHasError;
+
+  const handleOpenCostModal = () => {
+    log.info('handleOpenCostModal', 'opening cost breakdown', { bookId, prefetched: !!costData });
+    setIsCostModalOpen(true);
+    setIsMenuOpen(false);
+  };
+
+  // The modal refetches on every open, so IT is the freshest reader of this book's spend. Without
+  // adopting its result the menu row would keep serving the figure from the very first menu open
+  // for the rest of the session — the modal saying $14.20 while the row underneath (and the budget
+  // bar drawn from it) still says $12.50. This is a PUSH, not a refetch trigger: the prefetch guard
+  // stays claimed on purpose, so no extra request is made.
+  const handleCostDataLoaded = (data: BookCostBreakdown, meta: BookCostBreakdownMeta) => {
+    log.debug('handleCostDataLoaded', 'adopting modal refetch into the menu row', {
+      bookId,
+      totalCostUsd: data.scopes[0]?.totalCostUsd ?? 0,
+    });
+    setCostData(data);
+    setCostMeta(meta);
+    setCostHasError(false);
+  };
+
+  const handleCostModalOpenChange = (open: boolean) => {
+    setIsCostModalOpen(open);
+    // The menu row that opened the modal unmounts with the popover, so Radix has no live element
+    // to hand focus back to. Return it to the menu button explicitly — otherwise keyboard users
+    // land on <body> and have to tab from the top of the page.
+    if (!open) menuTriggerRef.current?.focus();
+  };
+
+  const handleRequestCloneBook = () => {
+    log.info('handleRequestCloneBook', 'clone confirm requested', { bookId });
+    setCloneError(null);
+    setIsMenuOpen(false);
+    setIsCloneConfirmOpen(true);
+  };
+
+  const handleCloneConfirm = () => {
+    log.info('handleCloneConfirm', 'cloning book', { bookId });
+    setIsCloning(true);
+    setCloneError(null);
+
+    void (async () => {
+      try {
+        await onCloneBook();
+        log.info('handleCloneConfirm', 'clone succeeded', { bookId });
+        toast.success('Book cloned');
+        setIsCloneConfirmOpen(false);
+      } catch (err) {
+        // Dialog stays open with the reason inline so the user can retry (§3.6.3).
+        const message = err instanceof Error ? err.message : String(err);
+        log.error('handleCloneConfirm', 'clone failed', { bookId, error: message });
+        setCloneError(message || 'Failed to clone this book. Please try again.');
+      } finally {
+        setIsCloning(false);
+      }
+    })();
+  };
+
+  const handleCloneDialogOpenChange = (open: boolean) => {
+    log.debug('handleCloneDialogOpenChange', 'clone dialog toggled', { open });
+    setIsCloneConfirmOpen(open);
+    if (!open) setCloneError(null);
   };
 
   const handleTitleClick = () => {
@@ -92,11 +282,29 @@ export function EditorHeader({
         <MenuPopover
           isOpen={isMenuOpen}
           onOpenChange={setIsMenuOpen}
-          userPoints={userPoints}
           editorMode={editorMode}
+          cost={{
+            isLoading: isCostLoading,
+            hasError: costHasError,
+            // ⚡ Original scope only — remix spend is a separate bucket (ADR-050).
+            totalCostUsd: costData?.scopes[0]?.totalCostUsd ?? 0,
+            budgetUsd: BOOK_AI_BUDGET_USD,
+          }}
+          canViewCost={canViewCost}
+          isCostPermissionPending={isCostPermissionPending}
+          isOwner={isOwner}
           onNavigateHome={onNavigateHome}
+          onOpenCostModal={handleOpenCostModal}
+          onRequestCloneBook={handleRequestCloneBook}
         >
-          <Button variant="ghost" size="icon">
+          <Button
+            ref={menuTriggerRef}
+            variant="ghost"
+            size="icon"
+            aria-label="Book menu"
+            aria-haspopup="menu"
+            aria-expanded={isMenuOpen}
+          >
             <Menu className="h-5 w-5" />
           </Button>
         </MenuPopover>
@@ -186,6 +394,27 @@ export function EditorHeader({
           )}
         </Button>
       </div>
+
+      {/* Both dialogs are mounted OUTSIDE the popover subtree on purpose: they must survive the
+          menu closing (which is exactly what opening either of them does). Radix portals the
+          content, so their position in this header is irrelevant to layout. */}
+      <CostBreakdownModal
+        isOpen={isCostModalOpen}
+        bookId={bookId}
+        onOpenChange={handleCostModalOpenChange}
+        initialData={costData}
+        initialMeta={costMeta}
+        onDataLoaded={handleCostDataLoaded}
+      />
+
+      <CloneBookConfirmDialog
+        isOpen={isCloneConfirmOpen}
+        bookTitle={bookTitle}
+        isCloning={isCloning}
+        error={cloneError}
+        onOpenChange={handleCloneDialogOpenChange}
+        onConfirm={handleCloneConfirm}
+      />
     </header>
   );
 }

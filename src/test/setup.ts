@@ -7,6 +7,16 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+// jsdom ships no ResizeObserver, but Radix's positioning layer (floating-ui) observes element
+// size — every component test that renders a Popover/Tooltip/Select needs this stub.
+if (!globalThis.ResizeObserver) {
+  globalThis.ResizeObserver = class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  } as unknown as typeof ResizeObserver;
+}
+
 // Mock react-moveable for tests
 vi.mock('react-moveable', () => {
   interface MoveableProps extends Record<string, unknown> {

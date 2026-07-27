@@ -53,8 +53,6 @@ import { useFlushOnHidden } from '../hooks/use-flush-on-hidden';
 
 const log = createLogger('Editor', 'EditorPage');
 
-const MOCK_USER_POINTS = { current: 750, total: 1000 };
-
 export function EditorPage() {
   const { bookId } = useParams<{ bookId: string }>();
   const navigate = useNavigate();
@@ -282,6 +280,16 @@ export function EditorPage() {
     navigate('/');
   };
 
+  // Clone is UI-only for now: the endpoint has not been designed (spec §3.6.3 / §4.1) — what a
+  // copy carries (versions / distribution artifacts / collaborators / remixes / cost history) is
+  // still an open business decision. The menu row therefore ships disabled ("Coming soon"), so
+  // this rejection is unreachable today; it exists so the confirm dialog's failure path is real
+  // rather than mocked, and so wiring the endpoint later is a one-function change here.
+  const handleCloneBook = async (): Promise<void> => {
+    log.warn('handleCloneBook', 'clone requested but no endpoint exists yet', { bookId });
+    throw new Error('Cloning is not available yet.');
+  };
+
   const handleNotificationClick = () => {
     log.info('handleNotificationClick', 'opened');
   };
@@ -349,13 +357,14 @@ export function EditorPage() {
         {/* Header */}
         <EditorHeader
           bookTitle={book.title}
+          bookId={book.id}
           saveStatus={saveStatus}
           notificationCount={notificationCount}
-          userPoints={MOCK_USER_POINTS}
           editorMode={book.type === 1 ? 'book' : 'asset'}
           onTitleEdit={handleTitleEdit}
           onNotificationClick={handleNotificationClick}
           onNavigateHome={handleNavigateHome}
+          onCloneBook={handleCloneBook}
           onStepChange={handleStepChange}
           onLanguageChange={handleLanguageChange}
           onSave={handleManualSave}

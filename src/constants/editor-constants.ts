@@ -11,6 +11,16 @@ export const AVAILABLE_LANGUAGES: Language[] = [
 
 export const DEFAULT_LANGUAGE: Language = AVAILABLE_LANGUAGES[0];
 
+/**
+ * Budget cap shown by the EditorHeader menu Cost row progress bar.
+ *
+ * ⚡ TECHNICAL DEBT: `books` has NO budget column, so this is a hardcoded FE constant for this
+ * release (design 01-editor-header.md §4.1 / api/cost/01 §Open questions). A real budget
+ * (per-book or per-plan) requires a DB column + it moving into the cost response — at which
+ * point this constant becomes the fallback, not the source of truth.
+ */
+export const BOOK_AI_BUDGET_USD = 100;
+
 // Pipeline steps configuration
 export const PIPELINE_STEPS: { key: PipelineStep; label: string }[] = [
   { key: 'sketch', label: 'Sketch' },
