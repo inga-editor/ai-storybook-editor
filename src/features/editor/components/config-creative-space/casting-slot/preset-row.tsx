@@ -35,8 +35,10 @@ export function PresetRow({
         }
       }}
       className={cn(
-        'group flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 transition-colors',
-        isSelected ? 'bg-accent' : 'hover:bg-muted/60',
+        'group flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2.5 text-sm transition-colors',
+        isSelected
+          ? 'border-primary bg-primary/5'
+          : 'border-transparent bg-muted/40 hover:bg-muted/70',
       )}
     >
       <button
@@ -48,8 +50,10 @@ export function PresetRow({
           onSetDefault();
         }}
         className={cn(
-          'shrink-0 rounded p-0.5 transition-colors',
-          preset.is_default ? 'text-primary' : 'text-muted-foreground hover:text-foreground',
+          'shrink-0 rounded p-0.5 transition-all',
+          preset.is_default
+            ? 'text-primary'
+            : 'text-muted-foreground opacity-0 hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100',
         )}
       >
         <Star className={cn('h-3.5 w-3.5', preset.is_default && 'fill-current')} />

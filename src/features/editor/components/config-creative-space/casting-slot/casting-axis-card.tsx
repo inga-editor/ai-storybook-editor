@@ -28,12 +28,14 @@ export function CastingAxisCard({ axis, isSelected, onSelect, onEdit, onDelete }
         }
       }}
       className={cn(
-        'group cursor-pointer rounded-md border p-3 transition-colors',
-        isSelected ? 'border-primary bg-accent' : 'border-border hover:border-primary/60',
+        'group cursor-pointer rounded-lg border p-4 transition-colors',
+        isSelected
+          ? 'border-primary bg-primary/5'
+          : 'border-border bg-card hover:border-primary/50',
       )}
     >
       <div className="flex items-start justify-between gap-2">
-        <span className="min-w-0 flex-1 truncate text-sm font-medium" title={axis.name}>
+        <span className="min-w-0 flex-1 truncate text-sm font-semibold" title={axis.name}>
           {axis.name || <span className="italic text-muted-foreground">Untitled axis</span>}
         </span>
         <div className="flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">

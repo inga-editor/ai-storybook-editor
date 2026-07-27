@@ -67,7 +67,11 @@ export function ActorSelect({
   return (
     <Select value={selectedValue} onValueChange={handleValueChange} disabled={isDisabled}>
       <SelectTrigger
-        className={cn('h-8 w-[180px] shrink-0 text-xs', isDisabled && 'opacity-50')}
+        className={cn(
+          'h-7 max-w-[60%] shrink-0 gap-1 border-0 bg-transparent px-0 text-sm font-medium shadow-none',
+          'hover:text-foreground focus:ring-0 focus-visible:ring-0 focus-visible:ring-offset-0',
+          isDisabled && 'opacity-50',
+        )}
         aria-label="Actor"
       >
         {danglingActorId != null ? (

@@ -72,10 +72,11 @@ function readCurrentSlot(): BookCastingSlot {
   return normalizeCastingSlot(useBookStore.getState().currentBook?.casting_slot);
 }
 
-const COLUMN_CLASS = 'flex min-w-0 flex-1 flex-col border-r last:border-r-0';
-const COLUMN_HEADER_CLASS = 'flex h-14 shrink-0 items-center justify-between gap-2 border-b px-4';
-const COLUMN_BODY_CLASS = 'flex-1 space-y-2 overflow-y-auto p-3';
-const ADD_BUTTON_CLASS = 'flex items-center gap-1.5 text-xs font-medium text-primary transition-colors';
+const COLUMN_CLASS = 'flex min-w-0 flex-1 flex-col overflow-hidden';
+const COLUMN_HEADER_CLASS = 'mb-3 flex h-6 shrink-0 items-center justify-between gap-2';
+const COLUMN_TITLE_CLASS = 'truncate text-xs font-semibold uppercase tracking-wider text-muted-foreground';
+const COLUMN_BODY_CLASS = 'flex-1 space-y-2 overflow-y-auto pr-0.5';
+const ADD_BUTTON_CLASS = 'shrink-0 rounded p-1 text-muted-foreground transition-colors';
 const EMPTY_CLASS = 'text-xs italic text-muted-foreground';
 
 export function ConfigCastingSlotSettings() {
@@ -248,18 +249,24 @@ export function ConfigCastingSlotSettings() {
       : null;
 
   return (
-    <div className="flex h-full overflow-hidden">
+    <div className="flex h-full flex-col overflow-hidden">
+      {/* INIT header — height matches the sidebar "Settings" header */}
+      <div className="flex h-14 shrink-0 items-center border-b px-4">
+        <span className="text-sm font-semibold uppercase tracking-wide text-foreground">INIT</span>
+      </div>
+
+      <div className="flex flex-1 gap-4 overflow-hidden p-4">
       {/* Column 1 — axes */}
       <section className={COLUMN_CLASS}>
         <header className={COLUMN_HEADER_CLASS}>
-          <h3 className="text-sm font-semibold">AXES</h3>
+          <h3 className={COLUMN_TITLE_CLASS}>CASTING AXES</h3>
           <button
             type="button"
+            aria-label="Add casting axis"
             onClick={() => setModal({ kind: 'axis', mode: 'new' })}
-            className={cn(ADD_BUTTON_CLASS, 'hover:text-primary/80')}
+            className={cn(ADD_BUTTON_CLASS, 'hover:bg-muted hover:text-foreground')}
           >
-            <Plus className="h-3.5 w-3.5" />
-            Add
+            <Plus className="h-4 w-4" />
           </button>
         </header>
         <div className={COLUMN_BODY_CLASS}>
@@ -283,20 +290,20 @@ export function ConfigCastingSlotSettings() {
       {/* Column 2 — presets of the selected axis */}
       <section className={COLUMN_CLASS}>
         <header className={COLUMN_HEADER_CLASS}>
-          <h3 className="truncate text-sm font-semibold">
+          <h3 className={COLUMN_TITLE_CLASS}>
             {axis && axis.name.trim() ? `PRESETS · ${axis.name.toUpperCase()}` : 'PRESETS'}
           </h3>
           <button
             type="button"
+            aria-label="Add preset"
             disabled={!axis}
             onClick={() => setModal({ kind: 'preset', mode: 'new' })}
             className={cn(
               ADD_BUTTON_CLASS,
-              axis ? 'hover:text-primary/80' : 'cursor-not-allowed opacity-50',
+              axis ? 'hover:bg-muted hover:text-foreground' : 'cursor-not-allowed opacity-50',
             )}
           >
-            <Plus className="h-3.5 w-3.5" />
-            Add
+            <Plus className="h-4 w-4" />
           </button>
         </header>
         <div className={COLUMN_BODY_CLASS}>
@@ -321,7 +328,7 @@ export function ConfigCastingSlotSettings() {
       {/* Column 3 — roles of the selected axis, valued by the selected preset */}
       <section className={COLUMN_CLASS}>
         <header className={COLUMN_HEADER_CLASS}>
-          <h3 className="text-sm font-semibold">ACTANTS</h3>
+          <h3 className={COLUMN_TITLE_CLASS}>ACTANTS</h3>
         </header>
         <div className={COLUMN_BODY_CLASS}>
           {actantRows.length === 0 ? (
@@ -341,6 +348,7 @@ export function ConfigCastingSlotSettings() {
           )}
         </div>
       </section>
+      </div>
 
       {modal?.kind === 'axis' && (
         <CastingAxisModal
