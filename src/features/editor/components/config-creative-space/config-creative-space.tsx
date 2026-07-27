@@ -12,6 +12,7 @@ import { ConfigLayoutSettings } from './config-layout-settings';
 import { ConfigEffectSettings } from './config-effect-settings';
 import { ConfigRemixSettings } from './config-remix-settings';
 import { ConfigParametricSlotSettings } from './config-parametric-slot-settings';
+import { ConfigCastingSlotSettings } from './config-casting-slot-settings';
 import { ConfigDistributionSettings } from './config-distribution-settings';
 import { ConfigMusicsSoundsSettings } from './musics-sounds/config-musics-sounds-settings';
 import type { ConfigSection } from '@/constants/config-constants';
@@ -47,7 +48,7 @@ export function ConfigCreativeSpace() {
       case 'effect':  return <ConfigEffectSettings />;
       case 'remix':   return <ConfigRemixSettings />;
       case 'parametric-slot': return <ConfigParametricSlotSettings />;
-      case 'casting-slot': return <PlaceholderPanel label="Casting Slot" />;
+      case 'casting-slot': return <ConfigCastingSlotSettings />;
       case 'distribution': return <ConfigDistributionSettings />;
       default:        return <PlaceholderPanel label={activeSection} />;
     }

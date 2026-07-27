@@ -2,6 +2,7 @@ import type { StateCreator } from 'zustand';
 import type { SnapshotStore, PropsSlice } from '../types';
 import { createLogger } from '@/utils/logger';
 import { cascadeRemixName, cascadeRemixDelete } from '../utils/remix-name-resync';
+import { cascadeCastingDelete } from '../utils/casting-slot-resync';
 // ADR-044 §Revision 2026-07-10 (per-entity HELD session): create/edit/delete mutators mutate +
 // dirty only — the entity held session saves the WHOLE prop node on lock release. Only the
 // cross-entity REORDER stays on its own `persistEntityReorderCollab` path (out of held-session/undo
@@ -68,6 +69,7 @@ export const createPropsSlice: StateCreator<
       state.sync.isDirty = true;
     });
     cascadeRemixDelete('prop', key);
+    cascadeCastingDelete('prop', key);
     // collab: DELETE is a collection remove → explicit save (action 4); held session skips its
     // node-save on the now-null node (null-node guard).
     void persistEntityDeleteCollab('prop', key);

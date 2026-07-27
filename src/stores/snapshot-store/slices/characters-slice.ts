@@ -2,6 +2,7 @@ import type { StateCreator } from 'zustand';
 import type { SnapshotStore, CharactersSlice } from '../types';
 import { createLogger } from '@/utils/logger';
 import { cascadeRemixName, cascadeRemixDelete } from '../utils/remix-name-resync';
+import { cascadeCastingDelete } from '../utils/casting-slot-resync';
 // ADR-044 §Revision 2026-07-10 (per-entity HELD session): entity EDIT no longer fire-and-forgets —
 // it mutates + dirties only, and the entity held session (`useHeldResourceSession` mounted per
 // entity space) saves the WHOLE entity node on lock release. CREATE + DELETE, however, are
@@ -70,6 +71,7 @@ export const createCharactersSlice: StateCreator<
       state.sync.isDirty = true;
     });
     cascadeRemixDelete('character', key);
+    cascadeCastingDelete('character', key);
     // collab: DELETE is a collection remove → explicit save (action 4). The held session's release
     // then sees getNode()===null and skips its node-save (null-node guard), so no redundant 400.
     void persistEntityDeleteCollab('character', key);

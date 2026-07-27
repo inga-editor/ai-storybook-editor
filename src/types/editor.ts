@@ -376,6 +376,47 @@ export interface BookParametricSlot {
   religion: { is_enabled: boolean; values: ParametricReligionValue[] };
 }
 
+// ── Casting slot (books.casting_slot JSONB, DB-CHANGELOG 2026-07-27) ─────────
+// Book-level casting definition: N independent axes, each owning a list of
+// abstract roles (actants) + N presets that bind each role to a concrete
+// snapshot entity (character or prop). The book only declares the options; which
+// preset a given read/remix applies lives in the execution layer (not designed
+// yet). Design ref: 13-config-casting-slot-settings.md.
+export type CastingActorType = 1 | 2; // 1: character, 2: prop
+
+/** An abstract role inside an axis. `id` is a uuid so renames never break the
+ *  assignments that reference it. */
+export interface CastingActant {
+  id: string;
+  name: string;
+}
+
+/** Binds one actant to one snapshot entity. Soft FK — `actor_id` is a snapshot
+ *  `key`, so it can dangle after the entity is deleted outside the app. */
+export interface CastingAssignment {
+  actant_id: string;
+  actor_id: string;
+  actor_type: CastingActorType;
+}
+
+export interface CastingPreset {
+  id: string;
+  name: string;
+  is_default: boolean; // exactly one true per axis (normalized on read)
+  actants: CastingAssignment[]; // absent actant_id = role not cast in this preset
+}
+
+export interface CastingAxis {
+  id: string;
+  name: string;
+  actants: CastingActant[]; // role definitions (edited only via CastingAxisModal)
+  presets: CastingPreset[];
+}
+
+export interface BookCastingSlot {
+  casting_axes: CastingAxis[];
+}
+
 export interface Book {
   id: string;
   title: string;
@@ -407,6 +448,7 @@ export interface Book {
   distribution?: Distribution | null; // export-artifact state (additive, optional)
   crop_presets?: CropPreset[] | null; // Crops-tab reusable frames (additive, optional)
   parametric_slot?: BookParametricSlot | null; // reader-config param axes (additive, optional; absent = not configured)
+  casting_slot?: BookCastingSlot | null; // casting axes / presets (additive, optional; absent = not configured)
   created_at: string;
   updated_at: string;
 }

@@ -10,6 +10,7 @@ import type {
   BookEffectsSettings,
   BookRemix,
   BookParametricSlot,
+  BookCastingSlot,
   BranchTypographySettings,
   NarratorSettings,
   NarratorInferenceParams,
@@ -429,6 +430,13 @@ export const useBookRemix = (): BookRemix | null =>
 // ref and never triggers a zustand fresh-array re-render loop.
 export const useBookParametricSlot = (): BookParametricSlot | null =>
   useBookStore((s) => s.currentBook?.parametric_slot ?? null);
+
+// ── Casting slot selector ────────────────────────────────────────────────────
+// Same contract as parametric_slot: returns the RAW stored value (not normalized
+// at ingress). The panel normalizes in a useMemo / inside handlers so this
+// selector keeps a stable ref and never triggers a fresh-object re-render loop.
+export const useBookCastingSlot = (): BookCastingSlot | null =>
+  useBookStore((s) => s.currentBook?.casting_slot ?? null);
 
 /**
  * Narrator volume scale (0..2). Falls back to VOLUME_DEFAULT (1.0) when unset.
