@@ -129,6 +129,8 @@ export interface SpreadVideo {
   "z-index": number;
   player_visible: boolean;
   editor_visible: boolean;
+  /** **Scene lineage** — see `SpreadImage.original_image_id`. Currently always absent in practice:
+   *  videos only spawn blank from "Add element" (L4). Kept for future derived paths. */
   original_image_id?: string;
   tags?: SpreadTag[];
   media_url?: string;
@@ -144,6 +146,8 @@ export interface SpreadAutoPic {
   "z-index": number;
   player_visible: boolean;
   editor_visible: boolean;
+  /** **Scene lineage** — see `SpreadImage.original_image_id`. Same situation as `SpreadVideo`:
+   *  always absent today (blank "Add element" spawn only, L4). */
   original_image_id?: string;
   tags?: SpreadTag[];
   media_url?: string; // .webp (animated) | .webm (loop=true) | .lottie | .riv
@@ -417,6 +421,10 @@ export interface SpreadImage {
   player_visible?: boolean;
   editor_visible?: boolean;
   aspect_ratio?: string;
+  /** **Scene lineage** — id of the `raw_images[]` entry (= the SCENE) this item derives from.
+   *  Flat: always the ROOT raw image, never an intermediate clone. Absent = unknown/standalone
+   *  scene (valid, not an error). Soft ref — may dangle; never treat as an FK.
+   *  Invariants L1–L9: `ai-storybook-design/snapshot/illustration-structure.md#scene-lineage-original_image_id` */
   original_image_id?: string;
   tags?: SpreadTag[];
 

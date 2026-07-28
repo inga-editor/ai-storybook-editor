@@ -2,7 +2,7 @@
 
 export { useSpreadHandlers } from "./use-spread-handlers";
 export { useSpreadItemDispatch } from "./use-spread-item-dispatch";
-export { buildExtractImages } from "./use-image-builders";
+export { buildExtractImages, sceneLineageOfPlayableSource } from "./use-image-builders";
 export { useSplitTextbox } from "./use-split-textbox";
 export { useObjectModals } from "./use-object-modals";
 export type { UseObjectModalsReturn } from "./use-object-modals";

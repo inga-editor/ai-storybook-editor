@@ -18,6 +18,30 @@ export interface BuildExtractImagesOptions {
   addImage?: (spreadId: string, image: SpreadImage) => void;
   /** z-index tier for cascade. `null` → omit z-index (raw_images don't cascade). Default 'pictorial'. */
   zTier?: "pictorial" | null;
+  /**
+   * Scene id (`raw_images[].id`) the spawned images belong to — scene lineage L2/L3.
+   * The CALLER supplies it: only the caller knows which collection `sourceImage` came from.
+   * This builder never derives it from `sourceImage.id` (a playable id is NOT a scene id —
+   * writing it would forge lineage and break L3/flatness). Omitted ⇒ field left absent
+   * (raw_images[] target, or a legacy/blank source with no lineage of its own).
+   */
+  originalImageId?: string;
+}
+
+/**
+ * Scene lineage to hand to {@link buildExtractImages} when the extract source is a **playable**
+ * item (`images[]`/`videos[]`/`auto_pics[]`) — invariants L2/L3 of
+ * `ai-storybook-design/snapshot/illustration-structure.md#scene-lineage-original_image_id`.
+ *
+ * Inherit-only, deliberately: a source with no lineage spawns items with no lineage. Adding a
+ * `?? source.id` fallback here would stamp a *playable* id as a scene id — a forged lineage that
+ * breaks flatness (L3), lands in JSONB with no FK, no validation and no cleanup job (L5).
+ *
+ * Raw/illustration space (target `raw_images[]`) must NOT use this — raw is always the scene root
+ * (L9). It passes no lineage at all.
+ */
+export function sceneLineageOfPlayableSource(source: SpreadImage): string | undefined {
+  return source.original_image_id;
 }
 
 /**
@@ -38,7 +62,7 @@ export function buildExtractImages(
   actions: SnapshotActions,
   options: BuildExtractImagesOptions = {}
 ): void {
-  const { addImage = actions.addRetouchImage, zTier = "pictorial" } = options;
+  const { addImage = actions.addRetouchImage, zTier = "pictorial", originalImageId } = options;
   const orig = sourceImage.geometry;
   const isFullScreen = orig.w >= 100 && orig.h >= 100;
   const spread = spreads.find((s) => s.id === sourceSpreadId);
@@ -71,6 +95,8 @@ export function buildExtractImages(
     const newImage: SpreadImage = {
       id: crypto.randomUUID(),
       title: result.title,
+      // Scene lineage (L2/L3) — inherited verbatim from the caller; never `?? sourceImage.id`.
+      ...(originalImageId !== undefined ? { original_image_id: originalImageId } : {}),
       geometry,
       media_url: result.media_url,
       illustrations: [
@@ -97,6 +123,8 @@ export function buildExtractImages(
   log.info("buildExtractImages", "created images from extract", {
     count: results.length,
     spreadId: sourceSpreadId,
+    // Key fields only — omit rather than log `undefined` on every raw-space extract.
+    ...(originalImageId ? { originalImageId } : {}),
     firstZ,
     isFullScreen,
     geometryPositioned: results.filter((r) => r.meta?.geometry).length,

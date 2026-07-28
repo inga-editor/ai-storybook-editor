@@ -88,6 +88,7 @@ import {
   useSpreadHandlers,
   useSpreadItemDispatch,
   buildExtractImages,
+  sceneLineageOfPlayableSource,
   useSplitTextbox,
   useObjectModals,
   useCloneRaw,
@@ -504,7 +505,11 @@ export function ObjectsMainView({
         toastLockRequired();
         return;
       }
-      buildExtractImages(results, modals.extract.image, modals.extract.spreadId, retouchSpreads, actions);
+      // Scene lineage (L2/L3): source is a playable images[] entry → inherit ONLY, via the shared
+      // helper (its JSDoc + unit test pin why `?? source.id` is forbidden here).
+      buildExtractImages(results, modals.extract.image, modals.extract.spreadId, retouchSpreads, actions, {
+        originalImageId: sceneLineageOfPlayableSource(modals.extract.image),
+      });
     },
     [modals.extract.image, modals.extract.spreadId, retouchSpreads, actions, spreadEditable]
   );

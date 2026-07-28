@@ -34,6 +34,10 @@ export function useCloneRaw(
       const newImage: SpreadImage = {
         id: crypto.randomUUID(),
         title: rawImage.title ? `${rawImage.title} - Copy` : "Cloned Image",
+        // Scene lineage (L1) — birth of the lineage: source is always a raw_images[] entry,
+        // so its id IS the scene id. See design repo:
+        // ai-storybook-design/snapshot/illustration-structure.md#scene-lineage-original_image_id
+        original_image_id: rawImage.id,
         geometry: { ...rawImage.geometry },
         media_url: rawImage.media_url,
         illustrations: rawImage.illustrations ? [...rawImage.illustrations] : [],
@@ -49,6 +53,7 @@ export function useCloneRaw(
       log.info("cloneRawImage", "cloned raw image to retouch image", {
         rawImageId: rawImage.id,
         newImageId: newImage.id,
+        originalImageId: newImage.original_image_id,
         spreadId: selectedSpreadId,
       });
     },

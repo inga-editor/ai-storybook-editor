@@ -16,7 +16,7 @@ vi.mock("@/utils/logger", () => ({
   }),
 }));
 
-import { nextTopZInTier } from "./duplicate-item-helpers";
+import { cloneItemWithNewId, nextTopZInTier } from "./duplicate-item-helpers";
 import { LAYER_CONFIG } from "@/constants/spread-constants";
 
 const MEDIA = LAYER_CONFIG.MEDIA;
@@ -117,5 +117,28 @@ describe("nextTopZInTier", () => {
 
   it("empty text tier → returns TEXT.min", () => {
     expect(nextTopZInTier({}, "text")).toBe(TEXT.min);
+  });
+});
+
+// Pins the structuredClone behaviour against a regression to hand-picked field copying, which
+// would silently drop scene lineage on Ctrl+D / raw duplicate (invariant L2 — verbatim copy).
+describe("cloneItemWithNewId — scene lineage passthrough", () => {
+  it("carries original_image_id verbatim while minting a new id", () => {
+    const item = {
+      id: "img-1",
+      original_image_id: "scene-9",
+      geometry: { x: 10, y: 10, w: 20, h: 20 },
+    };
+
+    const clone = cloneItemWithNewId(item);
+
+    expect(clone.original_image_id).toBe("scene-9");
+    expect(clone.id).not.toBe("img-1");
+  });
+
+  it("leaves the key absent when the source has none (no lineage invented)", () => {
+    const clone = cloneItemWithNewId({ id: "img-2", geometry: { x: 0, y: 0, w: 10, h: 10 } });
+
+    expect(Object.prototype.hasOwnProperty.call(clone, "original_image_id")).toBe(false);
   });
 });

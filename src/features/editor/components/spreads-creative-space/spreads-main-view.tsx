@@ -418,6 +418,8 @@ export function SpreadsMainView({
         toastLockRequired();
         return;
       }
+      // No `originalImageId` on purpose (scene lineage L9 carve-out): the target is raw_images[],
+      // and a raw image IS the scene root — raw→raw extract mints a NEW scene by design.
       buildExtractImages(results, extractModalImage, selectedSpreadId, illustrationSpreads, actions, {
         addImage: actions.addRawImage,
         zTier: null,
