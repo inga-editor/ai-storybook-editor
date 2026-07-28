@@ -101,10 +101,13 @@ export function buildSketchBaseSheetPayload(node: unknown): {
  * edit is re-issued so the audit row and the server-built `metadata.sync` descriptor name the real
  * action. If the re-issue fails the data is already saved, so the create's success is reported.
  *
- * LIMIT: `jsonb_set` cannot create intermediate keys, so this heals a snapshot whose `sketch.base`
- * OBJECT exists but lacks this sheet. A snapshot with NO `sketch.base` at all (books predating the
- * base workspace entirely) is not addressable by rtype 11 — that pre-existing gap affects all
- * three sheets equally and is out of scope here.
+ * SCOPE (⚡2026-07-28): this now heals BOTH shapes — a `sketch.base` object that merely lacks this
+ * sheet, AND a snapshot with NO `sketch.base` at all (books predating the base workspace entirely).
+ * The second case used to be a silent no-op: `jsonb_set` cannot create a missing INTERMEDIATE, so
+ * the create wrote nothing yet still answered success, the re-issued edit 404'd again, and the user
+ * was told "saved". The gateway now seeds the whole `base` container on that create
+ * (`addressing._resolve_base_sheet` → `seed_container` + `seed_shape="object"`), so ONE create
+ * heals either shape permanently — this helper's contract is unchanged.
  */
 async function seedAbsentSheetNode(
   rl: ReturnType<typeof useResourceLockStore.getState>,
@@ -211,8 +214,9 @@ export async function flushSketchBaseSheetUnderLock(
     // it cannot address). Books created since the sheet existed are seeded at snapshot creation
     // (`emptyBase()` writes all three sheets), so this only happens on a book whose snapshot
     // predates the sheet — for `alter_character_sheet` that is every book created before
-    // 2026-07-28. Repair it in-band with ONE create (the gateway skips the exists-check for
-    // action_type 2 and jsonb_set create_missing adds the key under the existing `base` object).
+    // 2026-07-28, and for ALL THREE sheets every book predating the base workspace. Repair it
+    // in-band with ONE create (the gateway skips the exists-check for action_type 2, then either
+    // adds the key under an existing `base` object or seeds the whole `base` container).
     if (res.notFound) {
       const seeded = await seedAbsentSheetNode(rl, target, kind, node);
       if (seeded) return true;
