@@ -1,4 +1,4 @@
-// use-object-modals.ts - Modal state management for generate/edit/extract/editAudio modals
+// use-object-modals.ts - Modal state management for generate/edit/extract/editAudio/slot modals
 // spreadId is captured at open time to prevent stale-spread updates if selection changes while modal is open
 //
 // Toolbar unify (matrix): the Objects image footer now has SEPARATE Generate and Edit buttons.
@@ -7,6 +7,7 @@
 // The crop slice is gone — box-crop now lives in the Extract `get_object` tab.
 
 import { useState, useCallback } from "react";
+import { toast } from "sonner";
 import { createLogger } from "@/utils/logger";
 import { useSnapshotActions } from "@/stores/snapshot-store/selectors";
 import type { ExtractTabKey } from "@/features/editor/components/shared-components";
@@ -42,6 +43,10 @@ export interface UseObjectModalsReturn {
     spreadId: string;
     kind: EditAudioKind | null;
   };
+  /** ItemSlotModal — INIT-ONLY. Only ever holds an image that carries NO slot
+   *  (see `openSlot` routing below). Keeps the whole image, not just the id:
+   *  the modal seeds itself from `illustrations` / `tags` / `media_url`. */
+  slot: { open: boolean; image: SpreadImage | null; spreadId: string };
 
   openGenerate: (img: SpreadImage) => void;
   closeGenerate: (open: boolean) => void;
@@ -54,6 +59,13 @@ export interface UseObjectModalsReturn {
     kind: EditAudioKind
   ) => void;
   closeEditAudio: () => void;
+  /** Toolbar "Slot" entry point. Routes by item state (03-image-toolbar §4.9):
+   *   • no slot at all      → opens ItemSlotModal (init)
+   *   • already has a slot  → NO-OP + "Coming soon" toast; the Edit{Parametric,Casting}SlotModal
+   *     are not designed yet. The button stays enabled/visible (never-hide-disabled-UI).
+   *  Routing lives here rather than in ObjectsMainView to keep that ~1.4k-LOC file lean. */
+  openSlot: (img: SpreadImage) => void;
+  closeSlot: () => void;
   handleEditAudioComplete: (result: {
     mediaUrl: string;
     description: string;
@@ -90,6 +102,11 @@ export function useObjectModals(
   const [editAudioKind, setEditAudioKind] = useState<EditAudioKind | null>(
     null
   );
+
+  // Item slot modal (parametric_slot | casting_slot init)
+  const [slotOpen, setSlotOpen] = useState(false);
+  const [slotImage, setSlotImage] = useState<SpreadImage | null>(null);
+  const [slotSpreadId, setSlotSpreadId] = useState<string>("");
 
   // CRITICAL: deps include selectedSpreadId to capture it at open time
   const openGenerate = useCallback(
@@ -151,6 +168,38 @@ export function useObjectModals(
     setEditAudioOpen(false);
     setEditAudioItem(null);
     setEditAudioKind(null);
+  }, []);
+
+  const openSlot = useCallback(
+    (img: SpreadImage) => {
+      // Presence MUST be a truthy check: the write path sets the unused slot key to
+      // `undefined`, so `'casting_slot' in img` would report a slot that does not exist.
+      const slotType = img.casting_slot
+        ? "casting"
+        : img.parametric_slot
+          ? "parametric"
+          : null;
+      if (slotType) {
+        log.debug("openSlot", "edit modal not implemented, skip", {
+          itemId: img.id,
+          slotType,
+        });
+        toast.info("Coming soon");
+        return;
+      }
+      setSlotImage(img);
+      setSlotSpreadId(selectedSpreadId);
+      setSlotOpen(true);
+    },
+    [selectedSpreadId]
+  );
+
+  const closeSlot = useCallback(() => {
+    setSlotOpen(false);
+    setSlotImage(null);
+    // Clear the captured spread too (matching closeEditAudio) — a stale id would otherwise
+    // survive into the next open and be read by the submit-time spread-selection guard.
+    setSlotSpreadId("");
   }, []);
 
   const handleEditAudioComplete = useCallback(
@@ -217,6 +266,7 @@ export function useObjectModals(
       spreadId: editAudioSpreadId,
       kind: editAudioKind,
     },
+    slot: { open: slotOpen, image: slotImage, spreadId: slotSpreadId },
     openGenerate,
     closeGenerate,
     openEdit,
@@ -225,6 +275,8 @@ export function useObjectModals(
     closeExtract,
     openEditAudio,
     closeEditAudio,
+    openSlot,
+    closeSlot,
     handleEditAudioComplete,
   };
 }

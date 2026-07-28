@@ -3,6 +3,8 @@
 
 import type { BranchSetting } from './illustration-types';
 import type { Illustration } from './prop-types';
+// `editor.ts` imports only `@/types/human` (which imports nothing) → no cycle.
+import type { CastingActorType } from './editor';
 
 // === Unified Item Type (canvas + playable merged) ===
 export type ItemType =
@@ -350,6 +352,48 @@ export interface SpreadImageAnnotation {
   description?: string;
 }
 
+// === Item-level slots (parametric / casting) ===
+// Shape: snapshot/illustration-structure.md#parametric_slot-spec / #casting_slot-spec.
+// Book-level config lives in `books.parametric_slot` / `books.casting_slot`
+// (BookParametricSlot / BookCastingSlot in types/editor.ts); these item-level
+// shapes hold the per-item media variants that vary along ONE configured axis.
+// Mutual exclusion: an item carries at most one of the two (spec has no pipeline
+// for the 2-dimensional product); resolve order prefers casting_slot.
+
+/** One value of the controlling axis + the media generated for it.
+ *  `value` is a soft ref into `book.parametric_slot` (dangling → fallback default). */
+export interface ItemParametricSlotValue {
+  value: string;
+  is_default: boolean; // exactly one entry true
+  illustrations: Illustration[];
+}
+
+/** Item-level parametric slot — item keeps several media versions keyed by the
+ *  value of one axis of `book.parametric_slot`. */
+export interface ItemParametricSlot {
+  /** 'country' | 'religion' | '<char_key>.gender' | '<char_key>.age' | '<photo_key>' */
+  key: string;
+  values: ItemParametricSlotValue[];
+}
+
+/** One actor casted for the item's actant, with the media rendered for them.
+ *  `media_url` is a FLAT direct URL (no Illustration Entry, no history) —
+ *  deliberate divergence from parametric_slot, see #casting_slot-spec §Divergence. */
+export interface ItemCastingSlotActor {
+  id: string; // snapshot characters[].key (actor_type 1) | props[].key (actor_type 2)
+  actor_type: CastingActorType; // 1 = character, 2 = prop
+  media_url: string;
+  is_default: boolean; // exactly one entry true
+}
+
+/** Item-level casting slot — item renders exactly ONE actant; one media per actor. */
+export interface ItemCastingSlot {
+  /** soft FK → book.casting_slot.casting_axes[].actants[].id (uuid unique per book,
+   *  so the axis id is derived by lookup and never stored here). */
+  actant_id: string;
+  actors: ItemCastingSlotActor[];
+}
+
 // === Spread Item Types ===
 export interface SpreadImage {
   id: string;
@@ -379,6 +423,13 @@ export interface SpreadImage {
   // Objects space — batch image annotation (enhance-annotation flow).
   // Additive optional → non-breaking. See SpreadImageAnnotation.
   annotation?: SpreadImageAnnotation;
+
+  // Item-level slots (additive optional → non-breaking). MUTUALLY EXCLUSIVE —
+  // at most one is set; ItemSlotModal is the single enforcement point.
+  // Presence MUST be tested truthily (`!!item.casting_slot`), never with
+  // `'casting_slot' in item` — the write path sets the unused key to `undefined`.
+  parametric_slot?: ItemParametricSlot;
+  casting_slot?: ItemCastingSlot;
 }
 
 export interface SpreadTextbox {

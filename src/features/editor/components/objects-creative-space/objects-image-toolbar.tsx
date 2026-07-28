@@ -31,6 +31,15 @@ import {
 } from "@/features/editor/components/shared-components";
 import { ItemTagsSection } from "@/features/editor/components/objects-creative-space/item-tags-section";
 import {
+  ItemSlotSection,
+  ItemSlotToolbarButton,
+} from "@/features/editor/components/objects-creative-space/item-slot-section";
+// Imported from the logic module, NOT the barrel: the barrel also re-exports the modal
+// component, which would pin it into the toolbar chunk (toolbar mounts per selected image).
+import { describeItemSlot } from "@/features/editor/components/objects-creative-space/item-slot-modal/item-slot-logic";
+import { useCurrentBook } from "@/stores/book-store";
+import { useCharacters } from "@/stores/snapshot-store/selectors";
+import {
   ASPECT_RATIOS,
   type AspectRatio,
 } from "@/constants/aspect-ratio-constants";
@@ -60,10 +69,13 @@ export function ObjectsImageToolbar<TSpread extends BaseSpread>({
     onEditImage,
     onExtractImage,
     onClone,
+    onConfigureSlot,
     selectedGeometry,
     canvasRef,
   } = context;
   const { geometry } = item;
+  const book = useCurrentBook();
+  const characters = useCharacters();
 
   const position = useToolbarPosition({
     geometry: selectedGeometry,
@@ -76,6 +88,12 @@ export function ObjectsImageToolbar<TSpread extends BaseSpread>({
     if (item.aspect_ratio) return item.aspect_ratio;
     return detectRatioFromGeometry(geometry.w, geometry.h, canvasAspectRatio);
   }, [item.aspect_ratio, geometry.w, geometry.h, canvasAspectRatio]);
+
+  // describeItemSlot() re-normalizes the book config on every call — memoize.
+  const slotDescriptor = useMemo(
+    () => describeItemSlot(item, book, characters),
+    [item, book, characters]
+  );
 
   // === Handlers ===
 
@@ -165,6 +183,18 @@ export function ObjectsImageToolbar<TSpread extends BaseSpread>({
     }
   }, [onClone, item.id]);
 
+  const handleConfigureSlot = useCallback(() => {
+    if (!onConfigureSlot) {
+      toast.info("Coming soon");
+      return;
+    }
+    log.debug("handleConfigureSlot", "open slot modal", {
+      itemId: item.id,
+      slotType: slotDescriptor?.type ?? "none",
+    });
+    onConfigureSlot();
+  }, [onConfigureSlot, item.id, slotDescriptor?.type]);
+
   // === Positioning ===
 
   const toolbarStyle: React.CSSProperties = position
@@ -232,7 +262,13 @@ export function ObjectsImageToolbar<TSpread extends BaseSpread>({
           onRotationReset={handleRotationReset}
         />
 
-        {/* === FOOTER === Generate · Edit · Extract · Duplicate | Delete (matrix unify) */}
+        {/* Row 6: Slot (read-only summary, click = footer Slot button) */}
+        <ItemSlotSection
+          descriptor={slotDescriptor}
+          onClick={handleConfigureSlot}
+        />
+
+        {/* === FOOTER === Generate · Edit · Extract · Duplicate · Slot | Delete (matrix unify) */}
         <div className="flex items-center justify-between gap-1 border-t border-border pt-2">
           <div className="flex items-center gap-1">
             <ToolbarIconButton
@@ -254,6 +290,11 @@ export function ObjectsImageToolbar<TSpread extends BaseSpread>({
               icon={Copy}
               label="Duplicate"
               onClick={handleDuplicate}
+            />
+            <ItemSlotToolbarButton
+              descriptor={slotDescriptor}
+              hasHandler={!!onConfigureSlot}
+              onClick={handleConfigureSlot}
             />
           </div>
           <ToolbarIconButton

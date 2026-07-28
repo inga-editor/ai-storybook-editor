@@ -7,7 +7,7 @@ import { Languages, Mic, MessageSquare } from "lucide-react";
 import { createLogger } from "@/utils/logger";
 import { buildImageVersionSaveResource } from "@/utils/save-resource-path";
 import type { SaveResourceDirective } from "@/types/save-resource";
-import { toastLockRequired } from "@/utils/collab-save-toasts";
+import { toastLockRequired, toastSpreadSelectionMoved } from "@/utils/collab-save-toasts";
 import { TranslateSpreadModal, type ApplyTranslationsPayload } from "./translate-spread-modal";
 import {
   EnhanceSpreadNarrationModal,
@@ -53,6 +53,7 @@ import {
 } from "@/features/editor/components/shared-components/extract-image-modal/crop-preset-utils";
 import type { CropPreset } from "@/types/editor";
 import { useSounds } from "@/stores/sounds-store";
+import { ItemSlotModal, type SlotPatch } from "./item-slot-modal";
 import { RetouchEditImageModal } from "./retouch-edit-image-modal";
 import { RetouchGenerateImageModal } from "./retouch-generate-image-modal";
 import { ObjectsImageToolbar } from "./objects-image-toolbar";
@@ -471,7 +472,7 @@ export function ObjectsMainView({
   const { splitTextbox } = useSplitTextbox(actions, onItemSelect, langCode, canvasWidth, canvasHeight);
 
   const modals = useObjectModals(selectedSpreadId, actions);
-  const { openGenerate, openEdit, openExtract, openEditAudio } = modals;
+  const { openGenerate, openEdit, openExtract, openEditAudio, openSlot, closeSlot } = modals;
 
   // === Phase 04: opt-in saveResource directive (anchor = retouch images node) ===
   // Only the Edit path is wired: a retouch layer edit writes a new image_version at the existing
@@ -560,6 +561,50 @@ export function ObjectsMainView({
       handleSpreadItemAction(params);
     },
     [spreadEditable, handleSpreadItemAction],
+  );
+
+  // Slot init write. The patch always carries BOTH slot keys with exactly one of them `undefined`
+  // (mutual exclusion). `updateRetouchImage` applies it with `Object.assign` on the immer draft, so
+  // the `undefined` key IS materialized on the in-store item — it is neither dropped nor deleted.
+  // The save path's `JSON.stringify` then omits it, so the server blob stays clean. CONSEQUENCE:
+  // every slot existence check MUST be truthy (`!!item.casting_slot`) — never `'casting_slot' in
+  // item` nor `Object.keys(item).includes(...)`, which would report a slot that does not exist.
+  // Single writer: gate → useSpreadItemDispatch → updateRetouchImage. Persist is the held-session
+  // release/saveNow (ADR-044, rtype 10) — deliberately NO saveResource/autoSaveSnapshot here, and
+  // deliberately NO commitOnModalClose either (unlike Translate/Narration/Annotation): a slot write
+  // is a plain canvas mutation like drag/resize, so it rides the normal release/saveNow flush.
+  const handleSlotSubmit = useCallback(
+    (patch: SlotPatch) => {
+      const image = modals.slot.image;
+      const spreadId = modals.slot.spreadId;
+      if (!image || !spreadId) {
+        log.warn("handleSlotSubmit", "missing slot modal state, skip", { hasImage: !!image, spreadId });
+        return;
+      }
+      // `spreadEditable` (checked by the gate) describes the SELECTED spread, while this write
+      // targets the spread captured at open time. If selection moved and the lock was re-acquired
+      // elsewhere, the gate would pass but the captured spread's held session is already over ⇒ the
+      // mutation would dirty the store and never persist. Bail rather than lose the write silently.
+      if (spreadId !== selectedSpreadId) {
+        log.warn("handleSlotSubmit", "spread selection changed since open, skip", { spreadId, selectedSpreadId });
+        // Closing without a toast would read as "it worked" — the modal just vanishes and nothing
+        // is written. Tell the user WHY the init was dropped (never hide a silent no-op).
+        toastSpreadSelectionMoved();
+        closeSlot();
+        return;
+      }
+      log.info("handleSlotSubmit", "write slot patch", {
+        itemId: image.id,
+        spreadId,
+        slotType: patch.casting_slot ? "casting" : "parametric",
+      });
+      gatedSpreadItemAction({ spreadId, itemType: "image", action: "update", itemId: image.id, data: patch });
+      closeSlot();
+    },
+    // Depend on the primitives, not `modals.slot` — the hook rebuilds that object literal every
+    // render, so an object dep would defeat the memo (same reason the extract handler above
+    // destructures `modals.extract.image` / `.spreadId`).
+    [modals.slot.image, modals.slot.spreadId, selectedSpreadId, gatedSpreadItemAction, closeSlot]
   );
 
   const { stackRef } = useInteractionLayerContext();
@@ -922,10 +967,12 @@ export function ObjectsMainView({
           onEditImage: () => openEdit(context.item),
           onExtractImage: () => openExtract(context.item),
           onClone: () => gatedDuplicateItem("image", context.item.id),
+          // openSlot routes: no slot ⇒ init modal; already-slotted ⇒ "Coming soon" toast.
+          onConfigureSlot: () => openSlot(context.item),
         }}
       />
     ),
-    [openGenerate, openEdit, openExtract, gatedDuplicateItem]
+    [openGenerate, openEdit, openExtract, gatedDuplicateItem, openSlot]
   );
 
   const { cloneRawImage, cloneRawTextbox } = useCloneRaw(retouchSpreads, selectedSpreadId, actions);
@@ -1160,6 +1207,19 @@ export function ObjectsMainView({
           enabledTools={SPACE_TOOL_MATRIX.object.edit}
           onCommitSave={onCommitSave}
           saveResource={editSaveResource}
+        />
+      )}
+
+      {modals.slot.image && (
+        <ItemSlotModal
+          open={modals.slot.open}
+          item={modals.slot.image}
+          book={book}
+          characters={characters}
+          props={props}
+          isSpreadEditable={spreadEditable}
+          onSubmit={handleSlotSubmit}
+          onClose={closeSlot}
         />
       )}
 

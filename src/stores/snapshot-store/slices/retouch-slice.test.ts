@@ -72,3 +72,46 @@ describe('revertRetouchOwnedSubtree', () => {
     expect(sp1.images).toEqual([{ id: 'i1' }, { id: 'iNEW' }]);
   });
 });
+
+describe('slot mutual exclusion', () => {
+  it('patch with parametric_slot: undefined + casting_slot: seed clears parametric and sets casting', () => {
+    useSnapshotStore.setState((s) => {
+      const img = asState({
+        id: 'img_1',
+        geometry: { x: 0, y: 0, w: 100, h: 100 },
+        media_url: 'https://example.test/image.png',
+        parametric_slot: {
+          key: 'char_a.gender',
+          values: [{ value: 'male', is_default: true, illustrations: [] }],
+        },
+      });
+      s.illustration.spreads = [asState({ id: 'sp1', images: [img] })];
+    });
+
+    const castingSeed = asState({
+      actant_id: 'sibling_1',
+      actors: [{ id: 'char_alice', actor_type: 1, media_url: 'https://example.test/image.png', is_default: true }],
+    });
+
+    useSnapshotStore.getState().updateRetouchImage('sp1', 'img_1', {
+      parametric_slot: undefined,
+      casting_slot: castingSeed,
+    });
+
+    const image = useSnapshotStore.getState().illustration.spreads[0].images[0] as unknown as Record<string, unknown>;
+
+    // parametric_slot must be undefined (falsy check)
+    expect(image.parametric_slot).toBeUndefined();
+    // LOAD-BEARING: immer MATERIALIZES a key assigned `undefined` (Object.assign on the draft),
+    // so the key still exists on the in-store item. Four comment blocks in the slot feature tell
+    // callers to use truthy checks (`!!item.casting_slot`) because of exactly this. If immer ever
+    // starts dropping the key, this assertion fails and those comments become stale — not silently.
+    expect('parametric_slot' in image).toBe(true);
+    // casting_slot must be set
+    expect(image.casting_slot).toEqual(castingSeed);
+    // JSON.stringify must NOT include parametric_slot key (persist clean)
+    const persisted = JSON.parse(JSON.stringify(image)) as Record<string, unknown>;
+    expect('parametric_slot' in persisted).toBe(false);
+    expect('casting_slot' in persisted).toBe(true);
+  });
+});

@@ -25,6 +25,17 @@ export function toastLockRequired(): void {
   toast.info('Click the spread to start editing its objects.', { id: 'retouch-lock-required' });
 }
 
+/** A spread-item write was SKIPPED because the spread selection moved between opening the modal
+ *  and submitting it: the captured spread's held session is already over, so the mutation would
+ *  dirty the store and never persist. Same id as the lock-required toast family → one line, never
+ *  stacked. Never hide a silent no-op: the user must learn the change was not written. */
+export function toastSpreadSelectionMoved(): void {
+  toast.info('Selection moved to another spread — your change was not saved.', {
+    id: 'retouch-spread-selection-moved',
+    description: 'Reselect the spread to start editing it, then try again.',
+  });
+}
+
 /** A save was BLOCKED because the target sketch resource is DEGRADED (unreadable raw data,
  *  consent pending — ADR-047). Single toast id → repeated blocked saves replace, never stack.
  *  Never hide disabled UI: the user must always learn WHY the save did not happen. */

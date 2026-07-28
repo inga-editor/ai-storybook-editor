@@ -423,6 +423,9 @@ export interface ImageToolbarContext<TSpread extends BaseSpread>
   onExtractImage?: () => void;
   onReplaceImage: () => void;
   onClone?: () => void;
+  /** Open the item slot modal (init) or route to the edit-slot modal when the item
+   *  already carries a slot. Owner: ObjectsMainView. Absent → toolbar shows "Coming soon". */
+  onConfigureSlot?: () => void;
   /** Trigger inline edit mode for the selected image — set by parent via editingItemId state.
    *  Only meaningful for spaces with inline image editing (dummy art-note). */
   onEditArtNote?: () => void;
