@@ -51,14 +51,13 @@ export const SKETCH_KIND_TO_SHEET_RESOURCE_ID: Record<BaseKind, string> = { ...B
 /** rtype 11 = base_sheet (kind-level sheet node). */
 const RESOURCE_TYPE_BASE_SHEET = 11 satisfies ResourceType;
 
-/** crud audit enum for a base-sheet save: 3 = edit. The sheet node is normally seeded empty at
- *  snapshot CREATION (`emptyBase()` → all three sheets), so an edit always resolves. See
- *  `flushSketchBaseSheetUnderLock` for the one case where it does not (a book whose snapshot
- *  predates a sheet) and the create-repair that heals it. */
+/** crud audit enum for a base-sheet save: 3 = edit — the ONLY action this space ever sends.
+ *  ⚡2026-07-28: the gateway UPSERTS rtype 11 (a base sheet is a fixed-key singleton that nothing
+ *  mints and nothing deletes, so "not found" can only mean "never written"), which means an edit
+ *  resolves even on a snapshot whose `sketch.base` lacks this sheet — or has no `base` at all.
+ *  The old client-side 404 → create → re-issue repair is therefore GONE (3 round-trips → 1); do
+ *  not reintroduce it, and see `api/resource/04-save.md` §rtype 11 before changing the contract. */
 const ACTION_TYPE_EDIT = 3 as const;
-
-/** crud audit enum 2 = create — used ONLY by the seed repair below, never by a normal save. */
-const ACTION_TYPE_CREATE = 2 as const;
 
 /**
  * Build the STEP-1 / rtype-11 LockTarget for a per-kind base sheet node (whole-sheet grain).
@@ -84,63 +83,6 @@ export function buildSketchBaseSheetPayload(node: unknown): {
   log: true;
 } {
   return { action_type: ACTION_TYPE_EDIT, patch: node, log: true };
-}
-
-/**
- * Repair a base-sheet save that 404'd because the sheet node is ABSENT in the stored snapshot.
- *
- * Why this exists: the ONLY production seeder of `sketch.base` is snapshot CREATION
- * (`emptyBase()` in `sketch-normalize.ts`, written by `build-snapshot-from-parsed.ts`), and it
- * seeds exactly the sheets that existed when the book was created. `normalizeSketch` back-fills a
- * missing sheet CLIENT-side, but under collab the whole-doc autosave is suppressed, so that
- * in-memory default is never written back — the gateway keeps 404-ing the very first save of the
- * new sheet. One create heals it permanently.
- *
- * Audit policy mirrors `resource-lock-store#saveWithCreateFallback`: the create is infrastructure
- * repair, not a user action → `log:false` (no audit row, no content-sync event), then the ORIGINAL
- * edit is re-issued so the audit row and the server-built `metadata.sync` descriptor name the real
- * action. If the re-issue fails the data is already saved, so the create's success is reported.
- *
- * SCOPE (⚡2026-07-28): this now heals BOTH shapes — a `sketch.base` object that merely lacks this
- * sheet, AND a snapshot with NO `sketch.base` at all (books predating the base workspace entirely).
- * The second case used to be a silent no-op: `jsonb_set` cannot create a missing INTERMEDIATE, so
- * the create wrote nothing yet still answered success, the re-issued edit 404'd again, and the user
- * was told "saved". The gateway now seeds the whole `base` container on that create
- * (`addressing._resolve_base_sheet` → `seed_container` + `seed_shape="object"`), so ONE create
- * heals either shape permanently — this helper's contract is unchanged.
- */
-async function seedAbsentSheetNode(
-  rl: ReturnType<typeof useResourceLockStore.getState>,
-  target: LockTarget,
-  kind: BaseKind,
-  node: unknown,
-): Promise<boolean> {
-  log.info('seedAbsentSheetNode', 'sheet node absent server-side — seeding with a create', {
-    kind,
-    sheet: target.resource_id,
-  });
-  const created = await rl.save(target, {
-    action_type: ACTION_TYPE_CREATE,
-    patch: node,
-    log: false, // infrastructure repair — never audited as a user "create"
-  });
-  if (!created.ok) {
-    log.warn('seedAbsentSheetNode', 'seed create rejected', {
-      kind,
-      lost: created.lost,
-      forbidden: created.forbidden,
-      notFound: created.notFound ?? false,
-    });
-    return false;
-  }
-  const relogged = await rl.save(target, buildSketchBaseSheetPayload(node));
-  if (!relogged.ok) {
-    log.warn('seedAbsentSheetNode', 'audit re-issue failed — data already saved by the seed create', {
-      kind,
-      sheet: target.resource_id,
-    });
-  }
-  return true;
 }
 
 export interface FlushSketchBaseSheetOptions {
@@ -210,17 +152,11 @@ export async function flushSketchBaseSheetUnderLock(
       log.info('flushSketchBaseSheetUnderLock', 'saved', { kind, acquiredHere });
       return true;
     }
-    // 404 = the sheet node is ABSENT in the stored snapshot (the gateway refuses an EDIT of a node
-    // it cannot address). Books created since the sheet existed are seeded at snapshot creation
-    // (`emptyBase()` writes all three sheets), so this only happens on a book whose snapshot
-    // predates the sheet — for `alter_character_sheet` that is every book created before
-    // 2026-07-28, and for ALL THREE sheets every book predating the base workspace. Repair it
-    // in-band with ONE create (the gateway skips the exists-check for action_type 2, then either
-    // adds the key under an existing `base` object or seeds the whole `base` container).
-    if (res.notFound) {
-      const seeded = await seedAbsentSheetNode(rl, target, kind, node);
-      if (seeded) return true;
-    }
+    // ⚡2026-07-28: a 404 no longer means "the sheet node is absent" — the gateway upserts rtype 11
+    // (see ACTION_TYPE_EDIT), so an absent sheet, an absent `sketch.base`, and a book predating the
+    // base workspace all resolve on the first save. A 404 that survives now means a genuinely
+    // unaddressable target (off-allowlist resource_id / missing book snapshot) → report, do not
+    // retry: re-issuing as a create would 404 identically.
     log.warn('flushSketchBaseSheetUnderLock', 'save rejected', {
       kind,
       lost: res.lost,

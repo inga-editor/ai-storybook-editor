@@ -155,50 +155,34 @@ describe('flushSketchBaseSheetUnderLock', () => {
   });
 });
 
-// The ONLY production seeder of `sketch.base` is snapshot CREATION (`emptyBase()`), which writes
-// the sheets that existed when the book was created. A book created before 2026-07-28 therefore has
-// NO `alter_character_sheet` node → the very first alter save would 404 forever (collab suppresses
-// the whole-doc autosave that would otherwise write the client-side normalize default back).
-describe('flushSketchBaseSheetUnderLock — absent sheet node (first-ever save must not 404)', () => {
-  it('404 on the edit → seeds with a create (log:false) then re-issues the edit for the audit', async () => {
+// ⚡2026-07-28: the gateway UPSERTS rtype 11 (fixed-key singleton — nothing mints or deletes a base
+// sheet, so "not found" can only mean "never written"), so a snapshot missing the sheet — or missing
+// `sketch.base` entirely — resolves on the FIRST save. The client-side 404 → create → re-issue
+// repair was deleted with it; these pin that no retry sneaks back in.
+describe('flushSketchBaseSheetUnderLock — 404 is terminal (gateway upserts, no client repair)', () => {
+  it('a 404 is NOT retried as a create — one save call, false', async () => {
     h.state.collabPersist = true;
-    h.state.save
-      .mockResolvedValueOnce({ ok: false, lost: false, forbidden: false, notFound: true }) // edit → 404
-      .mockResolvedValueOnce({ ok: true }) // seed create
-      .mockResolvedValueOnce({ ok: true }); // audit re-issue
-
-    const ok = await flushSketchBaseSheetUnderLock('alter_characters', SHEET_NODE);
-
-    expect(ok).toBe(true);
-    const target = { step: 1, resource_type: 11, resource_id: 'alter_character_sheet', locale: null };
-    expect(h.state.save).toHaveBeenNthCalledWith(1, target, { action_type: 3, patch: SHEET_NODE, log: true });
-    // Repair create is NOT audited (log:false) — it is infrastructure, not a user action.
-    expect(h.state.save).toHaveBeenNthCalledWith(2, target, { action_type: 2, patch: SHEET_NODE, log: false });
-    // …then the original edit is re-issued so the audit row names the real action.
-    expect(h.state.save).toHaveBeenNthCalledWith(3, target, { action_type: 3, patch: SHEET_NODE, log: true });
-  });
-
-  it('404 → seed create succeeds but the audit re-issue fails → still true (data IS saved)', async () => {
-    h.state.collabPersist = true;
-    h.state.save
-      .mockResolvedValueOnce({ ok: false, lost: false, forbidden: false, notFound: true })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: false, lost: true, forbidden: false });
-
-    expect(await flushSketchBaseSheetUnderLock('alter_characters', SHEET_NODE)).toBe(true);
-  });
-
-  it('404 → seed create ALSO rejected → false (no infinite repair loop)', async () => {
-    h.state.collabPersist = true;
-    h.state.save
-      .mockResolvedValueOnce({ ok: false, lost: false, forbidden: false, notFound: true })
-      .mockResolvedValueOnce({ ok: false, lost: false, forbidden: true });
+    h.state.save.mockResolvedValueOnce({ ok: false, lost: false, forbidden: false, notFound: true });
 
     expect(await flushSketchBaseSheetUnderLock('alter_characters', SHEET_NODE)).toBe(false);
-    expect(h.state.save).toHaveBeenCalledTimes(2); // edit + ONE create attempt, nothing more
+    expect(h.state.save).toHaveBeenCalledTimes(1);
+    expect(h.state.save).toHaveBeenCalledWith(
+      { step: 1, resource_type: 11, resource_id: 'alter_character_sheet', locale: null },
+      { action_type: 3, patch: SHEET_NODE, log: true },
+    );
   });
 
-  it('a NON-404 rejection is never retried as a create (lock lost ≠ missing node)', async () => {
+  it('never sends action_type 2 — a base-sheet save is always an EDIT', async () => {
+    h.state.collabPersist = true;
+    h.state.save.mockResolvedValue({ ok: false, lost: false, forbidden: false, notFound: true });
+
+    await flushSketchBaseSheetUnderLock('characters', SHEET_NODE);
+    for (const [, payload] of h.state.save.mock.calls) {
+      expect((payload as { action_type: number }).action_type).toBe(3);
+    }
+  });
+
+  it('a NON-404 rejection is not retried either (lock lost)', async () => {
     h.state.collabPersist = true;
     h.state.save.mockResolvedValueOnce({ ok: false, lost: true, forbidden: false });
 
@@ -206,14 +190,11 @@ describe('flushSketchBaseSheetUnderLock — absent sheet node (first-ever save m
     expect(h.state.save).toHaveBeenCalledTimes(1);
   });
 
-  it('seed repair also releases a one-shot lock it acquired itself', async () => {
+  it('a rejected save still releases a one-shot lock it acquired itself', async () => {
     h.state.collabPersist = true;
-    h.state.save
-      .mockResolvedValueOnce({ ok: false, lost: false, forbidden: false, notFound: true })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true });
+    h.state.save.mockResolvedValueOnce({ ok: false, lost: false, forbidden: false, notFound: true });
 
-    expect(await flushSketchBaseSheetUnderLock('alter_characters', SHEET_NODE, { releaseIfAcquired: true })).toBe(true);
+    expect(await flushSketchBaseSheetUnderLock('alter_characters', SHEET_NODE, { releaseIfAcquired: true })).toBe(false);
     expect(h.state.release).toHaveBeenCalledWith({
       step: 1,
       resource_type: 11,
