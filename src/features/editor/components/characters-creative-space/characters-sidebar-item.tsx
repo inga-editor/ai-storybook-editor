@@ -51,19 +51,15 @@ import {
   type LockTarget,
 } from "@/stores/resource-lock-store";
 import { useAssetCategories } from "@/stores/asset-category-store";
+import { GENDER_OPTIONS } from "@/constants/character-constants";
 import { cn } from "@/utils/utils";
 import { createLogger } from "@/utils/logger";
 
 const log = createLogger("Editor", "CharactersSidebarItem");
 
-// Static dropdown options for gender and role fields
-const GENDER_OPTIONS = [
-  { value: "male", label: "Male" },
-  { value: "female", label: "Female" },
-  { value: "non-binary", label: "Non-binary" },
-  { value: "other", label: "Other" },
-] as const;
-
+// Static dropdown options for the role field. GENDER_OPTIONS moved to
+// @/constants/character-constants (SSOT — the parametric-slot gender axis in
+// objects-creative-space derives its domain from the SAME vocabulary).
 const ROLE_OPTIONS = [
   { value: "protagonist", label: "Protagonist" },
   { value: "antagonist", label: "Antagonist" },

@@ -306,6 +306,103 @@ export async function callImageUpscale(
   return result;
 }
 
+// --- Parametric variant (image/06-generate-parametric-variant.md) ---
+
+/** Which axis family the variant is generated along — selects the BE system prompt (1 endpoint,
+ *  3 prompt rows). `photo` axes are NOT generatable (BE → 400 UNSUPPORTED_AXIS); the FE disables
+ *  Generate for them, so the union deliberately has no `photo` member. */
+export type ParametricAxisKind = 'character' | 'country' | 'religion';
+
+/** Sub-axis of the `character` kind. Absent for country/religion. */
+export type ParametricAxisName = 'gender' | 'age';
+
+export interface GenerateParametricVariantPayload {
+  axisKind: ParametricAxisKind;
+  axisName?: ParametricAxisName;
+  /** Source ("ảnh gốc") resolved by the FE chain — see 01-visuals-tab.md §4.1. */
+  sourceImageUrl: string;
+  sourceValue: string;
+  targetValue: string;
+  /** Human-readable forms fed to the prompt (`age` → "5 tuổi", `country` → "Vietnam").
+   *  Omitted when the raw value already reads fine (gender / religion). */
+  sourceValueLabel?: string;
+  targetValueLabel?: string;
+  characterName?: string;
+  /** Optional extra user instruction (≤1000 chars) — the main instruction is server-side. */
+  prompt?: string;
+  referenceImages?: Array<{ base64Data: string; mimeType: string }>;
+  imageSize?: '1K' | '2K' | '4K';
+  modelParams?: { model: string; params?: { temperature?: number } };
+  /** Book-edit context → ai_service_logs.snapshot_id (book cost). */
+  snapshotId?: string;
+  /** Remix context → ai_service_logs.remix_id (discriminator — wins over snapshotId). */
+  remixId?: string;
+  /** Opt-in auto-persist directive (anchor = the `values[]` entry of `targetValue`). */
+  saveResource?: SaveResourceDirective;
+  // ⚠ NO `aspectRatio`: the server measures the source image and picks the nearest enum so every
+  // value of one item stacks pixel-for-pixel. Blocked at the type level on purpose — do NOT add.
+}
+
+export interface GenerateParametricVariantResult {
+  success: true;
+  data: {
+    imageUrl: string;
+    storagePath: string;
+    aiRequestId?: string;
+  } & SaveResourceOutcomeFields;
+  meta?: {
+    processingTime?: number;
+    mimeType?: string;
+    tokenUsage?: number;
+    model?: string;
+    aspectRatio?: string;
+    promptTemplate?: string;
+  };
+}
+
+/**
+ * Generate ONE parametric-slot value variant of an image (Gemini, sync) → permanent Storage URL.
+ * POST /api/image/generate-parametric-variant. Thin wrapper (parity `callImageUpscale`): no retry,
+ * no error mapping — the UI reads `errorCode` and maps it to a toast (01-visuals-tab.md §5).
+ */
+export async function callGenerateParametricVariant(
+  payload: GenerateParametricVariantPayload,
+): Promise<GenerateParametricVariantResult | ImageApiFailure> {
+  // Countable/enum fields only — never the prompt text, the reference base64, or the full
+  // source URL (may carry a signed token): host only.
+  log.info('callGenerateParametricVariant', 'start', {
+    axisKind: payload.axisKind,
+    axisName: payload.axisName,
+    sourceValue: payload.sourceValue,
+    targetValue: payload.targetValue,
+    host: urlHost(payload.sourceImageUrl),
+    refCount: payload.referenceImages?.length ?? 0,
+    hasPrompt: !!payload.prompt,
+    hasSaveResource: !!payload.saveResource,
+  });
+  const result = await callImageApi<GenerateParametricVariantResult>(
+    '/api/image/generate-parametric-variant',
+    payload,
+  );
+  if (result.success) {
+    log.debug('callGenerateParametricVariant', 'ok', {
+      host: urlHost(result.data.imageUrl),
+      targetValue: payload.targetValue,
+      saved: result.data.saved,
+      aspectRatio: result.meta?.aspectRatio,
+    });
+  } else {
+    log.error('callGenerateParametricVariant', 'failed', {
+      errorCode: result.errorCode,
+      httpStatus: result.httpStatus,
+      axisKind: payload.axisKind,
+      targetValue: payload.targetValue,
+    });
+  }
+  warnIfSaveResourceFailed(log.warn, 'callGenerateParametricVariant', result);
+  return result;
+}
+
 /** Map API trait shape → persisted DB shape: drop `present`, null-out description when absent, reserve image_url. */
 export function toStoredTraits(apiTraits: ExtractedTrait[]): VisualProfileTrait[] {
   return apiTraits.map((t) => ({

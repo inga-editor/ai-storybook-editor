@@ -47,6 +47,11 @@ export interface UseObjectModalsReturn {
    *  (see `openSlot` routing below). Keeps the whole image, not just the id:
    *  the modal seeds itself from `illustrations` / `tags` / `media_url`. */
   slot: { open: boolean; image: SpreadImage | null; spreadId: string };
+  /** EditParametricSlotModal — item that ALREADY carries a `parametric_slot`.
+   *  ⚡ Holds the ID, not the image object (unlike `slot`): this modal WRITES `values[]` and
+   *  must re-render from the live store item, so ObjectsMainView re-resolves it per render.
+   *  A captured snapshot would freeze the version grid after the first generate. */
+  parametric: { open: boolean; imageId: string | null; spreadId: string };
 
   openGenerate: (img: SpreadImage) => void;
   closeGenerate: (open: boolean) => void;
@@ -60,12 +65,14 @@ export interface UseObjectModalsReturn {
   ) => void;
   closeEditAudio: () => void;
   /** Toolbar "Slot" entry point. Routes by item state (03-image-toolbar §4.9):
+   *   • `casting_slot`      → NO-OP + "Coming soon" toast (EditCastingSlotModal has no design yet;
+   *     its `actants`/`actors` shape differs from `values[]`, so it cannot reuse this shell).
+   *   • `parametric_slot`   → opens EditParametricSlotModal (edit)
    *   • no slot at all      → opens ItemSlotModal (init)
-   *   • already has a slot  → NO-OP + "Coming soon" toast; the Edit{Parametric,Casting}SlotModal
-   *     are not designed yet. The button stays enabled/visible (never-hide-disabled-UI).
    *  Routing lives here rather than in ObjectsMainView to keep that ~1.4k-LOC file lean. */
   openSlot: (img: SpreadImage) => void;
   closeSlot: () => void;
+  closeParametric: () => void;
   handleEditAudioComplete: (result: {
     mediaUrl: string;
     description: string;
@@ -107,6 +114,11 @@ export function useObjectModals(
   const [slotOpen, setSlotOpen] = useState(false);
   const [slotImage, setSlotImage] = useState<SpreadImage | null>(null);
   const [slotSpreadId, setSlotSpreadId] = useState<string>("");
+
+  // Edit-parametric-slot modal (item already carries a parametric_slot)
+  const [parametricOpen, setParametricOpen] = useState(false);
+  const [parametricImageId, setParametricImageId] = useState<string | null>(null);
+  const [parametricSpreadId, setParametricSpreadId] = useState<string>("");
 
   // CRITICAL: deps include selectedSpreadId to capture it at open time
   const openGenerate = useCallback(
@@ -174,17 +186,23 @@ export function useObjectModals(
     (img: SpreadImage) => {
       // Presence MUST be a truthy check: the write path sets the unused slot key to
       // `undefined`, so `'casting_slot' in img` would report a slot that does not exist.
-      const slotType = img.casting_slot
-        ? "casting"
-        : img.parametric_slot
-          ? "parametric"
-          : null;
-      if (slotType) {
-        log.debug("openSlot", "edit modal not implemented, skip", {
+      if (img.casting_slot) {
+        log.debug("openSlot", "casting edit modal not implemented, skip", {
           itemId: img.id,
-          slotType,
         });
         toast.info("Coming soon");
+        return;
+      }
+      if (img.parametric_slot) {
+        log.info("openSlot", "open parametric edit modal", {
+          itemId: img.id,
+          spreadId: selectedSpreadId,
+          key: img.parametric_slot.key,
+          valueCount: img.parametric_slot.values.length,
+        });
+        setParametricImageId(img.id);
+        setParametricSpreadId(selectedSpreadId);
+        setParametricOpen(true);
         return;
       }
       setSlotImage(img);
@@ -193,6 +211,14 @@ export function useObjectModals(
     },
     [selectedSpreadId]
   );
+
+  const closeParametric = useCallback(() => {
+    setParametricOpen(false);
+    setParametricImageId(null);
+    // Clear the captured spread too — a stale id would survive into the next open and be read
+    // by the drift guard (parity closeSlot).
+    setParametricSpreadId("");
+  }, []);
 
   const closeSlot = useCallback(() => {
     setSlotOpen(false);
@@ -267,6 +293,11 @@ export function useObjectModals(
       kind: editAudioKind,
     },
     slot: { open: slotOpen, image: slotImage, spreadId: slotSpreadId },
+    parametric: {
+      open: parametricOpen,
+      imageId: parametricImageId,
+      spreadId: parametricSpreadId,
+    },
     openGenerate,
     closeGenerate,
     openEdit,
@@ -277,6 +308,7 @@ export function useObjectModals(
     closeEditAudio,
     openSlot,
     closeSlot,
+    closeParametric,
     handleEditAudioComplete,
   };
 }

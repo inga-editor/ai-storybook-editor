@@ -159,7 +159,7 @@ export function parseAgeSeed(
  *  lookup, so a photo key ending in `.gender`/`.age` would be claimed by the
  *  character branch and never reach `normalized.photos` — photo keys must never
  *  use those two suffixes. */
-function splitCharacterAxis(key: string): { charKey: string; axis: 'gender' | 'age' } | null {
+export function splitCharacterAxis(key: string): { charKey: string; axis: 'gender' | 'age' } | null {
   const dot = key.lastIndexOf('.');
   if (dot <= 0) return null;
   const axis = key.slice(dot + 1);

@@ -1,5 +1,6 @@
 // use-object-modals.test.ts — Pins the `openSlot` ROUTING invariant (03-image-toolbar §4.9):
-// the ItemSlotModal is INIT-ONLY, so an item that already carries a slot must NOT open it.
+// the ItemSlotModal is INIT-ONLY, so an item that already carries a slot must NOT open it —
+// `parametric_slot` routes to EditParametricSlotModal, `casting_slot` still toasts "Coming soon".
 // The check has to be TRUTHY (`img.casting_slot`), never `'casting_slot' in img`: the init write
 // sets the unused slot key to `undefined` and immer materializes that key on the stored item, so a
 // key-presence check would report a slot that does not exist and lock the user out of Init forever.
@@ -66,7 +67,9 @@ describe('useObjectModals.openSlot routing', () => {
     expect(toast.info).toHaveBeenCalledWith('Coming soon');
   });
 
-  it('item with parametric_slot → does NOT open, shows "Coming soon"', () => {
+  // ⚡2026-07-28: parametric no longer no-ops — it routes to EditParametricSlotModal. Casting
+  // keeps the toast (its `actants`/`actors` shape has no design yet).
+  it('item with parametric_slot → opens the EDIT modal (by id), not the init modal', () => {
     const { result } = renderModals();
     const img = makeImage({
       parametric_slot: {
@@ -79,7 +82,27 @@ describe('useObjectModals.openSlot routing', () => {
 
     expect(result.current.slot.open).toBe(false);
     expect(result.current.slot.image).toBeNull();
-    expect(toast.info).toHaveBeenCalledWith('Coming soon');
+    expect(toast.info).not.toHaveBeenCalled();
+    expect(result.current.parametric.open).toBe(true);
+    // ID, not the object: the modal writes `values[]` and must re-resolve the LIVE store item.
+    expect(result.current.parametric.imageId).toBe(img.id);
+    expect(result.current.parametric.spreadId).toBe(SPREAD_ID);
+  });
+
+  it('closeParametric clears the id AND the captured spreadId', () => {
+    const { result } = renderModals();
+    const img = makeImage({
+      parametric_slot: { key: 'country', values: [] },
+    } as unknown as Partial<SpreadImage>);
+
+    act(() => result.current.openSlot(img));
+    expect(result.current.parametric.spreadId).toBe(SPREAD_ID);
+
+    act(() => result.current.closeParametric());
+
+    expect(result.current.parametric.open).toBe(false);
+    expect(result.current.parametric.imageId).toBeNull();
+    expect(result.current.parametric.spreadId).toBe('');
   });
 
   it('slot key present but UNDEFINED (post-init write shape) → still opens', () => {

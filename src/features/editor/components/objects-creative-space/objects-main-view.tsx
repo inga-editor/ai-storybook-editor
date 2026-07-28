@@ -54,6 +54,10 @@ import {
 import type { CropPreset } from "@/types/editor";
 import { useSounds } from "@/stores/sounds-store";
 import { ItemSlotModal, type SlotPatch } from "./item-slot-modal";
+import {
+  EditParametricSlotModal,
+  buildParametricValueSaveResourcePath,
+} from "./edit-parametric-slot-modal";
 import { RetouchEditImageModal } from "./retouch-edit-image-modal";
 import { RetouchGenerateImageModal } from "./retouch-generate-image-modal";
 import { ObjectsImageToolbar } from "./objects-image-toolbar";
@@ -115,7 +119,7 @@ import type {
   SpreadAutoAudio,
   SpreadAutoPic,
 } from "@/types/canvas-types";
-import type { SpreadComposite } from "@/types/spread-types";
+import type { ItemParametricSlot, SpreadComposite } from "@/types/spread-types";
 import {
   buildEditorCompositeContextMap,
   resolveEffectiveZIndex,
@@ -472,7 +476,9 @@ export function ObjectsMainView({
   const { splitTextbox } = useSplitTextbox(actions, onItemSelect, langCode, canvasWidth, canvasHeight);
 
   const modals = useObjectModals(selectedSpreadId, actions);
-  const { openGenerate, openEdit, openExtract, openEditAudio, openSlot, closeSlot } = modals;
+  const { openGenerate, openEdit, openExtract, openEditAudio, openSlot, closeSlot, closeParametric } =
+    modals;
+
 
   // === Phase 04: opt-in saveResource directive (anchor = retouch images node) ===
   // Only the Edit path is wired: a retouch layer edit writes a new image_version at the existing
@@ -605,6 +611,105 @@ export function ObjectsMainView({
     // render, so an object dep would defeat the memo (same reason the extract handler above
     // destructures `modals.extract.image` / `.spreadId`).
     [modals.slot.image, modals.slot.spreadId, selectedSpreadId, gatedSpreadItemAction, closeSlot]
+  );
+
+  // === EditParametricSlotModal wiring (edit-parametric-slot-modal/README §4.4) ===
+  // The item is re-resolved from the store on EVERY render (the hook only keeps its id): this
+  // modal WRITES `values[]`, so a captured snapshot would freeze the version grid after the
+  // first generate. Vanishes (→ modal unmounts) when the item is deleted by a peer.
+  const parametricImageId = modals.parametric.imageId;
+  const parametricSpreadId = modals.parametric.spreadId;
+  const parametricItem = useMemo<SpreadImage | null>(() => {
+    if (!parametricImageId || !parametricSpreadId) return null;
+    const spread = retouchSpreads.find(s => s.id === parametricSpreadId);
+    return (spread?.images as SpreadImage[] | undefined)?.find(i => i.id === parametricImageId) ?? null;
+  }, [retouchSpreads, parametricSpreadId, parametricImageId]);
+
+  // Writes are only legal while THIS editor holds the lock of the spread captured at open time.
+  // Selection drift ⇒ read-only (mirrors handleSlotSubmit's guard, but non-destructive: the user
+  // keeps browsing values/zoom — chốt validation S1-Q3, never hide, just disable).
+  const parametricCanEdit = spreadEditable && parametricSpreadId === selectedSpreadId;
+
+  const handleParametricUpdate = useCallback(
+    (next: ItemParametricSlot) => {
+      if (!parametricImageId || !parametricSpreadId) return;
+      // The slot is gone (removed here, or by a peer) but a generate/upload started earlier is
+      // still resolving: writing `next` would REBUILD the slot from a stale closure and undo the
+      // removal. The modal unmounts in that case without bumping runIdRef, so this is the guard.
+      if (!parametricItem?.parametric_slot) {
+        log.warn("handleParametricUpdate", "item no longer carries a parametric_slot, skip", {
+          itemId: parametricImageId,
+          spreadId: parametricSpreadId,
+        });
+        return;
+      }
+      if (parametricSpreadId !== selectedSpreadId) {
+        log.warn("handleParametricUpdate", "spread selection changed since open, skip", {
+          spreadId: parametricSpreadId,
+          selectedSpreadId,
+        });
+        toastSpreadSelectionMoved();
+        closeParametric();
+        return;
+      }
+      gatedSpreadItemAction({
+        spreadId: parametricSpreadId,
+        itemType: "image",
+        action: "update",
+        itemId: parametricImageId,
+        data: { parametric_slot: next },
+      });
+    },
+    [
+      parametricImageId,
+      parametricSpreadId,
+      parametricItem,
+      selectedSpreadId,
+      gatedSpreadItemAction,
+      closeParametric,
+    ],
+  );
+
+  // Mutual exclusion, same contract as the init patch: BOTH slot keys travel, one of them
+  // `undefined` (see handleSlotSubmit's note on truthy existence checks).
+  const handleParametricRemove = useCallback(() => {
+    if (!parametricImageId || !parametricSpreadId) return;
+    log.info("handleParametricRemove", "remove slot from item", {
+      itemId: parametricImageId,
+      spreadId: parametricSpreadId,
+    });
+    gatedSpreadItemAction({
+      spreadId: parametricSpreadId,
+      itemType: "image",
+      action: "update",
+      itemId: parametricImageId,
+      data: { parametric_slot: undefined, casting_slot: undefined },
+    });
+    closeParametric();
+  }, [parametricImageId, parametricSpreadId, gatedSpreadItemAction, closeParametric]);
+
+  /** Flush the held retouch sub-tree NOW and REJECT when it did not land. The modal awaits this
+   *  before a generate POST so the BE `saveResource` anchor (`find:value=…`) already exists; a
+   *  rejection aborts the run, so a failed persist never burns an AI call (README §4.4). This is
+   *  the one deliberate exception to "slot writes ride the normal release/saveNow flush". */
+  const handleParametricCommitSave = useCallback(async () => {
+    if (!onCommitSave) throw new Error("PARAMETRIC_NO_COMMIT_SAVE");
+    const ok = await onCommitSave();
+    if (!ok) throw new Error("PARAMETRIC_COMMIT_SAVE_REJECTED");
+  }, [onCommitSave]);
+
+  // Thin wrapper — the path grammar itself lives in `parametric-slot-utils` (pure + unit-tested;
+  // it is COLUMN-RELATIVE by contract and percent-encodes the value). Only reachable while the
+  // modal is open, i.e. with a non-null image id.
+  const buildParametricSaveResourcePath = useCallback(
+    (value: string) =>
+      buildParametricValueSaveResourcePath(parametricSpreadId, parametricImageId ?? "", value),
+    [parametricSpreadId, parametricImageId],
+  );
+
+  const parametricAttribution = useMemo(
+    () => ({ snapshotId: snapshotId || undefined }),
+    [snapshotId],
   );
 
   const { stackRef } = useInteractionLayerContext();
@@ -1220,6 +1325,31 @@ export function ObjectsMainView({
           isSpreadEditable={spreadEditable}
           onSubmit={handleSlotSubmit}
           onClose={closeSlot}
+        />
+      )}
+
+      {/* `key={item.id}` remounts the shell when the parent swaps items, so its internal state
+          (selected value / zoom / busy / runId) can never leak across items — the shell's own
+          reset only runs on ITS close path. `parametric_slot` is re-checked because a peer edit
+          can remove the slot while the modal is open. */}
+      {parametricItem?.parametric_slot && (
+        <EditParametricSlotModal
+          key={parametricItem.id}
+          open={modals.parametric.open}
+          onOpenChange={(next) => {
+            if (!next) closeParametric();
+          }}
+          item={parametricItem}
+          slot={parametricItem.parametric_slot}
+          book={book}
+          characters={characters}
+          onUpdateSlot={handleParametricUpdate}
+          onRemoveSlot={handleParametricRemove}
+          canEdit={parametricCanEdit}
+          onCommitSave={handleParametricCommitSave}
+          pathPrefix={`parametric/${parametricItem.id}`}
+          buildSaveResourcePath={buildParametricSaveResourcePath}
+          attribution={parametricAttribution}
         />
       )}
 
