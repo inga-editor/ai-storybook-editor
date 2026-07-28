@@ -12,9 +12,11 @@
 // `manageHeaderStatus:true` (the default — same as the variant space since its 2026-07-16 migration
 // to batch-at-release) → the hold
 // lifetime is "Unsaved", release-save (switch kind / leave) → Saving…→Saved (edit-one-style-per-
-// session semantics). GRAIN B (per-entity text: import + lock-clone base variant + EditBaseEntityModal)
-// REUSES the variant helper's `flushSketchEntityUnderLock` (rtype 3/4). Peer-lock is advisory (veil +
-// sidebar badge); the acquire 409 is the real authority.
+// session semantics). GRAIN B (per-entity text: lock-clone base variant + EditBaseEntityModal)
+// REUSES the variant helper's `flushSketchEntityUnderLock` (rtype 3/4) — per-node EDITS of entities
+// that already exist. The Excel IMPORT is NOT grain B: it is a whole-collection REPLACE (new keys +
+// deletions), so it persists as a column-root collection-scope save (`runLockedSetSave`, design 05
+// §5). Peer-lock is advisory (veil + sidebar badge); the acquire 409 is the real authority.
 
 import { useCallback, useMemo, useState } from 'react';
 import { Plus, Upload } from 'lucide-react';
@@ -54,6 +56,10 @@ import {
   flushSketchBaseSheetUnderLock,
 } from '@/stores/snapshot-store/slices/collab-sketch-base-sheet-save-helper';
 import { flushSketchEntityUnderLock } from '@/stores/snapshot-store/slices/collab-sketch-variant-save-helper';
+import {
+  runLockedSetSave,
+  type CollectionSaveOutcome,
+} from '@/features/editor/utils/structural-lock-collection-save';
 import { useCollabPersistSession } from '@/features/editor/hooks/use-collab-persist-session';
 import { useContentSyncSession } from '@/features/editor/hooks/use-content-sync-session';
 import { useHeldResourceSession } from '@/features/editor/hooks/use-held-resource-session';
@@ -98,8 +104,10 @@ const log = createLogger('Editor', 'SketchBaseSpace');
 
 /**
  * Flush each entity node (rtype 3/4, grain B) of the given kinds through the gateway — the sheet
- * held-session covers rtype 11 (grain A) ONLY, so entity-text mutations (import bulk-replace,
- * lock-style base-variant clone) persist here. Peer-held entity → the flush 409s → skip + warn
+ * held-session covers rtype 11 (grain A) ONLY, so the lock-style base-variant clone (an EDIT of
+ * entities that already exist) persists here. NOT for the Excel import: that one mints new keys and
+ * drops removed ones, which a per-node upsert loop cannot express — see `commitImport`.
+ * Peer-held entity → the flush 409s → skip + warn
  * (advisory; `flushSketchEntityUnderLock` toasts). `releaseIfAcquired:true` (one-shot) so no entity
  * lock lingers. Reads FRESH nodes via getState() at call time. Collab-only (solo → autoSaveSnapshot).
  */
@@ -342,42 +350,82 @@ export function SketchBaseSpace() {
     setEditEntityModal({ kind });
   }, []);
 
-  // Commit a parsed import (grain B bulk replace): replace char + prop + alter entities, then
-  // persist — COLLAB → per-entity gateway flush (peer-held → skip+warn); SOLO → autoSaveSnapshot.
+  // Commit a parsed import: replace char + prop + alter entities, then persist.
+  // COLLAB → ONE column-root whole-array save per collection (design 05 §5 `runLockedSetSave`:
+  // rtype 3 `sketch.characters` + rtype 4 `sketch.props`, coarse sentinel lock). It MUST be the
+  // whole-array shape, not a per-entity flush: an import is a REPLACE, so it (a) introduces keys
+  // that do not exist in the DB yet — a per-entity `action_type:3` edit of a new key 404s at the
+  // gateway (`_resolve_entity` → "Target resource node not found"), which is exactly how a fresh
+  // alter cast silently never persisted — and (b) DELETES the entities the workbook dropped, which
+  // an upsert loop can never express. SOLO → autoSaveSnapshot (whole-doc).
   const commitImport = useCallback(
-    (parse: BaseImportParse) => {
+    async (parse: BaseImportParse) => {
       // `setSketchBaseEntities` WHOLE-REPLACES `characters[]`, which holds the story cast AND the
       // alter cast. The Characters tab is required (so the workbook fully specifies the story cast),
       // but Alter Characters is OPTIONAL — an absent tab must not wipe an alter cast the file never
-      // mentioned. `resolveImportCommit` owns that rule (pure, unit-tested).
+      // mentioned. `resolveImportCommit` owns that rule (pure, unit-tested), so the array handed to
+      // the gateway ALREADY carries the preserved alters and the replace stays safe.
       const payload = resolveImportCommit(parse, useSnapshotStore.getState().sketch.characters);
-      setSketchBaseEntities(payload);
-      if (useResourceLockStore.getState().collabPersist) {
-        // Bulk grain-B flush is off-session (no sheet hold) → drive the header Saving…→Saved itself.
-        const ess = useEditSessionStatusStore.getState();
-        ess.markSaving();
-        // Flush `alter_characters` ONLY when the file actually carried that tab: its entities live
-        // in the same array (rtype 3, key unique across the collection) so they would otherwise
-        // never reach the gateway — but flushing PRESERVED alters would re-write unchanged nodes and
-        // pop a "locked by <peer>" toast naming entities that were never in the workbook.
-        const kinds: BaseKind[] = parse.sheetsPresent.alter_characters
-          ? ['characters', 'props', 'alter_characters']
-          : ['characters', 'props'];
-        void persistBaseEntities(kinds).finally(() => ess.markSaved());
-      } else {
-        void autoSaveSnapshot();
-      }
       const count = parse.result.characters.length + parse.result.props.length;
-      if (parse.issues.warnings.length > 0) {
-        log.warn('commitImport', 'import warnings', { count: parse.issues.warnings.length });
-        toast.warning(`${parse.issues.warnings.length} import warning(s) — see console`);
-        for (const w of parse.issues.warnings) log.warn('commitImport', 'warning', { message: w });
+
+      const reportIssues = () => {
+        if (parse.issues.warnings.length > 0) {
+          log.warn('commitImport', 'import warnings', { count: parse.issues.warnings.length });
+          toast.warning(`${parse.issues.warnings.length} import warning(s) — see console`);
+          for (const w of parse.issues.warnings) log.warn('commitImport', 'warning', { message: w });
+        }
+        log.info('commitImport', 'applied base entities', {
+          count, // imported from the file (the toast number) — NOT the committed array length
+          committedCharacters: payload.characters.length, // ≠ imported when an absent tab preserved alters
+          alterSheetPresent: parse.sheetsPresent.alter_characters,
+        });
+      };
+
+      if (!useResourceLockStore.getState().collabPersist) {
+        setSketchBaseEntities(payload);
+        void autoSaveSnapshot();
+        reportIssues();
+        toast.success(`Imported ${count} base entities`);
+        return;
       }
-      log.info('commitImport', 'applied base entities', {
-        count, // imported from the file (the toast number) — NOT the committed array length
-        committedCharacters: payload.characters.length, // ≠ imported when an absent tab preserved alters
-        alterSheetPresent: parse.sheetsPresent.alter_characters,
-      });
+
+      // Bulk import is off-session (no sheet hold) → drive the header Saving…→Saved itself.
+      const ess = useEditSessionStatusStore.getState();
+      ess.markSaving();
+      let outcome: CollectionSaveOutcome;
+      try {
+        outcome = await runLockedSetSave(
+          [
+            {
+              target: { step: 1, resource_type: 3, resource_id: 'characters', locale: null },
+              save: {
+                action_type: 3, // edit (replace-all) — the ONLY action a column-root save accepts
+                patch: payload.characters, // LIST ⇒ the gateway takes the collection-scope path
+                collection: 'characters',
+                target_ref: { count: payload.characters.length },
+              },
+            },
+            {
+              target: { step: 1, resource_type: 4, resource_id: 'props', locale: null },
+              save: {
+                action_type: 3,
+                patch: payload.props,
+                collection: 'props',
+                target_ref: { count: payload.props.length },
+              },
+            },
+          ],
+          () => setSketchBaseEntities(payload),
+        );
+      } finally {
+        ess.markSaved();
+      }
+      if (outcome === 'blocked') return; // nothing applied; holder toast already shown
+      reportIssues();
+      if (outcome === 'failed') {
+        toast.error('Import chưa lưu được — vui lòng tải lại trang.');
+        return;
+      }
       toast.success(`Imported ${count} base entities`);
     },
     [setSketchBaseEntities, autoSaveSnapshot],
@@ -397,7 +445,7 @@ export function SketchBaseSpace() {
         if (hasExistingEntities) {
           setPendingImport(parse);
         } else {
-          commitImport(parse);
+          await commitImport(parse);
         }
       } catch (err) {
         log.error('handleImport', 'parse failed', { error: String(err) });
@@ -410,7 +458,7 @@ export function SketchBaseSpace() {
   );
 
   const confirmImport = useCallback(() => {
-    if (pendingImport) commitImport(pendingImport);
+    if (pendingImport) void commitImport(pendingImport);
     setPendingImport(null);
   }, [pendingImport, commitImport]);
 

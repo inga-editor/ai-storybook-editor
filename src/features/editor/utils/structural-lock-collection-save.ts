@@ -25,6 +25,12 @@ const log = createLogger('Editor', 'StructuralLockCollectionSave');
 
 export type CollectionSaveOutcome = 'saved' | 'blocked' | 'failed';
 
+/** One (lock target → collection-scope payload) pair of a multi-collection write set. */
+export interface CollectionSaveEntry {
+  target: LockTarget;
+  save: SavePayload;
+}
+
 /**
  * Acquire the coarse collection lock, apply the optimistic LOCAL whole-array replace, then
  * persist it via the gateway `save` (collection-scope: a `collection` name + a LIST `patch`),
@@ -82,5 +88,75 @@ export async function runLockedCollectionSave(
     return 'saved';
   } finally {
     await store.release(target);
+  }
+}
+
+/**
+ * Multi-collection variant: acquire EVERY target first, apply the optimistic local replace ONCE,
+ * then persist each collection-scope payload, then ALWAYS release everything acquired.
+ *
+ * Acquire-all-first is the point: the base Excel import replaces `sketch.characters` AND
+ * `sketch.props` as one user-visible operation, so a peer holding either collection must abort the
+ * WHOLE import with nothing applied — not leave the store showing a cast that only half-persisted.
+ * The saves themselves are still two independent gateway writes (the gateway has no multi-target
+ * write): if one fails after the other landed, the outcome is 'failed' and the caller tells the
+ * user to reload — the local replace is KEPT (save-lost semantics, a refetch reconciles).
+ *
+ * @param entries    one { target, save } pair per collection, applied in order
+ * @param applyLocal optimistic local replace, run ONCE after every lock is held
+ */
+export async function runLockedSetSave(
+  entries: readonly CollectionSaveEntry[],
+  applyLocal: () => void,
+): Promise<CollectionSaveOutcome> {
+  const store = useResourceLockStore.getState();
+  const acquired: LockTarget[] = [];
+  log.info('runLockedSetSave', 'acquire set', {
+    count: entries.length,
+    collections: entries.map((e) => e.save.collection).join(','),
+  });
+
+  try {
+    for (const { target } of entries) {
+      const acq = await store.acquire(target);
+      if (!acq.ok) {
+        const name = acq.holder
+          ? store.holderNames.get(acq.holder) ?? FALLBACK_HOLDER_NAME
+          : FALLBACK_HOLDER_NAME;
+        log.info('runLockedSetSave', 'blocked on acquire — another editor holds one collection', {
+          type: target.resource_type,
+          id: target.resource_id,
+          hasHolder: !!acq.holder,
+        });
+        toast.info(`${name} đang chỉnh sửa — vui lòng thử lại sau.`);
+        return 'blocked'; // nothing applied; the finally below releases what we did take
+      }
+      acquired.push(target);
+    }
+
+    applyLocal();
+
+    let failed = false;
+    for (const { target, save } of entries) {
+      const res = await store.save(target, save);
+      if (!res.ok) {
+        failed = true;
+        log.warn('runLockedSetSave', 'save failed after local apply', {
+          type: target.resource_type,
+          collection: save.collection,
+          lost: res.lost,
+        });
+        continue; // best-effort: a sibling collection can still land
+      }
+      log.debug('runLockedSetSave', 'collection saved', {
+        type: target.resource_type,
+        collection: save.collection,
+      });
+    }
+    if (failed) return 'failed';
+    log.info('runLockedSetSave', 'set saved', { count: entries.length });
+    return 'saved';
+  } finally {
+    for (const target of acquired) await store.release(target);
   }
 }

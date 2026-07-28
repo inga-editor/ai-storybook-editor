@@ -291,9 +291,10 @@ export function validateCharacterKeyRoles(characters: SketchEntity[], issues: Im
  *   • `Alter Characters` is OPTIONAL ⇒ an absent tab means the workbook says NOTHING about alters,
  *     not "delete them". Replacing anyway would wipe the alter cast that `base.alter_character_sheet`
  *     still points at. A tab that is PRESENT but empty is an explicit empty cast and does clear them
- *     locally — ⚠️ under COLLAB that clear does not persist: `persistBaseEntities` only upserts the
- *     entities that remain, there is no delete-flush, so removed entities come back on the next
- *     snapshot fetch. Pre-existing for characters/props too (tracked gap), NOT introduced here.
+ *     — the array this returns is written to the gateway as ONE column-root whole-array replace
+ *     (`commitImport` → `runLockedSetSave`), so a removal here IS a deletion in the DB. (Before
+ *     2026-07-28 the commit flushed entity-by-entity, which could neither create a new key nor
+ *     delete a dropped one; that gap is closed.)
  *
  * A preserved alter whose key was re-used by the imported story cast is DROPPED (+ warn): the
  * workbook is authoritative for the keys it declares, and keeping both would recreate exactly the
