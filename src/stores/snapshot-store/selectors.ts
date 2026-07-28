@@ -16,12 +16,20 @@ import type {
   SketchStageStyle,
   SketchStageVariant,
   BaseKind,
+  BaseEntityCollection,
   BaseEntityText,
   VariantRef,
   LineupEntry,
   SketchLineupTab,
 } from '@/types/sketch';
-import { sheetOf } from '@/types/sketch';
+import {
+  sheetOf,
+  sketchEntitiesOfKind,
+  filterEntitiesOfKind,
+  lineupEntryRef,
+  BASE_SHEET_ID,
+  KIND_ENTITY_SOURCE,
+} from '@/types/sketch';
 import type { ManuscriptDummy, DummySpread } from '@/types/dummy';
 import type { IllustrationData, Section, Branch, BranchSetting } from '@/types/illustration-types';
 import type { Prop } from '@/types/prop-types';
@@ -116,9 +124,7 @@ export const useAnySketchDegraded = (): boolean =>
 export const useSketchSheetDegraded = (kind: BaseKind): boolean =>
   useSnapshotStore((s) =>
     s.sketchDegraded.some(
-      (d) =>
-        d.resource === 'sketch' ||
-        d.resource === (kind === 'characters' ? 'base.character_sheet' : 'base.prop_sheet'),
+      (d) => d.resource === 'sketch' || d.resource === `base.${BASE_SHEET_ID[kind]}`,
     ),
   );
 
@@ -144,13 +150,23 @@ export const useSketchBaseSelectedStyleIndex = (kind: BaseKind): number =>
   useSnapshotStore((s) => sheetOf(s.sketch.base, kind).styles.findIndex((st) => st.is_selected));
 export const useSketchBaseEntityKeys = (kind: BaseKind): string[] =>
   useSnapshotStore(
-    useShallow((s) => s.sketch[kind].filter((e) => e.variants.some((v) => v.key === 'base')).map((e) => e.key)),
+    // Flat string[] under useShallow = the proven pattern; the extra role filter (via
+    // KIND_ENTITY_SOURCE) does not change that — the result is still a shallow-comparable string[].
+    useShallow((s) =>
+      sketchEntitiesOfKind(s.sketch, kind)
+        .filter((e) => e.variants.some((v) => v.key === 'base'))
+        .map((e) => e.key),
+    ),
   );
 // Object-of-primitives → useShallow is safe (shallow-eq on strings, never on nested arrays).
 export const useSketchBaseEntityText = (kind: BaseKind, key: string): BaseEntityText | undefined =>
   useSnapshotStore(
     useShallow((s) => {
-      const base = s.sketch[kind].find((e) => e.key === key)?.variants.find((v) => v.key === 'base');
+      // Entity keys are unique across the WHOLE collection, but the role guard keeps the kinds
+      // honest: asking `characters` for an alter key must miss, not silently return the alter.
+      const base = sketchEntitiesOfKind(s.sketch, kind)
+        .find((e) => e.key === key)
+        ?.variants.find((v) => v.key === 'base');
       if (!base) return undefined;
       return {
         key,
@@ -162,19 +178,66 @@ export const useSketchBaseEntityText = (kind: BaseKind, key: string): BaseEntity
     }),
   );
 
-// Sketch entity selectors — keyed by kind (characters | props). ⚡ 2026-07-18: stages left the
-// shared entity shape — see the stage selectors below.
+// ── Sketch entity selectors — keyed by BaseKind (characters | props | alter_characters) ───────
+// ⚡ 2026-07-18: stages left the shared entity shape — see the stage selectors below.
+// ⚡ 2026-07-28 (alter characters): `alter_characters` has NO array of its own — every read here
+// resolves through KIND_ENTITY_SOURCE (`sketchEntitiesOfKind`). Indexing `sketch[kind]` again
+// would hand back `undefined` for alter: an empty group with no type or runtime error.
+//
+// Ref-stability: the role split builds a FRESH array, so it NEVER goes through useShallow with an
+// inline arrow (that loops). Subscribe the STABLE raw collection ref with a plain selector
+// (Object.is), then project in useMemo — the same discipline as useSketchVariantRefs below.
+
+/** Entities of one base kind. THE valid seam for kind-driven reads (sidebars, generate payloads). */
+export const useSketchKindEntities = (kind: BaseKind): SketchEntity[] => {
+  const collection = useSnapshotStore(
+    (s) => s.sketch[KIND_ENTITY_SOURCE[kind].collection] ?? EMPTY_SKETCH_ENTITIES, // stable raw ref
+  );
+  return useMemo(() => filterEntitiesOfKind(collection, kind), [collection, kind]);
+};
+
+/** STORY cast only (`actor_role` absent|0) — what goes into the book. Use this everywhere a
+ *  character can reach the manuscript / spreads / lineup of the real story. */
+export const useStoryCharacters = (): SketchEntity[] => useSketchKindEntities('characters');
+
+/** ALTER cast only (`actor_role === 1`) — casting-time replacements, never in the story path. */
+export const useAlterCharacters = (): SketchEntity[] => useSketchKindEntities('alter_characters');
+
+// Pure counterparts (imperative callers: job slices, collab save helpers, `getState()` reads).
+// ⚠️ NEVER pass these to `useSnapshotStore(...)`: the role split builds a FRESH array per call, so
+// a subscription on them re-renders forever. Inside React use the hooks above (memoized).
+export const selectSketchKindEntities = (
+  state: Pick<SnapshotStore, 'sketch'>,
+  kind: BaseKind,
+): SketchEntity[] => sketchEntitiesOfKind(state.sketch, kind);
+export const selectStoryCharacters = (state: Pick<SnapshotStore, 'sketch'>): SketchEntity[] =>
+  selectSketchKindEntities(state, 'characters');
+export const selectAlterCharacters = (state: Pick<SnapshotStore, 'sketch'>): SketchEntity[] =>
+  selectSketchKindEntities(state, 'alter_characters');
+
+/**
+ * @deprecated RAW collection — returns BOTH story characters and alter characters mixed together
+ * (`characters[]` holds both since 2026-07-28). FORBIDDEN in any story-facing call-site: an alter
+ * leaking into the manuscript/spread path produces NO type error, NO runtime error and NO server
+ * error — the book just ships the wrong cast.
+ *
+ * Use instead: {@link useStoryCharacters} (story path) · {@link useAlterCharacters} (casting) ·
+ * {@link useSketchKindEntities} (kind-driven UI). Keep this one ONLY when you genuinely need the
+ * unsplit array (e.g. key-uniqueness checks across the whole collection).
+ */
+export const useSketchCollectionEntitiesIncludingAlters = (
+  collection: BaseEntityCollection,
+): SketchEntity[] => useSnapshotStore((s) => s.sketch[collection] ?? EMPTY_SKETCH_ENTITIES);
+
 // useSketchEntityKeys mirrors useCharacterKeys: single .map() under useShallow is the
 // proven flat-string[] pattern (NOT the object-of-arrays anti-pattern that loops).
-export const useSketchEntities = (kind: BaseKind): SketchEntity[] =>
-  useSnapshotStore((s) => s.sketch[kind] ?? EMPTY_SKETCH_ENTITIES);
 export const useSketchEntityByKey = (
   kind: BaseKind,
   key: string
 ): SketchEntity | undefined =>
-  useSnapshotStore((s) => (s.sketch[kind] ?? EMPTY_SKETCH_ENTITIES).find((e) => e.key === key));
+  useSnapshotStore((s) => sketchEntitiesOfKind(s.sketch, kind).find((e) => e.key === key));
 export const useSketchEntityKeys = (kind: BaseKind): string[] =>
-  useSnapshotStore(useShallow((s) => (s.sketch[kind] ?? EMPTY_SKETCH_ENTITIES).map((e) => e.key)));
+  useSnapshotStore(useShallow((s) => sketchEntitiesOfKind(s.sketch, kind).map((e) => e.key)));
 
 // ── Stage selectors (2026-07-18 model — per-stage base.styles[] + 2-cell variant sheets) ──────
 // Ref-stability discipline: whole-object store refs / find() results are Object.is-stable — no
@@ -212,7 +275,7 @@ export const useSketchVariantByKey = (
   variantKey: string,
 ): SketchVariant | undefined =>
   useSnapshotStore((s) =>
-    (s.sketch[kind] ?? EMPTY_SKETCH_ENTITIES)
+    sketchEntitiesOfKind(s.sketch, kind)
       .find((e) => e.key === entityKey)
       ?.variants.find((v) => v.key === variantKey),
   );
@@ -222,7 +285,7 @@ export const useSketchVariantByKey = (
 // plain selector (Object.is), then project to VariantRef[] with useMemo keyed on that ref — never
 // return a freshly-.map()-ed object array from the store selector (that loops under useShallow).
 export const useSketchVariantRefs = (kind: BaseKind): VariantRef[] => {
-  const entities = useSnapshotStore((s) => s.sketch[kind] ?? EMPTY_SKETCH_ENTITIES); // stable raw ref
+  const entities = useSketchKindEntities(kind); // KIND_ENTITY_SOURCE-routed, memo-stable
   return useMemo(
     () =>
       entities.flatMap((e) =>
@@ -257,9 +320,14 @@ export const effectiveCropUrl = (variant: SketchVariant): string | null => {
  * useShallow FOOTGUN AVOIDED (memory: zustand useShallow nested arrays): the projection builds a
  * FRESH object array, which never shallow-compares equal → useShallow would loop forever. Subscribe
  * the STABLE raw entities ref via a plain selector (Object.is), then project in useMemo keyed on it.
+ *
+ * ⚡2026-07-28 alter: `kind` here is the UI kind (3 values — it decides which sidebar GROUP the row
+ * belongs to), while `ref` is minted in the 2-value PERSIST vocabulary (`lineupEntryRef`). Calling
+ * this with `'characters'` yields the STORY cast only (KIND_ENTITY_SOURCE filters `actor_role`), so
+ * an alter is listed exactly once — in its own group.
  */
 export const useSketchLineupEntries = (kind: BaseKind): LineupEntry[] => {
-  const entities = useSnapshotStore((s) => s.sketch[kind] ?? EMPTY_SKETCH_ENTITIES); // stable raw ref
+  const entities = useSketchKindEntities(kind); // KIND_ENTITY_SOURCE-routed, memo-stable
   return useMemo(
     () =>
       entities.flatMap((e) =>
@@ -267,9 +335,9 @@ export const useSketchLineupEntries = (kind: BaseKind): LineupEntry[] => {
           kind,
           entityKey: e.key,
           variantKey: v.key,
-          // Kind prefix REQUIRED (2026-07-25): entity keys are only unique WITHIN a kind —
+          // Prefix REQUIRED (2026-07-25): entity keys are only unique WITHIN a collection —
           // character `armor/base` must not collide with prop `armor/base` in checkedRefs.
-          ref: `${kind}:@${e.key}/${v.key}`,
+          ref: lineupEntryRef(kind, e.key, v.key),
           imageUrl: effectiveCropUrl(v),
           heightCm: v.height ?? null,
         })),

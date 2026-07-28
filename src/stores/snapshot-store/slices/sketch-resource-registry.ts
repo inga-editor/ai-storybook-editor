@@ -87,6 +87,7 @@ export type SketchResourceKey =
   | 'sketch' // root — coarse: blocks every step-1 write
   | 'base.character_sheet'
   | 'base.prop_sheet'
+  | 'base.alter_character_sheet' // ⚡ 2026-07-28 — 3rd base sheet (alter characters)
   | `characters/${string}` // node-grain: entity key
   | `props/${string}`
   | `stages/${string}`
@@ -96,6 +97,20 @@ export type SketchResourceKey =
   | `spreads/${string}` // node-grain: spread id
   | 'spreads'; // collection-grain — coarse
 
+/** The base-sheet subset of the resource keys (one per `BaseKind` sheet node). */
+export type SketchSheetResourceKey =
+  | 'base.character_sheet'
+  | 'base.prop_sheet'
+  | 'base.alter_character_sheet';
+
+export function isSheetResourceKey(key: SketchResourceKey): key is SketchSheetResourceKey {
+  return (
+    key === 'base.character_sheet' ||
+    key === 'base.prop_sheet' ||
+    key === 'base.alter_character_sheet'
+  );
+}
+
 /** step=1 rtypes per entity collection (mirrors ResourceType: 3 character · 4 prop · 5 stage). */
 const ENTITY_RTYPE: Record<'characters' | 'props' | 'stages', number> = {
   characters: 3,
@@ -103,10 +118,12 @@ const ENTITY_RTYPE: Record<'characters' | 'props' | 'stages', number> = {
   stages: 5,
 };
 
-/** rtype 11 base_sheet resource_ids (ADR-046). */
-const SHEET_RESOURCE_ID: Record<'base.character_sheet' | 'base.prop_sheet', string> = {
+/** rtype 11 base_sheet resource_ids (ADR-046). Mirrors `BASE_SHEET_ID` (types/sketch.ts) — the
+ *  resource key is just the sheet node prefixed with `base.`. */
+const SHEET_RESOURCE_ID: Record<SketchSheetResourceKey, string> = {
   'base.character_sheet': 'character_sheet',
   'base.prop_sheet': 'prop_sheet',
+  'base.alter_character_sheet': 'alter_character_sheet',
 };
 
 /**
@@ -127,7 +144,7 @@ const SHEET_RESOURCE_ID: Record<'base.character_sheet' | 'base.prop_sheet', stri
 export function resourceKeyToLockPredicate(key: SketchResourceKey): (t: LockTarget) => boolean {
   if (key === 'sketch') return (t) => t.step === 1;
 
-  if (key === 'base.character_sheet' || key === 'base.prop_sheet') {
+  if (isSheetResourceKey(key)) {
     const rid = SHEET_RESOURCE_ID[key];
     return (t) => t.step === 1 && t.resource_type === 11 && t.resource_id === rid;
   }
@@ -178,6 +195,8 @@ export function describeResource(key: SketchResourceKey): string {
       return 'Bộ style nhân vật (character sheet)';
     case 'base.prop_sheet':
       return 'Bộ style đạo cụ (prop sheet)';
+    case 'base.alter_character_sheet':
+      return 'Bộ style nhân vật thay thế (alter character sheet)';
     case 'characters':
     case 'props':
     case 'stages':
@@ -202,6 +221,8 @@ export function describeResetImpact(key: SketchResourceKey): string {
       return 'Reset sẽ xoá toàn bộ style đã tạo của bộ style nhân vật.';
     case 'base.prop_sheet':
       return 'Reset sẽ xoá toàn bộ style đã tạo của bộ style đạo cụ.';
+    case 'base.alter_character_sheet':
+      return 'Reset sẽ xoá toàn bộ style đã tạo của bộ style nhân vật thay thế.';
     case 'characters':
       return 'Reset sẽ xoá toàn bộ danh sách nhân vật của sketch.';
     case 'props':

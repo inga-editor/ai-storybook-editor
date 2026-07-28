@@ -780,6 +780,36 @@ describe('SketchBaseGenerateJobSlice', () => {
       });
     });
 
+    it('passes saveResource anchored on the ALTER sheet node for alter_characters', async () => {
+      const { store } = createTestStore('snap-alter');
+      store.getState().setSketchEntities('alter_characters', [
+        { key: 'stunt-hero', variants: [{ key: 'base', description: '', visual_design: 'stand-in', art_language: '' }] },
+      ]);
+
+      mockedGenerateCall.mockResolvedValueOnce(okGenerate('gen.png', ['stunt-hero']));
+      mockedCropCall.mockResolvedValueOnce(okCropRow([{ cell: 1, imageUrl: 'crop.png' }]));
+
+      store.getState().startBaseSheetGenerate({
+        kind: 'alter_characters',
+        mode: 'add',
+        stylePrompt: 'test prompt',
+        referenceImages: [],
+        artStyleId: 'style-1',
+      });
+      await tick();
+      await tick();
+      await tick();
+
+      const genArg = mockedGenerateCall.mock.calls[0][1];
+      expect(genArg.saveResource).toMatchObject({
+        type: 'image_version',
+        path: expect.stringContaining(
+          'table:snapshots/id:snap-alter/col:sketch/key:base/key:alter_character_sheet/key:styles/idx:',
+        ),
+        action: 'create',
+      });
+    });
+
     it('omits saveResource when snapshotId is null (not opted in)', async () => {
       const { store } = createTestStore(null);
       const baseEntity: SketchEntity = {
@@ -803,6 +833,173 @@ describe('SketchBaseGenerateJobSlice', () => {
       // When snapshotId is null, saveResource should be undefined (not opted in)
       const genArg = mockedGenerateCall.mock.calls[0][1];
       expect(genArg.saveResource).toBeUndefined();
+    });
+  });
+
+  // ⚡2026-07-28 — alter characters. `sketch['alter_characters']` DOES NOT EXIST: alter entities
+  // live in `sketch.characters[]` behind `actor_role === 1`. Every read here must resolve through
+  // KIND_ENTITY_SOURCE, or the alter group generates an EMPTY sheet with no type error and no
+  // runtime error (the failure the whole feature is most exposed to).
+  describe('alter characters — entity source, sheet routing, storage layout', () => {
+    /** hero (story cast) + stunt-hero (alter) sharing the ONE characters[] array. */
+    function seedMixedCast(s: ReturnType<typeof createTestStore>['store']) {
+      s.getState().setSketchEntities('characters', [
+        { key: 'hero', variants: [{ key: 'base', description: '', visual_design: 'brave', art_language: '' }] },
+      ]);
+      s.getState().setSketchEntities('alter_characters', [
+        { key: 'stunt-hero', variants: [{ key: 'base', description: '', visual_design: 'stand-in', art_language: '' }] },
+      ]);
+    }
+
+    it('generating the ALTER sheet sends ONLY actor_role=1 entities', async () => {
+      seedMixedCast(store);
+      mockedGenerateCall.mockResolvedValueOnce(okGenerate('raw.png', ['stunt-hero']));
+      mockedCropCall.mockResolvedValueOnce(okCropRow([{ cell: 1, imageUrl: 'crop-alter.png' }]));
+
+      store.getState().startBaseSheetGenerate({
+        kind: 'alter_characters',
+        mode: 'add',
+        stylePrompt: 'test',
+        referenceImages: [],
+        artStyleId: 'style-1',
+      });
+      await tick();
+
+      const genArg = mockedGenerateCall.mock.calls[0][1];
+      expect(genArg.entities.map((e: { key: string }) => e.key)).toEqual(['stunt-hero']);
+    });
+
+    it('generating the CHARACTER sheet excludes the alter cast (no leak in the other direction)', async () => {
+      seedMixedCast(store);
+      mockedGenerateCall.mockResolvedValueOnce(okGenerate('raw.png', ['hero']));
+      mockedCropCall.mockResolvedValueOnce(okCropRow([{ cell: 1, imageUrl: 'crop-hero.png' }]));
+
+      store.getState().startBaseSheetGenerate({
+        kind: 'characters',
+        mode: 'add',
+        stylePrompt: 'test',
+        referenceImages: [],
+        artStyleId: 'style-1',
+      });
+      await tick();
+
+      const genArg = mockedGenerateCall.mock.calls[0][1];
+      expect(genArg.entities.map((e: { key: string }) => e.key)).toEqual(['hero']);
+    });
+
+    it('results land in base.alter_character_sheet — the character sheet is untouched', async () => {
+      seedMixedCast(store);
+      mockedGenerateCall.mockResolvedValueOnce(okGenerate('raw-alter.png', ['stunt-hero']));
+      mockedCropCall.mockResolvedValueOnce(okCropRow([{ cell: 1, imageUrl: 'crop-alter.png' }]));
+
+      store.getState().startBaseSheetGenerate({
+        kind: 'alter_characters',
+        mode: 'add',
+        stylePrompt: 'test',
+        referenceImages: [],
+        artStyleId: 'style-1',
+      });
+      await tick();
+      await tick();
+      await tick();
+
+      const alterStyle = store.getState().sketch.base.alter_character_sheet.styles[0];
+      expect(alterStyle.illustrations[0].media_url).toBe('raw-alter.png');
+      expect(alterStyle.crops[0].key).toBe('stunt-hero');
+      expect(store.getState().sketch.base.character_sheet.styles).toHaveLength(0);
+    });
+
+    it('storage prefix stays sketches/base/characters for alter (layout keyed on the COLLECTION)', async () => {
+      seedMixedCast(store);
+      mockedGenerateCall.mockResolvedValueOnce(okGenerate('raw.png', ['stunt-hero']));
+      mockedCropCall.mockResolvedValueOnce(okCropRow([{ cell: 1, imageUrl: 'crop-alter.png' }]));
+
+      store.getState().startBaseSheetGenerate({
+        kind: 'alter_characters',
+        mode: 'add',
+        stylePrompt: 'test',
+        referenceImages: [],
+        artStyleId: 'style-1',
+      });
+      await tick();
+      await tick();
+      await tick();
+
+      // NOT `sketches/base/alter_characters` — the two character sheets deliberately share the
+      // folder and are told apart by the snapshot node they write.
+      expect(mockedCropCall.mock.calls[0][0].pathPrefix).toBe('sketches/base/characters');
+    });
+
+    it('all THREE kinds generate in parallel (three independent rtype-11 sheet nodes)', async () => {
+      seedMixedCast(store);
+      store.getState().setSketchEntities('props', [
+        { key: 'lantern', variants: [{ key: 'base', description: '', visual_design: 'lamp', art_language: '' }] },
+      ]);
+      const pending = [deferred(), deferred(), deferred()];
+      pending.forEach((d) => mockedGenerateCall.mockReturnValueOnce(d.promise as never));
+
+      for (const kind of ['characters', 'props', 'alter_characters'] as const) {
+        store.getState().startBaseSheetGenerate({
+          kind,
+          mode: 'add',
+          stylePrompt: 'test',
+          referenceImages: [],
+          artStyleId: 'style-1',
+        });
+        await tick();
+      }
+
+      expect(mockedGenerateCall).toHaveBeenCalledTimes(3);
+      const ops = store.getState().baseSheetGenerateOps;
+      expect(ops.characters).toBeDefined();
+      expect(ops.props).toBeDefined();
+      expect(ops.alter_characters).toBeDefined();
+
+      // Left in flight on purpose — the point is that three ops COEXIST, and settling them here
+      // would race the shared crop mock across the three chains.
+    });
+
+    it('recrop of the alter sheet derives cellOrder from the alter cast only', async () => {
+      seedMixedCast(store);
+      store.getState().addSketchBaseStyle('alter_characters', {
+        style_prompt: 's1',
+        is_selected: false,
+        image_references: [],
+        illustrations: [
+          { type: 'created' as const, media_url: 'raw.png', created_time: '2026-07-28T00:00:00Z', is_selected: true },
+        ],
+        crops: [],
+      });
+      mockedCropCall.mockResolvedValueOnce(okCropRow([{ cell: 1, imageUrl: 'recrop-alter.png' }]));
+
+      store.getState().recropBaseSheet('alter_characters', 0);
+      await tick();
+      await tick();
+
+      // cellCount 1 = the alter cast size (NOT 2 = the whole characters[] array).
+      expect(mockedCropCall.mock.calls[0][0].cellCount).toBe(1);
+      const style = store.getState().sketch.base.alter_character_sheet.styles[0];
+      expect(style.crops[0].key).toBe('stunt-hero');
+    });
+
+    it('empty alter group → generate is refused (no request, warn toast) instead of an empty sheet', async () => {
+      store.getState().setSketchEntities('characters', [
+        { key: 'hero', variants: [{ key: 'base', description: '', visual_design: 'brave', art_language: '' }] },
+      ]);
+
+      store.getState().startBaseSheetGenerate({
+        kind: 'alter_characters',
+        mode: 'add',
+        stylePrompt: 'test',
+        referenceImages: [],
+        artStyleId: 'style-1',
+      });
+      await tick();
+
+      expect(mockedGenerateCall).not.toHaveBeenCalled();
+      expect(vi.mocked(toast.warning)).toHaveBeenCalled();
+      // …and no orphaned style was appended to the alter sheet.
+      expect(store.getState().sketch.base.alter_character_sheet.styles).toHaveLength(0);
     });
   });
 });

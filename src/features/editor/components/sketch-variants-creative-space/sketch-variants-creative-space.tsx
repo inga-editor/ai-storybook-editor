@@ -1,5 +1,7 @@
 // sketch-variants-creative-space.tsx — root of the Variant creative space (design README §2). ONE
-// space for BOTH kinds (character + prop non-base variants) — NO `kind` prop. Owns the local UI
+// space for ALL kinds (character + prop + alter-character non-base variants) — NO `kind` prop. An
+// alter is a `characters[]` entity (`actor_role === 1`), so it reuses the rtype-3 entity lock and
+// the `characters` grant; only its sidebar GROUP is separate. Owns the local UI
 // state (selected variant, active tab, zoom, expanded groups, the two overlay-modal states, the
 // regenerate-confirm target) and DERIVES the effective selection in RENDER (React 19: NO
 // useEffect+setState, NO ref read/write in render body).
@@ -32,7 +34,9 @@ import {
 } from '@/components/ui/alert-dialog';
 import { useSnapshotStore } from '@/stores/snapshot-store';
 import {
-  useSketchEntities,
+  useStoryCharacters,
+  useAlterCharacters,
+  useSketchKindEntities,
   useSketchVariantByKey,
   useVariantSheetGenerateOps,
   useVariantSheetGenerateStatus,
@@ -64,6 +68,7 @@ import { useVariantEntityLockSession } from './use-variant-entity-lock-session';
 import { LockedByOtherOverlay } from '@/features/editor/components/shared-components/sketch-locked-by-other-overlay';
 import { CANVAS_CONFIRM_DIALOG_Z } from '@/constants/spread-constants';
 import type { BaseKind, SketchEntity, VariantRef } from '@/types/sketch';
+import { KIND_ENTITY_SOURCE } from '@/types/sketch';
 import type { SaveResourceDirective } from '@/types/save-resource';
 import { buildImageVersionSaveResource } from '@/utils/save-resource-path';
 import { createLogger } from '@/utils/logger';
@@ -99,9 +104,12 @@ export function SketchVariantsCreativeSpace() {
   useCollabPersistSession(bookId);
   useContentSyncSession(bookId);
 
-  // Full entities (both kinds) — the source for BOTH the row refs AND the reactive gate.
-  const charEntities = useSketchEntities('characters');
-  const propEntities = useSketchEntities('props');
+  // Full entities per KIND — the source for BOTH the row refs AND the reactive gate.
+  // ⚡ 2026-07-28: `characters` is the STORY cast only; alters are their own kind (they share
+  // `characters[]` but must never be mixed into the story rows) and render in their own group.
+  const charEntities = useStoryCharacters();
+  const propEntities = useSketchKindEntities('props');
+  const alterEntities = useAlterCharacters();
   // In-flight ops keyed by variant — drives the per-row spinners (many rows can be busy at once,
   // across both kinds) + the content-area busy state.
   const ops = useVariantSheetGenerateOps();
@@ -116,6 +124,7 @@ export function SketchVariantsCreativeSpace() {
   const [expandedGroups, setExpandedGroups] = useState<Record<BaseKind, boolean>>({
     characters: true,
     props: true,
+    alter_characters: true,
   });
   const [editingVariant, setEditingVariant] = useState<VariantRef | null>(null);
   const [editImageTarget, setEditImageTarget] = useState<EditImageTarget | null>(null);
@@ -124,16 +133,27 @@ export function SketchVariantsCreativeSpace() {
   // already has crops (user-locked: confirm every time, guards losing the pick + per-cell edits).
   const [pendingRegenerate, setPendingRegenerate] = useState<VariantRef | null>(null);
 
+  /** Entities by kind — the ONLY way to go from a ref's `kind` to its entity set (a
+   *  `kind === 'characters' ? … : …` ternary would send alter refs to the props list). */
+  const entitiesByKind = useMemo<Record<BaseKind, SketchEntity[]>>(
+    () => ({ characters: charEntities, props: propEntities, alter_characters: alterEntities }),
+    [charEntities, propEntities, alterEntities],
+  );
+
   // Row refs per kind (non-base), derived from the subscribed entities.
   const refsByKind = useMemo<Record<BaseKind, VariantRef[]>>(
     () => ({
       characters: nonBaseRefs('characters', charEntities),
       props: nonBaseRefs('props', propEntities),
+      alter_characters: nonBaseRefs('alter_characters', alterEntities),
     }),
-    [charEntities, propEntities],
+    [charEntities, propEntities, alterEntities],
   );
+  // DERIVED from KIND_GROUPS (never a hand-written concat): selection falls back to `allRefs[0]`,
+  // so a row present here but absent from the sidebar would select something the user cannot see —
+  // and a row in the sidebar but absent here could never be selected at all.
   const allRefs = useMemo(
-    () => [...refsByKind.characters, ...refsByKind.props],
+    () => KIND_GROUPS.flatMap((g) => refsByKind[g.kind]),
     [refsByKind],
   );
 
@@ -173,7 +193,7 @@ export function SketchVariantsCreativeSpace() {
   // from the BASE_VARIANT; backend dropped artStyleId) → gate = BASE_NOT_READY + EMPTY_VARIANT_DESCRIPTION.
   const gateByRef = useCallback(
     (ref: VariantRef): VariantGate => {
-      const entities = ref.kind === 'characters' ? charEntities : propEntities;
+      const entities = entitiesByKind[ref.kind];
       const entity = entities.find((e) => e.key === ref.entityKey);
       const base = entity?.variants.find((v) => v.key === 'base');
       if (!base?.raw_sheet?.crops?.some((c) => c.is_selected)) {
@@ -187,20 +207,20 @@ export function SketchVariantsCreativeSpace() {
       }
       return { canGenerate: true };
     },
-    [charEntities, propEntities],
+    [entitiesByKind],
   );
 
   // "Chốt" (finalized) status per row — reactive off the subscribed entities, same as gateByRef.
   // Drives the sidebar 🔒/🔓 glyph; read-only (the pick itself lives in the content-area crop tab).
   const pickedByRef = useCallback(
     (ref: VariantRef): boolean => {
-      const entities = ref.kind === 'characters' ? charEntities : propEntities;
+      const entities = entitiesByKind[ref.kind];
       const variant = entities
         .find((e) => e.key === ref.entityKey)
         ?.variants.find((v) => v.key === ref.variantKey);
       return isVariantPicked(variant);
     },
-    [charEntities, propEntities],
+    [entitiesByKind],
   );
 
   // ── Per-entity held session (ADR-047) — the whole lock + persist lifecycle lives in this hook. ──
@@ -295,7 +315,7 @@ export function SketchVariantsCreativeSpace() {
   // ✨ entry: variant already has crops → confirm EVERY time (guards pick/edit); empty → straight.
   const handleGenerate = useCallback(
     (ref: VariantRef) => {
-      const entities = ref.kind === 'characters' ? charEntities : propEntities;
+      const entities = entitiesByKind[ref.kind];
       const variant = entities
         .find((e) => e.key === ref.entityKey)
         ?.variants.find((v) => v.key === ref.variantKey);
@@ -311,7 +331,7 @@ export function SketchVariantsCreativeSpace() {
       }
       doGenerate(ref);
     },
-    [charEntities, propEntities, doGenerate],
+    [entitiesByKind, doGenerate],
   );
 
   const confirmRegenerate = useCallback(() => {
@@ -414,12 +434,16 @@ export function SketchVariantsCreativeSpace() {
 
   // === Phase 04: opt-in saveResource for the Edit path (Raw sheet | one positional crop) ===
   // Anchor = the variant node under its entity: raw → `key:raw_sheet` (char/prop wrap the sheet);
-  // crop → that variant's positional crop (`key:crops/idx`). `kind` is the column key directly.
+  // crop → that variant's positional crop (`key:crops/idx`).
+  // ⚡ The path segment is the REAL COLLECTION, not the UI kind: `alter_characters` is not a
+  // snapshot key, so interpolating `kind` would anchor at a node that does not exist (the save
+  // would no-op / 404 while the UI reported success).
   // Undefined snapshot ⇒ omit. (Extract crop = RESERVED — see the modal mount below.)
   const editImageSaveResource = useMemo<SaveResourceDirective | undefined>(() => {
     if (!snapshotId || !editImageTarget) return undefined;
     const t = editImageTarget;
-    const variantRoot = `col:sketch/key:${t.kind}/find:key=${t.entityKey}/key:variants/find:key=${t.variantKey}`;
+    const collection = KIND_ENTITY_SOURCE[t.kind].collection;
+    const variantRoot = `col:sketch/key:${collection}/find:key=${t.entityKey}/key:variants/find:key=${t.variantKey}`;
     const path =
       t.scope === 'raw'
         ? `${variantRoot}/key:raw_sheet`

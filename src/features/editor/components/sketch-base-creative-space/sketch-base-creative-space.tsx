@@ -1,5 +1,5 @@
 // sketch-base-creative-space.tsx — root of the Base creative space (design README §2). ONE
-// space for BOTH kinds (character + prop) — no `kind` prop. Owns the local UI state (selected
+// space for ALL THREE kinds (character + prop + alter character) — no `kind` prop. Owns the local UI state (selected
 // style, active tab, zoom, expanded groups, the three overlay-modal states, import flag) and
 // derives the effective selection in RENDER (React 19: NO useEffect+setState, NO ref read/write
 // in render body). Handlers only set state on user interaction.
@@ -60,7 +60,13 @@ import { useHeldResourceSession } from '@/features/editor/hooks/use-held-resourc
 import { LockedByOtherOverlay } from '@/features/editor/components/shared-components/sketch-locked-by-other-overlay';
 import { SketchDegradedBanner } from '@/features/editor/components/sketch-degraded-banner';
 import { useSketchSheetDegraded } from '@/stores/snapshot-store';
-import { sheetOf, type BaseKind, type SketchBaseStyle } from '@/types/sketch';
+import {
+  sheetOf,
+  sketchEntitiesOfKind,
+  BASE_SHEET_ID,
+  type BaseKind,
+  type SketchBaseStyle,
+} from '@/types/sketch';
 import type { SaveResourceDirective } from '@/types/save-resource';
 import { buildImageVersionSaveResource } from '@/utils/save-resource-path';
 import { createLogger } from '@/utils/logger';
@@ -70,7 +76,12 @@ import { GenerateStyleModal } from './generate-style-modal';
 import { EditBaseEntityModal } from './edit-base-entity-modal';
 import { SketchBaseEditImageModal } from './sketch-base-edit-image-modal';
 import { SketchBaseExtractImageModal } from './sketch-base-extract-image-modal';
-import { importBaseEntities, type BaseImportParse } from './import/parse-base-entities';
+import {
+  importBaseEntities,
+  resolveImportCommit,
+  describeImportReplacement,
+  type BaseImportParse,
+} from './import/parse-base-entities';
 import {
   KIND_GROUPS,
   ZOOM,
@@ -95,7 +106,7 @@ const log = createLogger('Editor', 'SketchBaseSpace');
 async function persistBaseEntities(kinds: readonly BaseKind[]): Promise<void> {
   const st = useSnapshotStore.getState();
   for (const kind of kinds) {
-    for (const e of st.sketch[kind]) {
+    for (const e of sketchEntitiesOfKind(st.sketch, kind)) {
       await flushSketchEntityUnderLock(kind, e.key, e, { releaseIfAcquired: true });
     }
   }
@@ -112,6 +123,7 @@ export function SketchBaseSpace() {
 
   const charStyles = useSketchBaseStyles('characters');
   const propStyles = useSketchBaseStyles('props');
+  const alterStyles = useSketchBaseStyles('alter_characters'); // 3rd sheet — base.alter_character_sheet
   // book.sketchstyle_id (art_styles.type=0) — REQUIRED to generate; the modal gates on it.
   const artStyleId = useSketchStyleId();
   // Book-edit context (Sketch space is never remix) → the opt-in saveResource snapshot root.
@@ -120,7 +132,12 @@ export function SketchBaseSpace() {
   // Base entity keys per kind — drive the content-area crop cards AND the import replace-confirm.
   const charEntityKeys = useSketchBaseEntityKeys('characters');
   const propEntityKeys = useSketchBaseEntityKeys('props');
-  const hasExistingEntities = charEntityKeys.length > 0 || propEntityKeys.length > 0;
+  const alterEntityKeys = useSketchBaseEntityKeys('alter_characters');
+  // Drives the replace-confirm before a bulk import. MUST count alter entities too: they live in
+  // the SAME `characters[]` array that `setSketchBaseEntities` whole-replaces, so a book holding
+  // only alter entities would otherwise be overwritten with NO confirmation.
+  const hasExistingEntities =
+    charEntityKeys.length > 0 || propEntityKeys.length > 0 || alterEntityKeys.length > 0;
 
   // ── Local UI state (owner = this root; state-location rule) ────────────────────────────────
   const [selectedStyle, setSelectedStyle] = useState<SelectedStyleRef | null>(null);
@@ -129,6 +146,7 @@ export function SketchBaseSpace() {
   const [expandedGroups, setExpandedGroups] = useState<Record<BaseKind, boolean>>({
     characters: true,
     props: true,
+    alter_characters: true,
   });
   const [generateModal, setGenerateModal] = useState<GenerateModalState | null>(null);
   const [editEntityModal, setEditEntityModal] = useState<EditEntityModalState | null>(null);
@@ -143,19 +161,39 @@ export function SketchBaseSpace() {
   const [lockedSheetKind, setLockedSheetKind] = useState<BaseKind | null>(null);
 
   const stylesByKind = useMemo<Record<BaseKind, SketchBaseStyle[]>>(
-    () => ({ characters: charStyles, props: propStyles }),
-    [charStyles, propStyles],
+    // Every kind resolves through ONE map (sidebar groups, auto-select, the displayed style) —
+    // there is no `kind === 'characters' ? char : prop` ternary anywhere, which would silently
+    // route alter into the PROP branch (same types → no compile error, no runtime error).
+    () => ({ characters: charStyles, props: propStyles, alter_characters: alterStyles }),
+    [charStyles, propStyles, alterStyles],
   );
 
   // Auto-select is DERIVED (React 19: never set state in render): keep the user's choice while it
-  // is still in-range, otherwise fall back to the first available style.
+  // is still in-range, otherwise fall back to the first available style (char → prop → alter).
   const effectiveSelected = useMemo<SelectedStyleRef | null>(() => {
     if (selectedStyle && stylesByKind[selectedStyle.kind][selectedStyle.index]) return selectedStyle;
-    return pickFirstAvailable(charStyles, propStyles);
-  }, [selectedStyle, stylesByKind, charStyles, propStyles]);
+    return pickFirstAvailable(stylesByKind);
+  }, [selectedStyle, stylesByKind]);
 
   const activeKind = effectiveSelected?.kind ?? 'characters';
-  const entityKeys = activeKind === 'characters' ? charEntityKeys : propEntityKeys;
+  // Keyed map, NOT a binary ternary: `alter_characters` would fall into the `props` branch and
+  // render the wrong crop cards (no type error, no runtime error).
+  const entityKeysByKind: Record<BaseKind, string[]> = useMemo(
+    () => ({ characters: charEntityKeys, props: propEntityKeys, alter_characters: alterEntityKeys }),
+    [charEntityKeys, propEntityKeys, alterEntityKeys],
+  );
+  const entityKeys = entityKeysByKind[activeKind];
+  // Per-group base-entity counts → the sidebar greys the ＋ seam of an EMPTY group (typically
+  // Alter Character before any `actor_role=1` row is imported) and shows its hint instead of
+  // hiding the group (never-hide-disabled-ui).
+  const entityCountsByKind: Record<BaseKind, number> = useMemo(
+    () => ({
+      characters: charEntityKeys.length,
+      props: propEntityKeys.length,
+      alter_characters: alterEntityKeys.length,
+    }),
+    [charEntityKeys, propEntityKeys, alterEntityKeys],
+  );
   // ADR-047: the displayed kind's sheet is DEGRADED (unreadable raw quarantined) → banner states
   // why saving is refused; editing stays possible (D5: block persist, not interaction).
   const sheetDegraded = useSketchSheetDegraded(activeKind);
@@ -304,16 +342,28 @@ export function SketchBaseSpace() {
     setEditEntityModal({ kind });
   }, []);
 
-  // Commit a parsed import (grain B bulk replace): replace char + prop entities, then persist —
-  // COLLAB → per-entity gateway flush (peer-held → skip+warn); SOLO → autoSaveSnapshot.
+  // Commit a parsed import (grain B bulk replace): replace char + prop + alter entities, then
+  // persist — COLLAB → per-entity gateway flush (peer-held → skip+warn); SOLO → autoSaveSnapshot.
   const commitImport = useCallback(
     (parse: BaseImportParse) => {
-      setSketchBaseEntities(parse.result);
+      // `setSketchBaseEntities` WHOLE-REPLACES `characters[]`, which holds the story cast AND the
+      // alter cast. The Characters tab is required (so the workbook fully specifies the story cast),
+      // but Alter Characters is OPTIONAL — an absent tab must not wipe an alter cast the file never
+      // mentioned. `resolveImportCommit` owns that rule (pure, unit-tested).
+      const payload = resolveImportCommit(parse, useSnapshotStore.getState().sketch.characters);
+      setSketchBaseEntities(payload);
       if (useResourceLockStore.getState().collabPersist) {
         // Bulk grain-B flush is off-session (no sheet hold) → drive the header Saving…→Saved itself.
         const ess = useEditSessionStatusStore.getState();
         ess.markSaving();
-        void persistBaseEntities(['characters', 'props']).finally(() => ess.markSaved());
+        // Flush `alter_characters` ONLY when the file actually carried that tab: its entities live
+        // in the same array (rtype 3, key unique across the collection) so they would otherwise
+        // never reach the gateway — but flushing PRESERVED alters would re-write unchanged nodes and
+        // pop a "locked by <peer>" toast naming entities that were never in the workbook.
+        const kinds: BaseKind[] = parse.sheetsPresent.alter_characters
+          ? ['characters', 'props', 'alter_characters']
+          : ['characters', 'props'];
+        void persistBaseEntities(kinds).finally(() => ess.markSaved());
       } else {
         void autoSaveSnapshot();
       }
@@ -323,7 +373,11 @@ export function SketchBaseSpace() {
         toast.warning(`${parse.issues.warnings.length} import warning(s) — see console`);
         for (const w of parse.issues.warnings) log.warn('commitImport', 'warning', { message: w });
       }
-      log.info('commitImport', 'applied base entities', { count });
+      log.info('commitImport', 'applied base entities', {
+        count, // imported from the file (the toast number) — NOT the committed array length
+        committedCharacters: payload.characters.length, // ≠ imported when an absent tab preserved alters
+        alterSheetPresent: parse.sheetsPresent.alter_characters,
+      });
       toast.success(`Imported ${count} base entities`);
     },
     [setSketchBaseEntities, autoSaveSnapshot],
@@ -422,11 +476,12 @@ export function SketchBaseSpace() {
 
   // === Phase 04: opt-in saveResource for the Edit path (Raw sheet | one keyed crop) ===
   // Anchor = base workspace style node: raw → the style's `illustrations`; crop → that entity's
-  // keyed crop. `kind` maps to the sheet key (characters→character_sheet, props→prop_sheet).
+  // keyed crop. `kind` maps to the sheet key through BASE_SHEET_ID (the single kind→sheet source —
+  // a `kind === 'characters' ? … : …` ternary would silently anchor alter edits on the PROP sheet).
   // Undefined snapshot ⇒ omit. (Extract crop = RESERVED — see the modal mount below.)
   const editImageSaveResource = useMemo<SaveResourceDirective | undefined>(() => {
     if (!snapshotId || !editImageTarget) return undefined;
-    const sheetKey = editImageTarget.kind === 'characters' ? 'character_sheet' : 'prop_sheet';
+    const sheetKey = BASE_SHEET_ID[editImageTarget.kind];
     const stylePath = `col:sketch/key:base/key:${sheetKey}/key:styles/idx:${editImageTarget.styleIndex}`;
     const path =
       editImageTarget.scope === 'raw'
@@ -450,6 +505,7 @@ export function SketchBaseSpace() {
         onImport={handleImport}
         isImporting={isImporting}
         generateOps={generateOps}
+        entityCountsByKind={entityCountsByKind}
       />
 
       <div className="flex flex-1 min-w-[480px] flex-col overflow-hidden">
@@ -518,15 +574,16 @@ export function SketchBaseSpace() {
         />
       )}
 
-      {/* Replace-confirm before a bulk import overwrites existing char + prop base entities. */}
+      {/* Replace-confirm before a bulk import overwrites existing base entities. The copy is
+          DERIVED from the parse (`describeImportReplacement`): a workbook carrying an Alter
+          Characters tab destroys the alter cast too, and one without it destroys nothing there —
+          a fixed "character and prop" sentence would be consent for the wrong operation. */}
       <AlertDialog open={pendingImport !== null} onOpenChange={(open) => !open && setPendingImport(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Replace base entities?</AlertDialogTitle>
             <AlertDialogDescription>
-              This replaces all existing character and prop base entities with{' '}
-              {(pendingImport?.result.characters.length ?? 0) + (pendingImport?.result.props.length ?? 0)} from the
-              file. This cannot be undone.
+              {pendingImport ? describeImportReplacement(pendingImport) : null}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

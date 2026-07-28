@@ -2,6 +2,7 @@ import type { StateCreator } from 'zustand';
 import type { Draft } from 'immer';
 import type { SnapshotStore, SketchSlice } from '../types';
 import type {
+  Sketch,
   SketchBaseStyle,
   SketchEntity,
   SketchSpread,
@@ -12,7 +13,14 @@ import type {
   SketchTextboxContent,
 } from '@/types/sketch';
 import type { IllustrationType } from '@/types/prop-types';
-import { isSketchTextboxContent, sheetOf } from '@/types/sketch';
+import {
+  isSketchTextboxContent,
+  sheetOf,
+  sketchEntitiesOfKind,
+  isEntityOfKind,
+  BASE_SHEET_ID,
+  KIND_ENTITY_SOURCE,
+} from '@/types/sketch';
 import { createLogger } from '@/utils/logger';
 import { DEFAULT_SKETCH } from './sketch-normalize';
 
@@ -35,6 +43,30 @@ export type {
 
 const log = createLogger('Store', 'SketchSlice');
 
+/** The REAL array a kind writes into (`alter_characters` shares `characters[]`). */
+const collectionOf = (kind: BaseKind) => KIND_ENTITY_SOURCE[kind].collection;
+
+/**
+ * Pin an entity's `actor_role` to the kind it is being written under — the kind is the caller's
+ * declared intent, and a mismatch is the silent-leak bug this feature is built to prevent
+ * (an alter saved without the flag joins the story cast; nothing errors). `props` is untouched
+ * (no role split). Role 0 is written as ABSENT (contract: absent ⇒ 0 — no JSONB noise).
+ */
+function entityForKind(entity: SketchEntity, kind: BaseKind): SketchEntity {
+  const role = KIND_ENTITY_SOURCE[kind].actorRole;
+  if (role === undefined) return entity;
+  if (role === 1) {
+    if (entity.actor_role === 1) return entity;
+    log.debug('entityForKind', 'stamped actor_role=1 from kind', { kind, key: entity.key });
+    return { ...entity, actor_role: 1 };
+  }
+  if (entity.actor_role === undefined) return entity;
+  log.debug('entityForKind', 'dropped actor_role (kind is primary)', { kind, key: entity.key });
+  const next = { ...entity };
+  delete next.actor_role;
+  return next;
+}
+
 /**
  * Clone the LOCKED style's per-entity crops into each entity's variants[base].raw_sheet
  * (single clone crop, is_selected=true, deep-copied illustrations). The clone LIVE-FOLLOWS the
@@ -43,19 +75,44 @@ const log = createLogger('Store', 'SketchSlice');
  * No-op unless the style is locked. `onlyEntityKey` narrows the write to one entity (single-crop
  * edit/extract); omitted → all entities (lock / re-crop). Entities without a 'base' variant or a
  * matching crop are skipped, leaving any prior clone untouched (original lock-time semantics).
+ *
+ * ⚡ 2026-07-28 — THE SINGLE `actor_role` BRANCH of the whole feature lives here (the 3 call sites
+ * below must NOT duplicate it). `style` always belongs to `sheetOf(base, kind)`, so routing the
+ * ENTITY SET through `KIND_ENTITY_SOURCE` is what pairs each sheet with its own cast:
+ *   kind 'characters'       → base.character_sheet        → entities actor_role absent|0
+ *   kind 'alter_characters' → base.alter_character_sheet  → entities actor_role === 1
+ *   kind 'props'            → base.prop_sheet             → all props (no role split)
+ * Locking one sheet therefore never touches the other sheet's entities.
  */
 function cloneLockedStyleCropsToBaseVariants(
   style: Draft<SketchBaseStyle>,
-  entities: Draft<SketchEntity>[],
+  sketch: Draft<Sketch>,
+  kind: BaseKind,
   onlyEntityKey?: string,
 ): void {
   if (!style.is_selected) return;
+  const entities = sketchEntitiesOfKind(sketch, kind);
+  if (entities.length === 0) {
+    // Locked sheet with no cast of its own — the clone is a silent no-op, so make it visible
+    // (typical for `alter_characters` before any alter has been imported).
+    log.warn('cloneLockedStyleCropsToBaseVariants', 'locked sheet has no entity of this kind — nothing cloned', {
+      kind,
+      sheet: BASE_SHEET_ID[kind],
+    });
+    return;
+  }
   for (const entity of entities) {
     if (onlyEntityKey !== undefined && entity.key !== onlyEntityKey) continue;
     const base = entity.variants.find((v) => v.key === 'base');
     if (!base) continue;
     const c = style.crops.find((cr) => cr.key === entity.key);
     if (!c) continue;
+    log.debug('cloneLockedStyleCropsToBaseVariants', 'clone locked crop into base variant', {
+      kind,
+      sheet: BASE_SHEET_ID[kind],
+      entityKey: entity.key,
+      actorRole: entity.actor_role ?? 0,
+    });
     base.raw_sheet = {
       illustrations: [],
       crops: [{ is_selected: true, illustrations: c.illustrations.map((ill) => ({ ...ill })) }],
@@ -129,35 +186,90 @@ export const createSketchSlice: StateCreator<
       // placeholder reaches the DB on the next NORMAL save. No edit → DB unchanged (fail-safe).
     }),
 
-  // --- Entity-level CRUD (keyed by kind — char/prop only; stages live on SketchStageSlice) ---
+  // --- Entity-level CRUD (keyed by kind — char/prop/alter; stages live on SketchStageSlice) ---
+  // ⚡ 2026-07-28: `kind` is NO LONGER a key of `Sketch` — `alter_characters` shares `characters[]`
+  // with the primaries. Reads resolve through `sketchEntitiesOfKind`, writes through
+  // `collectionOf(kind)` + the role stamp (`entityForKind`), so a kind can never touch the other
+  // role's entities.
 
   setSketchEntities: (kind: BaseKind, entities: SketchEntity[]) =>
     set((state) => {
-      log.debug('setSketchEntities', 'replace all', { kind, count: entities.length });
-      state.sketch[kind] = entities;
+      const collection = collectionOf(kind);
+      const stamped = entities.map((e) => entityForKind(e, kind));
+      // Role-split kinds replace ONLY their own subset — replacing the whole `characters[]` here
+      // would silently wipe the alter cast (or the story cast) of the kind not being written.
+      const kept = state.sketch[collection].filter((e) => !isEntityOfKind(e, kind));
+      // Key uniqueness across the WHOLE collection (both roles) is the invariant the gateway
+      // `find:key=` anchor, the rtype-3 entity lock and the lineup entry ref all rest on. `kept`
+      // is invisible to the caller, so an incoming key colliding with the other role's entity
+      // would corrupt all three at once, silently. Refuse the offending items (same fail-safe as
+      // `upsertSketchEntity`) rather than the whole batch, and name them in the warning.
+      const keptKeys = new Set(kept.map((e) => e.key));
+      const admitted = stamped.filter((e) => !keptKeys.has(e.key));
+      if (admitted.length !== stamped.length) {
+        log.warn('setSketchEntities', 'dropped entities whose key exists under the other cast', {
+          kind,
+          collection,
+          droppedKeys: stamped.filter((e) => keptKeys.has(e.key)).map((e) => e.key),
+        });
+      }
+      log.debug('setSketchEntities', 'replace all of kind', {
+        kind,
+        collection,
+        count: admitted.length,
+        keptOtherRole: kept.length,
+      });
+      state.sketch[collection] = [...admitted, ...(kept as SketchEntity[])];
       state.sync.isDirty = true;
     }),
 
   upsertSketchEntity: (kind: BaseKind, entity: SketchEntity) =>
     set((state) => {
-      const list = state.sketch[kind];
+      const list = state.sketch[collectionOf(kind)];
+      // Match on key across the WHOLE collection (keys are unique there), then REFUSE a role
+      // mismatch: upserting an existing alter under kind `characters` would strip its flag and
+      // move it into the story cast — silently. Matching kind-scoped instead would push a
+      // duplicate key, which is just as bad. Refuse + warn is the only fail-safe option.
       const idx = list.findIndex((e) => e.key === entity.key);
+      if (idx !== -1 && !isEntityOfKind(list[idx], kind)) {
+        log.warn('upsertSketchEntity', 'refused — key exists under a different cast (actor_role mismatch)', {
+          kind,
+          key: entity.key,
+          existingActorRole: list[idx].actor_role ?? 0,
+        });
+        return;
+      }
       log.debug('upsertSketchEntity', idx === -1 ? 'add' : 'update', { kind, key: entity.key });
-      if (idx === -1) list.push(entity);
-      else list[idx] = entity;
+      const next = entityForKind(entity, kind);
+      if (idx === -1) list.push(next);
+      else list[idx] = next;
       state.sync.isDirty = true;
     }),
 
   removeSketchEntity: (kind: BaseKind, key: string) =>
     set((state) => {
-      log.debug('removeSketchEntity', 'remove', { kind, key });
-      state.sketch[kind] = state.sketch[kind].filter((e) => e.key !== key);
+      const collection = collectionOf(kind);
+      // Key + kind: an alter key must not be removable through the `characters` kind — but a
+      // no-op removal is exactly the kind of silence this feature is built to surface.
+      const before = state.sketch[collection].length;
+      state.sketch[collection] = state.sketch[collection].filter(
+        (e) => !(e.key === key && isEntityOfKind(e, kind)),
+      );
+      if (state.sketch[collection].length === before) {
+        log.warn('removeSketchEntity', 'no-op — key absent from this kind (wrong cast?)', {
+          kind,
+          collection,
+          key,
+        });
+        return; // nothing changed → do NOT mark dirty
+      }
+      log.debug('removeSketchEntity', 'remove', { kind, collection, key });
       state.sync.isDirty = true;
     }),
 
   upsertSketchVariant: (kind: BaseKind, entityKey: string, variant: SketchVariant) =>
     set((state) => {
-      const entity = state.sketch[kind].find((e) => e.key === entityKey);
+      const entity = sketchEntitiesOfKind(state.sketch, kind).find((e) => e.key === entityKey);
       if (entity) {
         const idx = entity.variants.findIndex((v) => v.key === variant.key);
         log.debug('upsertSketchVariant', idx === -1 ? 'add' : 'update', {
@@ -175,7 +287,7 @@ export const createSketchSlice: StateCreator<
 
   updateSketchVariantText: (kind, key, variantKey, updates) =>
     set((state) => {
-      const variant = state.sketch[kind]
+      const variant = sketchEntitiesOfKind(state.sketch, kind)
         .find((e) => e.key === key)
         ?.variants.find((v) => v.key === variantKey);
       if (!variant) return;
@@ -189,7 +301,7 @@ export const createSketchSlice: StateCreator<
 
   setSketchVariantRawSheetIllustrations: (kind, entityKey, variantKey, illustrations) =>
     set((state) => {
-      const variant = state.sketch[kind]
+      const variant = sketchEntitiesOfKind(state.sketch, kind)
         .find((e) => e.key === entityKey)
         ?.variants.find((v) => v.key === variantKey);
       if (!variant) return;
@@ -203,7 +315,7 @@ export const createSketchSlice: StateCreator<
   // (creates it with illustrations:[] when absent). base: a single clone crop.
   setSketchVariantCrops: (kind, entityKey, variantKey, crops) =>
     set((state) => {
-      const variant = state.sketch[kind]
+      const variant = sketchEntitiesOfKind(state.sketch, kind)
         .find((e) => e.key === entityKey)
         ?.variants.find((v) => v.key === variantKey);
       if (!variant) return;
@@ -217,7 +329,7 @@ export const createSketchSlice: StateCreator<
   // clear every other cell's flag (≤1 is_selected invariant). No-op if the cell is absent.
   selectSketchVariantCrop: (kind, entityKey, variantKey, cropIndex) =>
     set((state) => {
-      const crops = state.sketch[kind]
+      const crops = sketchEntitiesOfKind(state.sketch, kind)
         .find((e) => e.key === entityKey)
         ?.variants.find((v) => v.key === variantKey)
         ?.raw_sheet?.crops;
@@ -231,7 +343,7 @@ export const createSketchSlice: StateCreator<
 
   setSketchVariantCropIllustrations: (kind, entityKey, variantKey, cropIndex, illustrations) =>
     set((state) => {
-      const crop = state.sketch[kind]
+      const crop = sketchEntitiesOfKind(state.sketch, kind)
         .find((e) => e.key === entityKey)
         ?.variants.find((v) => v.key === variantKey)
         ?.raw_sheet?.crops?.[cropIndex];
@@ -243,9 +355,20 @@ export const createSketchSlice: StateCreator<
 
   // --- Base workspace (char + prop sheets) — pure setters ---
 
+  // ⚠️ WHOLE-COLLECTION REPLACE (Excel bulk import) — unlike `setSketchEntities` this does NOT
+  // preserve the other cast and does NOT stamp `actor_role`: the caller owns the complete arrays.
+  // ⚡2026-07-28 (Phase 08): `characters` MUST already carry the alter entities with their
+  // `actor_role: 1` flag, or this call wipes the alter cast that `base.alter_character_sheet` still
+  // points at. The only caller (`commitImport`) builds it via `resolveImportedCharacters`, which
+  // whole-replaces the story cast (its tab is required) but PRESERVES existing alters when the
+  // optional `Alter Characters` tab is absent from the workbook.
   setSketchBaseEntities: ({ characters, props }) =>
     set((state) => {
-      log.debug('setSketchBaseEntities', 'bulk import', { characters: characters.length, props: props.length });
+      log.debug('setSketchBaseEntities', 'bulk import', {
+        characters: characters.length,
+        alterCharacters: characters.filter((e) => e.actor_role === 1).length,
+        props: props.length,
+      });
       state.sketch.characters = characters;
       state.sketch.props = props;
       state.sync.isDirty = true;
@@ -278,7 +401,7 @@ export const createSketchSlice: StateCreator<
       styles.forEach((s, j) => {
         s.is_selected = j === styleIndex;
       });
-      cloneLockedStyleCropsToBaseVariants(styles[styleIndex], state.sketch[kind]);
+      cloneLockedStyleCropsToBaseVariants(styles[styleIndex], state.sketch, kind);
       state.sync.isDirty = true;
     }),
 
@@ -318,7 +441,7 @@ export const createSketchSlice: StateCreator<
       style.crops = crops;
       // LOCKED style's crops replaced (raw-edit re-crop / regenerate) → re-clone into every
       // entity's base variant so the official images live-follow the new cut.
-      cloneLockedStyleCropsToBaseVariants(style, state.sketch[kind]);
+      cloneLockedStyleCropsToBaseVariants(style, state.sketch, kind);
       state.sync.isDirty = true;
     }),
 
@@ -331,7 +454,7 @@ export const createSketchSlice: StateCreator<
       crop.illustrations = illustrations;
       // Crop of the LOCKED style edited/extracted → re-clone THIS entity's base variant so the
       // entity's official image follows the new crop version (dual-write, live-follow).
-      cloneLockedStyleCropsToBaseVariants(style, state.sketch[kind], entityKey);
+      cloneLockedStyleCropsToBaseVariants(style, state.sketch, kind, entityKey);
       state.sync.isDirty = true;
     }),
 
@@ -346,7 +469,7 @@ export const createSketchSlice: StateCreator<
 
   updateSketchBaseEntityText: (kind, entityKey, updates) =>
     set((state) => {
-      const base = state.sketch[kind]
+      const base = sketchEntitiesOfKind(state.sketch, kind)
         .find((e) => e.key === entityKey)
         ?.variants.find((v) => v.key === 'base');
       if (!base) return;

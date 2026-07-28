@@ -12,7 +12,13 @@ vi.mock('@/apis/supabase', () => ({
 
 import { useSnapshotStore } from '@/stores/snapshot-store';
 import { effectiveCropUrl, useSketchLineupEntries, useSketchLineups } from '@/stores/snapshot-store/selectors';
-import type { SketchEntity, SketchLineupTab, SketchVariant, SketchVariantCrop } from '@/types/sketch';
+import type {
+  SketchEntity,
+  SketchLineupEntry,
+  SketchLineupTab,
+  SketchVariant,
+  SketchVariantCrop,
+} from '@/types/sketch';
 import type { Illustration } from '@/types/prop-types';
 
 const illustration = (media_url: string, is_selected = false): Illustration => ({
@@ -171,6 +177,54 @@ describe('useSketchLineupEntries', () => {
     expect(chars.current[0].ref).toBe('characters:@armor/base');
     expect(props.current[0].ref).toBe('props:@armor/base');
     expect(chars.current[0].ref).not.toBe(props.current[0].ref);
+  });
+});
+
+// `characters[]` holds BOTH casts (actor_role). The lineup shows them as two SEPARATE groups but
+// persists both as `kind:'characters'` — so the split must come from the entity, and the ref from
+// the persist vocabulary, or a checked alter row silently detaches from its stored entry.
+describe('useSketchLineupEntries — alter characters (actor_role split)', () => {
+  const mixedCast: SketchEntity[] = [
+    { key: 'elara', variants: [variant('base', { height: 110 })] },
+    { key: 'elara_alt', actor_role: 1, variants: [variant('base', { height: 118 })] },
+    { key: 'kip', actor_role: 0, variants: [variant('base')] },
+  ];
+
+  beforeEach(() => {
+    setSketchEntities('characters', mixedCast);
+    setSketchEntities('props', []);
+  });
+
+  it('lists each entity EXACTLY ONCE across the two character groups (no double-listing)', () => {
+    const { result: story } = renderHook(() => useSketchLineupEntries('characters'));
+    const { result: alter } = renderHook(() => useSketchLineupEntries('alter_characters'));
+    expect(story.current.map((e) => e.entityKey)).toEqual(['elara', 'kip']); // alter FILTERED OUT
+    expect(alter.current.map((e) => e.entityKey)).toEqual(['elara_alt']);
+    // Total rows == total variants of the array — a missing filter would double-count.
+    expect(story.current.length + alter.current.length).toBe(
+      mixedCast.reduce((n, e) => n + e.variants.length, 0),
+    );
+  });
+
+  it('carries the UI kind (grouping) but a ref in the PERSIST vocabulary (round-trip)', () => {
+    const { result: alter } = renderHook(() => useSketchLineupEntries('alter_characters'));
+    expect(alter.current[0].kind).toBe('alter_characters'); // decides the sidebar group
+    expect(alter.current[0].ref).toBe('characters:@elara_alt/base'); // matches the stored entry
+    expect(alter.current[0].heightCm).toBe(118);
+  });
+
+  it('a persisted `characters` entry of an alter entity still resolves to the ALTER row', () => {
+    // What a reload does: the tab holds kind:'characters', the row lives in the alter group.
+    const stored: SketchLineupEntry = {
+      kind: 'characters',
+      entity_key: 'elara_alt',
+      variant_key: 'base',
+    };
+    const { result: alter } = renderHook(() => useSketchLineupEntries('alter_characters'));
+    const { result: story } = renderHook(() => useSketchLineupEntries('characters'));
+    const storedRef = `${stored.kind}:@${stored.entity_key}/${stored.variant_key}`;
+    expect(alter.current.some((e) => e.ref === storedRef)).toBe(true);
+    expect(story.current.some((e) => e.ref === storedRef)).toBe(false);
   });
 });
 

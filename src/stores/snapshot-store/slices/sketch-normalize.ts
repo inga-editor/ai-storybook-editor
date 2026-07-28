@@ -67,10 +67,27 @@ export type {
 
 const log = createLogger('Store', 'SketchNormalize');
 
-/** Fresh empty base workspace (2 sheets: character + prop, no styles). */
+/** Fresh empty base workspace (3 sheets: character + prop + alter character, no styles).
+ *  ⚡ 2026-07-28: a snapshot written before the alter feature has NO `alter_character_sheet` —
+ *  it defaults here (ABSENT, not an anomaly), so the base space never reads `undefined.styles`. */
 export function emptyBase(): SketchBase {
-  return { character_sheet: { styles: [] }, prop_sheet: { styles: [] } };
+  return {
+    character_sheet: { styles: [] },
+    prop_sheet: { styles: [] },
+    alter_character_sheet: { styles: [] },
+  };
 }
+
+/** The 3 base sheets, in the order they are reported/reset. Single source for the loops below. */
+const SHEET_RESOURCES = [
+  'base.character_sheet',
+  'base.prop_sheet',
+  'base.alter_character_sheet',
+] as const;
+type SheetResource = (typeof SHEET_RESOURCES)[number];
+/** `base.character_sheet` → `character_sheet` (the `SketchBase` member it normalizes into). */
+const sheetMemberOf = (resource: SheetResource) =>
+  resource.slice('base.'.length) as keyof SketchBase;
 
 export const DEFAULT_SKETCH: Sketch = {
   id: null,
@@ -134,7 +151,7 @@ function safeResource<T>(
  */
 function normalizeSheet(
   raw: unknown,
-  resource: 'base.character_sheet' | 'base.prop_sheet',
+  resource: SheetResource,
   onAnomaly: SketchAnomalyReporter,
 ): SketchBaseSheet {
   if (raw == null) return { styles: [] }; // legitimately new — no anomaly
@@ -201,7 +218,7 @@ function normalizeSheet(
 function normalizeBase(raw: unknown, onAnomaly: SketchAnomalyReporter): SketchBase {
   if (raw == null) return emptyBase(); // legitimately new — no anomaly
   if (!isPlainObject(raw)) {
-    for (const resource of ['base.character_sheet', 'base.prop_sheet'] as const) {
+    for (const resource of SHEET_RESOURCES) {
       onAnomaly({
         resource,
         cls: 'reset',
@@ -212,20 +229,17 @@ function normalizeBase(raw: unknown, onAnomaly: SketchAnomalyReporter): SketchBa
     }
     return emptyBase();
   }
-  return {
-    character_sheet: safeResource(
-      'base.character_sheet',
-      () => normalizeSheet(raw.character_sheet, 'base.character_sheet', onAnomaly),
+  const base = emptyBase();
+  for (const resource of SHEET_RESOURCES) {
+    const member = sheetMemberOf(resource);
+    base[member] = safeResource(
+      resource,
+      () => normalizeSheet(raw[member], resource, onAnomaly),
       { styles: [] },
       onAnomaly,
-    ),
-    prop_sheet: safeResource(
-      'base.prop_sheet',
-      () => normalizeSheet(raw.prop_sheet, 'base.prop_sheet', onAnomaly),
-      { styles: [] },
-      onAnomaly,
-    ),
-  };
+    );
+  }
+  return base;
 }
 
 /** One entity collection (`characters`/`props`). Absent → []; malformed → reset. */
@@ -402,7 +416,7 @@ export function normalizeSketch(
     try {
       rawBase = raw.base;
     } catch (err) {
-      for (const resource of ['base.character_sheet', 'base.prop_sheet'] as const) {
+      for (const resource of SHEET_RESOURCES) {
         report({
           resource,
           cls: 'reset',
@@ -512,9 +526,10 @@ export function coerceSketchNode(
 
   if (head === 'base') {
     if (path.length === 1) return normalizeBase(value, onAnomaly);
-    if (path.length === 2 && (path[1] === 'character_sheet' || path[1] === 'prop_sheet')) {
-      const resource = path[1] === 'character_sheet' ? 'base.character_sheet' : 'base.prop_sheet';
-      return normalizeSheet(value, resource, onAnomaly);
+    if (path.length === 2) {
+      // rtype-11 node grain: one sheet (character_sheet | prop_sheet | alter_character_sheet).
+      const resource = SHEET_RESOURCES.find((r) => sheetMemberOf(r) === path[1]);
+      if (resource) return normalizeSheet(value, resource, onAnomaly);
     }
     return value;
   }

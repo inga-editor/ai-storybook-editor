@@ -13,6 +13,7 @@ import type { Character } from '@/types/character-types';
 import type { Prop } from '@/types/prop-types';
 import type { Stage } from '@/types/stage-types';
 import type { Sketch, SketchEntity, SketchStage } from '@/types/sketch';
+import { emptyBase } from '@/stores/snapshot-store/slices/sketch-normalize';
 import type { ParsedEntityRow, ImportModalMeta } from './import-script-types';
 import type { ImportedWorkbook } from './parse-excel-workbook';
 import { buildSketchSpreadsFromWorkbook } from './sketch-spread-excel';
@@ -238,7 +239,7 @@ export function assembleSketchSnapshot(
 
   const sketch: Sketch = {
     id: newUuid(),
-    base: { character_sheet: { styles: [] }, prop_sheet: { styles: [] } },
+    base: emptyBase(), // 3 empty sheets (character · prop · alter character)
     characters: projectSketchEntities(parsed.characters),
     props: projectSketchEntities(parsed.props),
     stages: projectSketchStages(parsed.stages),

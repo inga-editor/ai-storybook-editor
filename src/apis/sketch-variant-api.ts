@@ -25,10 +25,13 @@ import { warnIfSaveResourceFailed } from '@/utils/save-resource-path';
 
 const log = createLogger('API', 'SketchVariantApi');
 
-/** Per-kind variant-sheet generate route (08 = character, 09 = prop). Path preserved verbatim. */
+/** Per-kind variant-sheet generate route (08 = character, 09 = prop). Path preserved verbatim.
+ *  ⚡ 2026-07-28: alter characters reuse the CHARACTER route (08) — a variant sheet is anchored on
+ *  the entity's own locked base image, so no sheet discriminator is needed here. */
 const VARIANT_SHEET_ENDPOINT: Record<BaseKind, string> = {
   characters: '/api/sketch/generate-character-variant-sheet',
   props: '/api/sketch/generate-prop-variant-sheet',
+  alter_characters: '/api/sketch/generate-character-variant-sheet',
 };
 
 /** Crop (10) is kind-agnostic — single route; the sheet + cellCount + pathPrefix travel in the body. */

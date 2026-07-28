@@ -54,7 +54,9 @@ import { useHeldResourceSession } from '@/features/editor/hooks/use-held-resourc
 import { useEditSessionStatusStore } from '@/stores/edit-session-status-store';
 import { useInteractionLayer } from '@/features/editor/contexts';
 import { titleCase } from '@/features/editor/components/sketch-variants-creative-space/sketch-variants-constants';
+import { nounForKind } from './sketch-base-constants';
 import type { BaseKind } from '@/types/sketch';
+import { sketchEntitiesOfKind } from '@/types/sketch';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('Editor', 'EditBaseEntityModal');
@@ -86,7 +88,7 @@ export function EditBaseEntityModal({ kind, onClose }: EditBaseEntityModalProps)
   // would clobber the peer on Save), and so discard-on-close only drops MY local edits.
   const initialDrafts = useMemo<DraftMap>(() => {
     const out: DraftMap = {};
-    for (const e of useSnapshotStore.getState().sketch[kind]) {
+    for (const e of sketchEntitiesOfKind(useSnapshotStore.getState().sketch, kind)) {
       const base = e.variants.find((v) => v.key === 'base');
       if (!base) continue;
       out[e.key] = {
@@ -105,7 +107,8 @@ export function EditBaseEntityModal({ kind, onClose }: EditBaseEntityModalProps)
   });
   const [activeKey, setActiveKey] = useState<string>(() => entityKeys[0] ?? '');
 
-  const cfg = kind === 'characters' ? 'Character' : 'Prop';
+  // titleCase of the kind noun — a binary ternary would label the alter tab "Prop".
+  const cfg = titleCase(nounForKind(kind));
 
   // ── Per-active-tab held ENTITY session (grain B, rtype 3/4) ───────────────────────────────────
   // Target = the active tab's entity; switching tabs release-then-acquires (the hook keys on the
@@ -119,7 +122,8 @@ export function EditBaseEntityModal({ kind, onClose }: EditBaseEntityModalProps)
   const getNode = useCallback(
     () =>
       activeKey
-        ? (useSnapshotStore.getState().sketch[kind].find((e) => e.key === activeKey) ?? null)
+        ? (sketchEntitiesOfKind(useSnapshotStore.getState().sketch, kind).find((e) => e.key === activeKey) ??
+          null)
         : null,
     [kind, activeKey],
   );
@@ -205,7 +209,9 @@ export function EditBaseEntityModal({ kind, onClose }: EditBaseEntityModalProps)
       if (keys.length > 0) ess.markSaving();
       try {
         for (const key of keys) {
-          const node = useSnapshotStore.getState().sketch[kind].find((e) => e.key === key) ?? null;
+          const node =
+            sketchEntitiesOfKind(useSnapshotStore.getState().sketch, kind).find((e) => e.key === key) ??
+            null;
           await flushSketchEntityUnderLock(kind, key, node, { releaseIfAcquired: true });
         }
       } finally {

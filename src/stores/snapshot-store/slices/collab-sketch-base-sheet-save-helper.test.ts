@@ -14,7 +14,10 @@ const h = vi.hoisted(() => {
     bookId: 'book-1' as string | null,
     myLocks: new Set<string>(),
     acquire: vi.fn(async (_t: unknown) => ({ ok: true }) as { ok: boolean; holder?: string }),
-    save: vi.fn(async (_t: unknown, _p: unknown) => ({ ok: true }) as { ok: boolean; lost?: boolean; forbidden?: boolean }),
+    save: vi.fn(
+      async (_t: unknown, _p: unknown) =>
+        ({ ok: true }) as { ok: boolean; lost?: boolean; forbidden?: boolean; notFound?: boolean },
+    ),
     release: vi.fn(async (_t: unknown) => {}),
   };
   return { state };
@@ -57,8 +60,21 @@ describe('resolveSketchBaseSheetLockTarget', () => {
       locale: null,
     });
   });
-  it('constant matches the resolver (characters → character_sheet · props → prop_sheet)', () => {
-    expect(SKETCH_KIND_TO_SHEET_RESOURCE_ID).toEqual({ characters: 'character_sheet', props: 'prop_sheet' });
+  it('maps alter_characters → step 1 / rtype 11 / resource_id alter_character_sheet', () => {
+    // 3 distinct resource_ids ⇒ 3 INDEPENDENT rtype-11 locks (the 3 sheets generate in parallel).
+    expect(resolveSketchBaseSheetLockTarget('alter_characters')).toEqual({
+      step: 1,
+      resource_type: 11,
+      resource_id: 'alter_character_sheet',
+      locale: null,
+    });
+  });
+  it('constant matches the resolver (characters · props · alter_characters)', () => {
+    expect(SKETCH_KIND_TO_SHEET_RESOURCE_ID).toEqual({
+      characters: 'character_sheet',
+      props: 'prop_sheet',
+      alter_characters: 'alter_character_sheet',
+    });
   });
 });
 
@@ -136,5 +152,73 @@ describe('flushSketchBaseSheetUnderLock', () => {
     const ok = await flushSketchBaseSheetUnderLock('characters', null);
     expect(ok).toBe(false);
     expect(h.state.acquire).not.toHaveBeenCalled();
+  });
+});
+
+// The ONLY production seeder of `sketch.base` is snapshot CREATION (`emptyBase()`), which writes
+// the sheets that existed when the book was created. A book created before 2026-07-28 therefore has
+// NO `alter_character_sheet` node → the very first alter save would 404 forever (collab suppresses
+// the whole-doc autosave that would otherwise write the client-side normalize default back).
+describe('flushSketchBaseSheetUnderLock — absent sheet node (first-ever save must not 404)', () => {
+  it('404 on the edit → seeds with a create (log:false) then re-issues the edit for the audit', async () => {
+    h.state.collabPersist = true;
+    h.state.save
+      .mockResolvedValueOnce({ ok: false, lost: false, forbidden: false, notFound: true }) // edit → 404
+      .mockResolvedValueOnce({ ok: true }) // seed create
+      .mockResolvedValueOnce({ ok: true }); // audit re-issue
+
+    const ok = await flushSketchBaseSheetUnderLock('alter_characters', SHEET_NODE);
+
+    expect(ok).toBe(true);
+    const target = { step: 1, resource_type: 11, resource_id: 'alter_character_sheet', locale: null };
+    expect(h.state.save).toHaveBeenNthCalledWith(1, target, { action_type: 3, patch: SHEET_NODE, log: true });
+    // Repair create is NOT audited (log:false) — it is infrastructure, not a user action.
+    expect(h.state.save).toHaveBeenNthCalledWith(2, target, { action_type: 2, patch: SHEET_NODE, log: false });
+    // …then the original edit is re-issued so the audit row names the real action.
+    expect(h.state.save).toHaveBeenNthCalledWith(3, target, { action_type: 3, patch: SHEET_NODE, log: true });
+  });
+
+  it('404 → seed create succeeds but the audit re-issue fails → still true (data IS saved)', async () => {
+    h.state.collabPersist = true;
+    h.state.save
+      .mockResolvedValueOnce({ ok: false, lost: false, forbidden: false, notFound: true })
+      .mockResolvedValueOnce({ ok: true })
+      .mockResolvedValueOnce({ ok: false, lost: true, forbidden: false });
+
+    expect(await flushSketchBaseSheetUnderLock('alter_characters', SHEET_NODE)).toBe(true);
+  });
+
+  it('404 → seed create ALSO rejected → false (no infinite repair loop)', async () => {
+    h.state.collabPersist = true;
+    h.state.save
+      .mockResolvedValueOnce({ ok: false, lost: false, forbidden: false, notFound: true })
+      .mockResolvedValueOnce({ ok: false, lost: false, forbidden: true });
+
+    expect(await flushSketchBaseSheetUnderLock('alter_characters', SHEET_NODE)).toBe(false);
+    expect(h.state.save).toHaveBeenCalledTimes(2); // edit + ONE create attempt, nothing more
+  });
+
+  it('a NON-404 rejection is never retried as a create (lock lost ≠ missing node)', async () => {
+    h.state.collabPersist = true;
+    h.state.save.mockResolvedValueOnce({ ok: false, lost: true, forbidden: false });
+
+    expect(await flushSketchBaseSheetUnderLock('characters', SHEET_NODE)).toBe(false);
+    expect(h.state.save).toHaveBeenCalledTimes(1);
+  });
+
+  it('seed repair also releases a one-shot lock it acquired itself', async () => {
+    h.state.collabPersist = true;
+    h.state.save
+      .mockResolvedValueOnce({ ok: false, lost: false, forbidden: false, notFound: true })
+      .mockResolvedValueOnce({ ok: true })
+      .mockResolvedValueOnce({ ok: true });
+
+    expect(await flushSketchBaseSheetUnderLock('alter_characters', SHEET_NODE, { releaseIfAcquired: true })).toBe(true);
+    expect(h.state.release).toHaveBeenCalledWith({
+      step: 1,
+      resource_type: 11,
+      resource_id: 'alter_character_sheet',
+      locale: null,
+    });
   });
 });

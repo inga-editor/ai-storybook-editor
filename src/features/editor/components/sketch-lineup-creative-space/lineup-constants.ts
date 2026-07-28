@@ -1,18 +1,62 @@
 // lineup-constants.ts — static config + pure helpers for SketchLineupSpace (design README §2).
 //
-// DRY: `KindGroupConfig` / `KIND_GROUPS` / `ZOOM` are REUSED from the Base space (same two groups,
-// same zoom bounds) and only re-exported here so lineup files import from one place. `LineupEntry`
-// lives in @/types/sketch (store + feature both consume it — see the type's doc comment).
+// DRY: `KindGroupConfig` / `ZOOM` are REUSED from the Base space and re-exported here so lineup
+// files import from one place. `KIND_GROUPS` is DERIVED (not re-exported verbatim) — see
+// LINEUP_WIRED_KINDS below. `LineupEntry` lives in @/types/sketch (store + feature both consume
+// it — see the type's doc comment).
 //
 // 2026-07-25 multi-tab persist: tab caps + the pure tab/entry helpers (refOf / toTabEntry /
 // nextTabName / the toggle payload builders) live here so the root's write handlers stay thin
 // and each payload shape is unit-testable without React (see lineup-tab-helpers.test.ts).
 
-import type { BaseKind, LineupEntry, SketchLineupEntry, SketchLineupTab } from '@/types/sketch';
-import { KIND_GROUPS, ZOOM, type KindGroupConfig } from '../sketch-base-creative-space/sketch-base-constants';
+import type {
+  BaseEntityCollection,
+  BaseKind,
+  LineupEntry,
+  SketchLineupEntry,
+  SketchLineupTab,
+} from '@/types/sketch';
+import { KIND_ENTITY_SOURCE, lineupEntryRef, lineupPersistKind } from '@/types/sketch';
+import {
+  KIND_GROUPS as BASE_KIND_GROUPS,
+  ZOOM,
+  type KindGroupConfig,
+} from '../sketch-base-creative-space/sketch-base-constants';
 
-export { KIND_GROUPS, ZOOM };
+export { ZOOM };
 export type { KindGroupConfig, BaseKind, LineupEntry };
+
+/**
+ * Kinds whose lineup wiring is COMPLETE — the ONE place that decides whether the lineup sidebar
+ * shows a group. Rendering a group is only safe when every downstream seam agrees; a kind missing
+ * from any of them renders a group that silently misbehaves. Phase 07 collapsed three of those
+ * seams INTO this list so they can no longer drift apart:
+ *   • `KIND_GROUPS` (below) — what the sidebar renders.
+ *   • `ALL_KINDS` (below, consumed by the space's `grantedKinds`) — absent ⇒ the group shows
+ *     "you do not have edit rights" TO THE BOOK OWNER.
+ *   • `allEntries` (sketch-lineup-creative-space) — now derived from `KIND_GROUPS`; absent ⇒
+ *     checked rows never reach the canvas or the rtype-12 tab persist (silent drop).
+ * The ONE seam that stays separate is the wire vocabulary `LINEUP_ENTRY_KINDS`
+ * (sketch-coerce-helpers) — it is deliberately NOT widened; see `toTabEntry` below.
+ *
+ * ⚡2026-07-28: `alter_characters` IS wired (Phase 07). Alter rows are deliberately selectable —
+ * comparing an alter's height against the primary cast is the whole point of casting.
+ */
+export const LINEUP_WIRED_KINDS: readonly BaseKind[] = ['characters', 'props', 'alter_characters'];
+
+/** Base-space group configs, narrowed to the kinds this space has fully wired (labels stay DRY). */
+export const KIND_GROUPS: KindGroupConfig[] = BASE_KIND_GROUPS.filter((g) =>
+  LINEUP_WIRED_KINDS.includes(g.kind),
+);
+
+/** Every kind the space can edit (what the OWNER gets). Derived — see LINEUP_WIRED_KINDS. */
+export const ALL_KINDS: ReadonlySet<BaseKind> = new Set(LINEUP_WIRED_KINDS);
+
+/** Collaborator grant key for a kind — a key of `access_rights.steps.sketch.resources`
+ *  (`STEP_RESOURCES.sketch`). It is the REAL collection, so an alter is gated by the `characters`
+ *  grant (Phase 01 — alter introduces no new grant). */
+export const grantKeyOf = (kind: BaseKind): BaseEntityCollection =>
+  KIND_ENTITY_SOURCE[kind].collection;
 
 // ── Tab caps (design 02-01/03 — mapping constants) ───────────────────────────────────────────
 export const LINEUP_TAB_LIMIT = 12;
@@ -20,12 +64,22 @@ export const LINEUP_TAB_NAME_MAX = 60;
 export const LINEUP_TAB_LABEL_MAX_PX = 180;
 
 /** Canonical ref of a PERSISTED entry — must mint the exact same string as `LineupEntry.ref`
- *  (`useSketchLineupEntries`), or checkbox derive/uncheck would silently mismatch. */
-export const refOf = (e: SketchLineupEntry): string => `${e.kind}:@${e.entity_key}/${e.variant_key}`;
+ *  (`useSketchLineupEntries`), or checkbox derive/uncheck would silently mismatch. Both go through
+ *  `lineupEntryRef`, so a stored `characters` entry and the alter ROW it came from agree. */
+export const refOf = (e: SketchLineupEntry): string =>
+  lineupEntryRef(e.kind, e.entity_key, e.variant_key);
 
-/** View-model → persisted entry (snake_case snapshot contract). */
+/**
+ * View-model → persisted entry (snake_case snapshot contract).
+ *
+ * ⚡ UI 3 kinds → WIRE 2 kinds: `alter_characters` is written as `characters`. The rtype-12
+ * coercer (`LINEUP_ENTRY_KINDS`) drops any other value on load, so persisting the UI kind would be
+ * silent data loss. Nothing is lost by narrowing: the alter/story split is re-derived from the
+ * entity's `actor_role` at read time (`useSketchLineupEntries`), never from the stored kind — so
+ * an alter still lands in the Alter group after a reload.
+ */
 export const toTabEntry = (e: LineupEntry): SketchLineupEntry => ({
-  kind: e.kind,
+  kind: lineupPersistKind(e.kind),
   entity_key: e.entityKey,
   variant_key: e.variantKey,
 });
@@ -116,5 +170,9 @@ export const rowLabel = (entry: LineupEntry): string => `${entry.entityKey}/${en
  *  (review M2 2026-07-25). */
 export const mentionOf = (entry: LineupEntry): string => `@${entry.entityKey}/${entry.variantKey}`;
 
-/** Default expanded state — both groups open (design README §2.2). */
-export const DEFAULT_EXPANDED_GROUPS: Record<BaseKind, boolean> = { characters: true, props: true };
+/** Default expanded state — every group open (design README §2.2). */
+export const DEFAULT_EXPANDED_GROUPS: Record<BaseKind, boolean> = {
+  characters: true,
+  props: true,
+  alter_characters: true,
+};

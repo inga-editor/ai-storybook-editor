@@ -9,7 +9,8 @@
 
 import type { BaseKind, SketchVariant, VariantRef } from '@/types/sketch';
 
-/** Per-kind config for the two variant groups (Character / Prop). Stage has NO variant sheet. */
+/** Per-kind config for the variant groups (Character / Prop / Alter Character). Stage has NO
+ *  variant sheet. */
 export interface KindGroupConfig {
   kind: BaseKind;
   /** Group header title. */
@@ -18,10 +19,23 @@ export interface KindGroupConfig {
   noun: string;
 }
 
-/** Fixed order: Character then Prop. Variant workspace covers char + prop only (no Stage). */
+/**
+ * Fixed order: Character → Prop → Alter Character (alter LAST, same order as the Base space).
+ * Variant workspace covers those three only (no Stage).
+ *
+ * ⚠️ This list is this space's OWN — it deliberately does NOT re-export the Base space's
+ * `KIND_GROUPS` (that one carries `sheetName`, an import-only concern). Adding a kind to the Base
+ * space does NOT reach this sidebar; it has to be added here on purpose.
+ *
+ * ⚡2026-07-28 alter: NOT a new entity array — `alter_characters` reads `sketch.characters[]`
+ * filtered by `actor_role === 1` (KIND_ENTITY_SOURCE), so it shares the `characters` grant and the
+ * rtype-3 entity lock. The group lists a FLAT list of that cast's non-base variants, with the same
+ * ✏ + ✨ affordances as the Character group.
+ */
 export const KIND_GROUPS: KindGroupConfig[] = [
   { kind: 'characters', title: 'Character', noun: 'character' },
   { kind: 'props', title: 'Prop', noun: 'prop' },
+  { kind: 'alter_characters', title: 'Alter Character', noun: 'alter character' },
 ];
 
 /** Zoom bounds for the content-area preview. Applied as CSS width % (NOT transform:scale —

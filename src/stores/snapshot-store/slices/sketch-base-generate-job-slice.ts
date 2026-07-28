@@ -23,7 +23,7 @@
 import type { StateCreator } from 'zustand';
 import type { SnapshotStore, SketchBaseGenerateJobSlice, BaseGeneratePhase } from '../types';
 import type { BaseKind, SketchEntity } from '@/types/sketch';
-import { sheetOf } from '@/types/sketch';
+import { sheetOf, sketchEntitiesOfKind, BASE_SHEET_ID, KIND_ENTITY_SOURCE } from '@/types/sketch';
 import type { Illustration, ImageReference } from '@/types/prop-types';
 import {
   callGenerateBaseSheet,
@@ -46,13 +46,6 @@ import { toast } from 'sonner';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('Store', 'SketchBaseGenerateJobSlice');
-
-/** kind → base-sheet member key (mirrors `sheetOf`: characters→character_sheet, props→prop_sheet).
- *  Drives the `image_version` save-directive anchor `col:sketch/key:base/key:<sheet>/key:styles/idx`. */
-const BASE_SHEET_KEY: Record<BaseKind, string> = {
-  characters: 'character_sheet',
-  props: 'prop_sheet',
-};
 
 /** Endpoint caps the sheet at 12 cells (1K legibility, [API 05 §Grid]) — content-area blocks first;
  *  this is the defensive net at the slice boundary. */
@@ -151,7 +144,7 @@ export const createSketchBaseGenerateJobSlice: StateCreator<
       // `cropsLanded` gates the failed/cancelled paths (raw may have landed, crops did not →
       // clones unchanged → no N-entity writes / peer refetch noise).
       if (cropsLanded && sheetOf(get().sketch.base, kind).styles[styleIndex]?.is_selected) {
-        for (const e of get().sketch[kind]) {
+        for (const e of sketchEntitiesOfKind(get().sketch, kind)) {
           await flushSketchEntityUnderLock(kind, e.key, e, { releaseIfAcquired: true });
         }
       }
@@ -174,7 +167,12 @@ export const createSketchBaseGenerateJobSlice: StateCreator<
     const result = await callCropSheetRow({
       imageUrl,
       cellCount: cellOrder.length,
-      pathPrefix: `sketches/base/${kind}`,
+      // Storage prefix is keyed on the entity COLLECTION, not the kind: alter characters live in
+      // `sketch.characters[]` and their assets deliberately share `sketches/base/characters/`.
+      // The two character sheets are told apart by the snapshot node they land in, NEVER by the
+      // folder — do NOT "tidy" this into `${kind}` (it would split alter assets into their own
+      // directory and orphan everything generated before the change).
+      pathPrefix: `sketches/base/${KIND_ENTITY_SOURCE[kind].collection}`,
     });
     if (opStale(kind, styleIndex)) return; // reset/cancel/removeStyle during crop → drop
     if (!result.success || !result.data) throw new Error(classifyError(result));
@@ -230,8 +228,18 @@ export const createSketchBaseGenerateJobSlice: StateCreator<
     },
     isAdd: boolean,
   ): Promise<void> {
-    // entities read AT SLICE (base variant text) — same reading-order for generate + crop.
-    const entities = baseEntitiesOf(get().sketch[kind]).map(baseVariantText);
+    // Entities read AT SLICE (base variant text) — same reading-order for generate + crop, and
+    // resolved through KIND_ENTITY_SOURCE (`sketch['alter_characters']` does not exist: alter is
+    // `characters[]` filtered by actor_role). The api client derives `targetSheet` from this SAME
+    // `kind`, so the cell set and the destination sheet can never disagree.
+    const entities = baseEntitiesOf(sketchEntitiesOfKind(get().sketch, kind)).map(baseVariantText);
+    log.debug('runGenerate', 'resolved entity source for kind', {
+      kind,
+      collection: KIND_ENTITY_SOURCE[kind].collection,
+      actorRole: KIND_ENTITY_SOURCE[kind].actorRole ?? null,
+      sheet: BASE_SHEET_ID[kind],
+      entityCount: entities.length,
+    });
     // Closure flag: once the raw sheet is written the style is real (partial success) → never roll back.
     let rawLanded = false;
     // Crops replacement reached the store → entity base-variant clones may have refreshed (locked
@@ -263,7 +271,7 @@ export const createSketchBaseGenerateJobSlice: StateCreator<
         // below. Omitted when the book has no snapshot row yet (client persist stays sole writer).
         saveResource: snapshotId
           ? buildImageVersionSaveResource(
-              `col:sketch/key:base/key:${BASE_SHEET_KEY[kind]}/key:styles/idx:${styleIndex}`,
+              `col:sketch/key:base/key:${BASE_SHEET_ID[kind]}/key:styles/idx:${styleIndex}`,
               snapshotId,
               'create',
             )
@@ -272,7 +280,11 @@ export const createSketchBaseGenerateJobSlice: StateCreator<
       if (opStale(kind, styleIndex)) return;
       if (!result.success || !result.data) throw new Error(classifyError(result));
 
-      log.info('runGenerate', 'raw sheet done', { kind, styleIndex });
+      log.info('runGenerate', 'raw sheet done', {
+        kind,
+        styleIndex,
+        targetSheet: result.data.targetSheet ?? null, // echo — confirms WHICH sheet node it wrote
+      });
       // Persist ai_request_id provenance from the generate result (raw sheet = direct Gemini output).
       get().addSketchBaseStyleIllustration(kind, styleIndex, result.data.imageUrl, result.data.aiRequestId);
       rawLanded = true;
@@ -335,7 +347,7 @@ export const createSketchBaseGenerateJobSlice: StateCreator<
     baseSheetGenerateOps: {},
 
     startBaseSheetGenerate: ({ kind, mode, styleIndex, stylePrompt, referenceImages, artStyleId, modelParams }) => {
-      // Per-KIND single-flight: `characters` and `props` run in parallel (separate rtype-11 sheet
+      // Per-KIND single-flight: all THREE kinds run in parallel (three separate rtype-11 sheet
       // nodes → no write contention), but two ops on the SAME kind would both write that one sheet
       // node last-writer-wins.
       if (get().baseSheetGenerateOps[kind] != null) {
@@ -343,9 +355,15 @@ export const createSketchBaseGenerateJobSlice: StateCreator<
         return;
       }
 
-      const baseEntities = baseEntitiesOf(get().sketch[kind]);
+      const baseEntities = baseEntitiesOf(sketchEntitiesOfKind(get().sketch, kind));
       if (baseEntities.length === 0) {
-        log.warn('startBaseSheetGenerate', 'no base entities — nothing to generate', { kind });
+        // Typically the alter group before any `actor_role=1` row is imported. The sidebar already
+        // greys the ＋ seam for an empty group; this is the slice-level net.
+        log.warn('startBaseSheetGenerate', 'no base entities — nothing to generate', {
+          kind,
+          collection: KIND_ENTITY_SOURCE[kind].collection,
+          actorRole: KIND_ENTITY_SOURCE[kind].actorRole ?? null,
+        });
         toast.warning('Import base entities first');
         return;
       }
@@ -378,6 +396,7 @@ export const createSketchBaseGenerateJobSlice: StateCreator<
         mode,
         styleIndex: i,
         entityCount: baseEntities.length,
+        sheet: BASE_SHEET_ID[kind],
       });
       set((state) => {
         state.baseSheetGenerateOps[kind] = {
@@ -409,8 +428,9 @@ export const createSketchBaseGenerateJobSlice: StateCreator<
         return;
       }
 
-      // Reading-order entity keys = the sketch[kind] order (mirrors the generate reading-order).
-      const cellOrder = baseEntitiesOf(get().sketch[kind]).map((e) => e.key);
+      // Reading-order entity keys = the KIND's entity order (mirrors the generate reading-order;
+      // routed through KIND_ENTITY_SOURCE — `sketch['alter_characters']` does not exist).
+      const cellOrder = baseEntitiesOf(sketchEntitiesOfKind(get().sketch, kind)).map((e) => e.key);
       log.info('recropBaseSheet', 'start', { kind, styleIndex, entityCount: cellOrder.length });
       set((state) => {
         state.baseSheetGenerateOps[kind] = {

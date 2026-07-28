@@ -10,8 +10,23 @@ import type { Geometry, Typography } from './spread-types';
 import type { Illustration, IllustrationType, ImageReference } from './prop-types';
 
 export type SketchEntityKind = 'characters' | 'props' | 'stages';
-/** Base sheet workspace covers character + prop only (stage generates directly, no base sheet). */
-export type BaseKind = 'characters' | 'props';
+/**
+ * Base sheet workspace kinds: character + prop + alter character (stage generates directly, no
+ * base sheet).
+ *
+ * ⚡ 2026-07-28 — `alter_characters` is a **VIRTUAL** kind: it owns NO top-level array. Its
+ * entities are the `actor_role === 1` subset of `sketch.characters[]`, and its base sheet is
+ * `base.alter_character_sheet`. The old invariant "kind IS a key of Sketch" is therefore DEAD:
+ * `sketch['alter_characters']` is `undefined` (silently empty, no type/runtime error).
+ * ⇒ NEVER index `sketch[kind]` with a `BaseKind`. Route every read through the two mappings
+ * below: `KIND_ENTITY_SOURCE` (kind → entity set) and `BASE_SHEET_ID` (kind → sheet node).
+ */
+export type BaseKind = 'characters' | 'props' | 'alter_characters';
+/** The REAL top-level entity arrays under `Sketch` sharing the char/prop variant shape. */
+export type BaseEntityCollection = 'characters' | 'props';
+/** Cast role of a sketch entity: 0 = primary (story cast), 1 = alter (casting only, NEVER in the
+ *  story path). Absent ⇒ 0 — the contract is presence-gated, so `0` is never written explicitly. */
+export type ActorRole = 0 | 1;
 export type SketchPageType = 'left' | 'right' | 'full';
 
 // ── Variant crop (positional — NO key; 2026-07-14) ───────────────────────────
@@ -41,6 +56,10 @@ export interface SketchVariant {
 // char/prop only — stages carry their own SketchStage shape (2026-07-18 BREAKING rework).
 export interface SketchEntity {
   key: string;
+  /** ⚡ 2026-07-28 — alter flag. ABSENT ⇒ 0 (primary). Only `characters[]` ever carries it: alter
+   *  characters live in the SAME array as primaries (no separate collection, no `alter_of` link).
+   *  Never auto-written on read (absent stays absent — keeps the JSONB + collab diffs quiet). */
+  actor_role?: ActorRole;
   variants: SketchVariant[];
 }
 
@@ -98,9 +117,13 @@ export interface LineupEntry {
   kind: BaseKind;
   entityKey: string;
   variantKey: string; // 'base' INCLUDED (unlike VariantRef consumers)
-  /** "{kind}:@{entityKey}/{variantKey}" — unique id (key of checkedRefs). The kind prefix is
-   *  REQUIRED: entity keys are only unique WITHIN a kind, so character `armor/base` and prop
-   *  `armor/base` must not collide (2026-07-25 — multi-tab persist). */
+  /** "{persistKind}:@{entityKey}/{variantKey}" — unique id (key of checkedRefs). The prefix is
+   *  REQUIRED: entity keys are only unique WITHIN a collection, so character `armor/base` and prop
+   *  `armor/base` must not collide (2026-07-25 — multi-tab persist).
+   *
+   *  ⚡2026-07-28: the prefix is the PERSIST kind, not `kind` — an alter row mints
+   *  `characters:@…` so a view row and its persisted entry always resolve to the SAME string.
+   *  ALWAYS mint it with {@link lineupEntryRef}; never interpolate `kind` by hand. */
   ref: string;
   imageUrl: string | null; // effective locked crop; null = no crop locked yet
   heightCm: number | null; // variants[].height (cm); null = not set yet
@@ -112,7 +135,9 @@ export interface LineupEntry {
 
 /** One checked variant inside a tab. Kind prefix disambiguates entity keys across kinds. */
 export interface SketchLineupEntry {
-  kind: BaseKind;
+  /** ⚡ The PERSIST vocabulary is the 2 real collections (NOT `BaseKind`): an alter is stored as
+   *  `characters` and re-split by `actor_role` at read time. Mint with `lineupPersistKind`. */
+  kind: BaseEntityCollection;
   entity_key: string;
   variant_key: string; // 'base' INCLUDED
 }
@@ -146,8 +171,87 @@ export interface SketchBaseSheet {
 }
 
 export interface SketchBase {
-  character_sheet: SketchBaseSheet;              // all base characters
+  character_sheet: SketchBaseSheet;              // all base characters (actor_role absent|0)
   prop_sheet: SketchBaseSheet;                   // all base props — no stage_sheet
+  alter_character_sheet: SketchBaseSheet;        // ⚡ 2026-07-28 — all alter characters (actor_role 1)
+}
+
+// ── Kind resolution (SINGLE SOURCE — 2026-07-28) ─────────────────────────────
+// Two mappings, one per question. Everything that used to do `sketch[kind]` / `kind ===
+// 'characters' ? character_sheet : prop_sheet` MUST go through them — `alter_characters` has no
+// array of its own, so a raw index yields `undefined` (an empty group with NO error). Do NOT add
+// a third parallel mapping anywhere: extend these.
+
+/** kind → WHICH entity set. `collection` = the real `Sketch` array; `actorRole` (when defined)
+ *  is the `actor_role` value an entity must match (absent on the entity ⇒ 0). */
+export const KIND_ENTITY_SOURCE: Record<
+  BaseKind,
+  { collection: BaseEntityCollection; actorRole?: ActorRole }
+> = {
+  characters: { collection: 'characters', actorRole: 0 }, // absent ⇒ 0
+  props: { collection: 'props' },                         // no role split
+  alter_characters: { collection: 'characters', actorRole: 1 },
+};
+
+/** kind → WHICH base sheet node under `sketch.base`. Also the rtype-11 `resource_id` and the
+ *  saveResource path segment (`col:sketch/key:base/key:{BASE_SHEET_ID[kind]}/…`). */
+export const BASE_SHEET_ID: Record<BaseKind, keyof SketchBase> = {
+  characters: 'character_sheet',
+  props: 'prop_sheet',
+  alter_characters: 'alter_character_sheet',
+};
+
+/**
+ * THE replacement for every legacy `sketch[kind]`: the entity set of `kind`, resolved through
+ * `KIND_ENTITY_SOURCE`. Generic so immer `Draft<Sketch>` callers (slices) reuse it verbatim.
+ * `characters`/`alter_characters` share one array and are split by `actor_role`. Pure.
+ */
+export function sketchEntitiesOfKind<T extends { actor_role?: ActorRole }>(
+  sketch: { characters: T[]; props: T[] },
+  kind: BaseKind,
+): T[] {
+  return filterEntitiesOfKind(sketch[KIND_ENTITY_SOURCE[kind].collection] ?? [], kind);
+}
+
+/** Does this entity belong to `kind`? (`props` has no role split → always true.) Pure. */
+export function isEntityOfKind(entity: { actor_role?: ActorRole }, kind: BaseKind): boolean {
+  const { actorRole } = KIND_ENTITY_SOURCE[kind];
+  return actorRole === undefined || (entity.actor_role ?? 0) === actorRole;
+}
+
+/**
+ * The subset of a raw collection belonging to `kind`. Returns the INPUT REF untouched when the
+ * kind has no role split (`props`) — keeps selector/memo identity stable. Generic so immer
+ * `Draft<SketchEntity>[]` callers (the slice) reuse it. Pure.
+ */
+export function filterEntitiesOfKind<T extends { actor_role?: ActorRole }>(
+  entities: T[],
+  kind: BaseKind,
+): T[] {
+  const { actorRole } = KIND_ENTITY_SOURCE[kind];
+  if (actorRole === undefined) return entities;
+  return entities.filter((e) => (e.actor_role ?? 0) === actorRole);
+}
+
+// ── Lineup wire vocabulary (UI knows 3 kinds · the snapshot stores 2) ─────────────────────────
+// The rtype-12 `sketch.lineups[].entries[].kind` vocabulary is the two REAL collections
+// (`LINEUP_ENTRY_KINDS`, sketch-coerce-helpers) — anything else is coerced away on load, i.e.
+// writing `alter_characters` there is SILENT DATA LOSS. The two helpers below are the ONE seam
+// where a UI `BaseKind` is narrowed to that vocabulary; both the selector that mints view rows
+// and `toTabEntry`/`refOf` (lineup-constants) go through them, so the two can never drift.
+
+/** kind → the `kind` value persisted in a lineup entry. An alter persists as `characters` (it IS
+ *  a `characters[]` member); the alter/story split is re-derived from `actor_role` at read time,
+ *  NEVER from the stored kind. */
+export function lineupPersistKind(kind: BaseKind): BaseEntityCollection {
+  return KIND_ENTITY_SOURCE[kind].collection;
+}
+
+/** Canonical lineup ref (identity of a row AND of its persisted entry). Minted in the PERSIST
+ *  vocabulary so a checked alter row still matches its stored entry after a reload — entity keys
+ *  are unique across a whole collection, so an alter can never collide with a story character. */
+export function lineupEntryRef(kind: BaseKind, entityKey: string, variantKey: string): string {
+  return `${lineupPersistKind(kind)}:@${entityKey}/${variantKey}`;
 }
 
 /** Projection of the 'base' variant text (EditBaseEntityModal + crop labels). */
@@ -159,9 +263,10 @@ export interface BaseEntityText {
   art_language: string;                         // editable
 }
 
-/** Sheet accessor for a base kind (single source — reused by slice + selectors). */
+/** Sheet accessor for a base kind (single source — reused by slice + selectors). Reads
+ *  `BASE_SHEET_ID` so there is exactly ONE kind→sheet mapping in the codebase. */
 export function sheetOf(base: SketchBase, kind: BaseKind): SketchBaseSheet {
-  return kind === 'characters' ? base.character_sheet : base.prop_sheet;
+  return base[BASE_SHEET_ID[kind]];
 }
 
 /** 7 fields, 1-1 with the real Storyboard template rows (2026-07-20). `action` merges the

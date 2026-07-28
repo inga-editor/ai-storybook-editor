@@ -61,7 +61,7 @@ describe('normalizeSketch (shape mapping)', () => {
   it('preserves a valid new-shape sketch', () => {
     const valid: Sketch = {
       id: 'sk1',
-      base: { character_sheet: { styles: [] }, prop_sheet: { styles: [] } },
+      base: { character_sheet: { styles: [] }, prop_sheet: { styles: [] }, alter_character_sheet: { styles: [] } },
       characters: [{ key: 'c1', variants: [] }],
       props: [],
       stages: [{ key: 'st1', base: { styles: [] }, variants: [{ key: 'v', description: '', visual_design: 'd', art_language: '', illustrations: [], crops: [] }] }],
@@ -71,15 +71,26 @@ describe('normalizeSketch (shape mapping)', () => {
     expect(normalizeSketch(valid)).toEqual(valid);
   });
 
-  it('defaults a missing base workspace to two empty sheets (backward-compat)', () => {
+  it('defaults a missing base workspace to three empty sheets (backward-compat)', () => {
     const result = normalizeSketch({ id: 'no-base', characters: [], props: [], stages: [], spreads: [] });
-    expect(result.base).toEqual({ character_sheet: { styles: [] }, prop_sheet: { styles: [] } });
+    expect(result.base).toEqual({ character_sheet: { styles: [] }, prop_sheet: { styles: [] }, alter_character_sheet: { styles: [] } });
+  });
+
+  // ⚡ 2026-07-28: a pre-alter snapshot has 2 sheets — the 3rd defaults in (ABSENT, no anomaly),
+  // and the 2 existing sheets pass through untouched.
+  it('defaults ONLY the missing alter sheet on a pre-alter base workspace (no anomaly)', () => {
+    const { sketch, anomalies } = collect({
+      base: { character_sheet: { styles: [style('watercolor')] }, prop_sheet: { styles: [] } },
+    });
+    expect(sketch.base.character_sheet.styles).toHaveLength(1);
+    expect(sketch.base.alter_character_sheet).toEqual({ styles: [] });
+    expect(anomalies).toEqual([]);
   });
 
   it('defaults missing nested arrays to [] (defensive)', () => {
     expect(normalizeSketch({ id: 'only-id' })).toEqual({
       id: 'only-id',
-      base: { character_sheet: { styles: [] }, prop_sheet: { styles: [] } },
+      base: { character_sheet: { styles: [] }, prop_sheet: { styles: [] }, alter_character_sheet: { styles: [] } },
       characters: [],
       props: [],
       stages: [],
@@ -125,6 +136,7 @@ describe('normalizeSketch (shape mapping)', () => {
     const base = {
       character_sheet: { styles: [style('test style')] },
       prop_sheet: { styles: [] },
+      alter_character_sheet: { styles: [style('alter style')] },
     };
     expect(normalizeSketch({ id: 'sk1', base }).base).toEqual(base);
   });
@@ -243,6 +255,7 @@ describe('normalizeSketch data-safety (never silently blank populated data)', ()
     // base itself unreadable → attributable to BOTH sheets (nothing narrower exists).
     const baseGarbage = collect({ base: 'nope' });
     expect(resets(baseGarbage.anomalies).map((a) => a.resource).sort()).toEqual([
+      'base.alter_character_sheet',
       'base.character_sheet',
       'base.prop_sheet',
     ]);
@@ -501,9 +514,10 @@ describe('normalizeSketch fault isolation (T2 — getter throw)', () => {
     });
     blob.characters = [{ key: 'kid', variants: [] }];
     const { sketch, anomalies } = collect(blob);
-    expect(sketch.base).toEqual({ character_sheet: { styles: [] }, prop_sheet: { styles: [] } });
+    expect(sketch.base).toEqual({ character_sheet: { styles: [] }, prop_sheet: { styles: [] }, alter_character_sheet: { styles: [] } });
     expect(sketch.characters).toEqual([{ key: 'kid', variants: [] }]);
     expect(resets(anomalies).map((a) => a.resource).sort()).toEqual([
+      'base.alter_character_sheet',
       'base.character_sheet',
       'base.prop_sheet',
     ]);
@@ -581,7 +595,7 @@ describe('normalizeSketchSpread (per-page versioned images[] back-compat)', () =
 });
 
 describe('variant crop model (coerce back-compat + positional crops[])', () => {
-  const emptyBaseRaw = () => ({ character_sheet: { styles: [] }, prop_sheet: { styles: [] } });
+  const emptyBaseRaw = () => ({ character_sheet: { styles: [] }, prop_sheet: { styles: [] }, alter_character_sheet: { styles: [] } });
 
   it('coerces a legacy variant.crop (no raw_sheet) into raw_sheet.crops[0] is_selected=true (lossless)', () => {
     const raw = {
@@ -735,13 +749,20 @@ describe('coerceSketchNode (merge boundary — base/spreads coverage)', () => {
     expect(resets(anomalies)[0].resource).toBe('base.character_sheet');
   });
 
-  it('a whole malformed base node degrades both sheets', () => {
+  it('a whole malformed base node degrades every sheet', () => {
     const { coerced, anomalies } = collectNode(['base'], 'garbage');
-    expect(coerced).toEqual({ character_sheet: { styles: [] }, prop_sheet: { styles: [] } });
+    expect(coerced).toEqual({ character_sheet: { styles: [] }, prop_sheet: { styles: [] }, alter_character_sheet: { styles: [] } });
     expect(resets(anomalies).map((a) => a.resource).sort()).toEqual([
+      'base.alter_character_sheet',
       'base.character_sheet',
       'base.prop_sheet',
     ]);
+  });
+
+  it('the alter sheet node coerces at path grain like the other two (rtype 11)', () => {
+    const { coerced, anomalies } = collectNode(['base', 'alter_character_sheet'], 'garbage');
+    expect(coerced).toEqual({ styles: [] });
+    expect(resets(anomalies)[0].resource).toBe('base.alter_character_sheet');
   });
 
   it('a valid spread node merges structurally intact (parity)', () => {
@@ -786,4 +807,45 @@ describe('real-blob regression fixtures (T6 — zero reset anomalies)', () => {
       expect(resets(anomalies)).toEqual([]);
     },
   );
+});
+
+// ── actor_role carry-through (⚡ 2026-07-28 alter characters) ─────────────────────────────────
+// The flag lives on `characters[]` entities and is the ONLY thing separating the alter cast from
+// the story cast. `coerceEntity` used to drop every unknown field, so without this carry-through
+// each load/peer-merge would silently promote every alter into the story.
+describe('normalizeSketch actor_role (alter characters)', () => {
+  it('preserves actor_role=1 through the load boundary', () => {
+    const { sketch, anomalies } = collect({
+      characters: [
+        { key: 'hero', variants: [] },
+        { key: 'hero_alt', actor_role: 1, variants: [] },
+      ],
+    });
+    expect(sketch.characters).toEqual([
+      { key: 'hero', variants: [] },
+      { key: 'hero_alt', actor_role: 1, variants: [] },
+    ]);
+    expect(anomalies).toEqual([]);
+  });
+
+  it('never invents actor_role: 0 (absent ⇒ 0 — no JSONB churn on pre-alter books)', () => {
+    const { sketch } = collect({ characters: [{ key: 'hero', variants: [] }] });
+    expect('actor_role' in sketch.characters[0]).toBe(false);
+  });
+
+  it('keeps an explicit 0 but coerces an unreadable value to 0 (primary)', () => {
+    const { sketch } = collect({
+      characters: [
+        { key: 'a', actor_role: 0, variants: [] },
+        { key: 'b', actor_role: 'nope', variants: [] },
+        { key: 'c', actor_role: '1', variants: [] },
+      ],
+    });
+    expect(sketch.characters.map((e) => e.actor_role)).toEqual([0, 0, 1]);
+  });
+
+  it('survives the merge boundary too (peer sync of one entity node)', () => {
+    const node = coerceSketchNode(['characters', '1'], { key: 'hero_alt', actor_role: 1, variants: [] });
+    expect(node).toEqual({ key: 'hero_alt', actor_role: 1, variants: [] });
+  });
 });

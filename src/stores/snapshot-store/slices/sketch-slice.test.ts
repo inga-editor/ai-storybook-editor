@@ -137,9 +137,11 @@ describe('SketchSlice entity actions', () => {
   });
 
   it('removeSketchEntity filters out the key', () => {
-    store.getState().setSketchEntities('stages', [entity('forest'), entity('castle')]);
-    store.getState().removeSketchEntity('stages', 'forest');
-    expect(store.getState().sketch.stages.map((e: SketchEntity) => e.key)).toEqual(['castle']);
+    // 'props' (a real BaseKind) — `stages` never was one: it has its own slice + shape, and since
+    // the 2026-07-28 widening a kind is resolved through KIND_ENTITY_SOURCE, not `sketch[kind]`.
+    store.getState().setSketchEntities('props', [entity('forest'), entity('castle')]);
+    store.getState().removeSketchEntity('props', 'forest');
+    expect(store.getState().sketch.props.map((e: SketchEntity) => e.key)).toEqual(['castle']);
   });
 
   it('upsertSketchVariant adds then updates a variant in place', () => {
@@ -937,5 +939,143 @@ describe('SketchSlice variant crop actions (positional crops[])', () => {
     ]);
     store.getState().setSketchVariantRawSheetIllustrations('characters', 'hero', 'hero_v', [ill('s.png')]);
     expect(heroV().raw_sheet.crops).toEqual([]);
+  });
+});
+
+// ── Alter characters (⚡ 2026-07-28) ──────────────────────────────────────────────────────────
+// `alter_characters` is a VIRTUAL kind over `sketch.characters[]` (actor_role === 1). The whole
+// feature's failure mode is SILENT: a missing filter mixes the two casts with no error anywhere,
+// so every kind↔cast pairing below is asserted explicitly.
+describe('SketchSlice alter characters (actor_role routing)', () => {
+  let store: ReturnType<typeof createTestStore>;
+  beforeEach(() => {
+    store = createTestStore();
+  });
+
+  const cropIll = (url: string) => ({
+    type: 'created' as const,
+    media_url: url,
+    created_time: '2026-07-28T00:00:00Z',
+    is_selected: true,
+  });
+
+  /** hero (primary) + hero_alt (alter) in ONE characters[] array, both with a 'base' variant. */
+  const seedMixedCast = () => {
+    store.setState((s: { sketch: { characters: SketchEntity[] } }) => {
+      s.sketch.characters = [
+        { key: 'hero', variants: [variant('base')] },
+        { key: 'hero_alt', actor_role: 1, variants: [variant('base')] },
+      ];
+    });
+  };
+
+  const baseCropUrlOf = (entityKey: string) =>
+    store
+      .getState()
+      .sketch.characters.find((e: SketchEntity) => e.key === entityKey)
+      ?.variants.find((v: SketchVariant) => v.key === 'base')?.raw_sheet?.crops[0]
+      ?.illustrations[0]?.media_url;
+
+  it('locking the ALTER sheet clones into actor_role=1 entities only', () => {
+    seedMixedCast();
+    store.getState().addSketchBaseStyle('alter_characters', {
+      style_prompt: 'alter style',
+      is_selected: false,
+      image_references: [],
+      illustrations: [],
+      // A crop keyed 'hero' is present too — it must be IGNORED (hero is not part of this kind).
+      crops: [
+        { key: 'hero_alt', illustrations: [cropIll('alt-crop.png')] },
+        { key: 'hero', illustrations: [cropIll('WRONG-hero.png')] },
+      ],
+    });
+    store.getState().setSketchBaseStyleSelected('alter_characters', 0);
+
+    expect(baseCropUrlOf('hero_alt')).toBe('alt-crop.png');
+    expect(baseCropUrlOf('hero')).toBeUndefined(); // primary untouched
+    // The style landed on the ALTER sheet, not the character sheet.
+    expect(store.getState().sketch.base.alter_character_sheet.styles[0].is_selected).toBe(true);
+    expect(store.getState().sketch.base.character_sheet.styles).toEqual([]);
+  });
+
+  it('locking the CHARACTER sheet leaves alter entities untouched', () => {
+    seedMixedCast();
+    store.getState().addSketchBaseStyle('characters', {
+      style_prompt: 'story style',
+      is_selected: false,
+      image_references: [],
+      illustrations: [],
+      crops: [
+        { key: 'hero', illustrations: [cropIll('hero-crop.png')] },
+        { key: 'hero_alt', illustrations: [cropIll('WRONG-alt.png')] },
+      ],
+    });
+    store.getState().setSketchBaseStyleSelected('characters', 0);
+
+    expect(baseCropUrlOf('hero')).toBe('hero-crop.png');
+    expect(baseCropUrlOf('hero_alt')).toBeUndefined();
+  });
+
+  it('setSketchEntities replaces only its own cast (alter write keeps the story cast)', () => {
+    seedMixedCast();
+    store.getState().setSketchEntities('alter_characters', [entity('villain_alt')]);
+    const keys = store.getState().sketch.characters.map((e: SketchEntity) => e.key);
+    expect(keys).toContain('hero'); // story cast survived
+    expect(keys).toContain('villain_alt');
+    expect(keys).not.toContain('hero_alt'); // the alter cast was the one replaced
+    // …and the new entity is stamped from the kind (absent flag ⇒ it would rejoin the story cast).
+    expect(
+      store.getState().sketch.characters.find((e: SketchEntity) => e.key === 'villain_alt')?.actor_role,
+    ).toBe(1);
+  });
+
+  it('setSketchEntities REFUSES an incoming key already held by the other cast', () => {
+    seedMixedCast();
+    // `hero_alt` is an alter; writing the story cast with that key would put the SAME key twice
+    // in `characters[]`, breaking the gateway `find:key=` anchor, the rtype-3 lock and the
+    // lineup entry ref all at once — with no error anywhere.
+    store.getState().setSketchEntities('characters', [entity('hero'), entity('hero_alt')]);
+    const chars = store.getState().sketch.characters;
+    expect(chars.filter((e: SketchEntity) => e.key === 'hero_alt')).toHaveLength(1);
+    expect(chars.find((e: SketchEntity) => e.key === 'hero_alt')?.actor_role).toBe(1); // still the alter
+    expect(chars.some((e: SketchEntity) => e.key === 'hero')).toBe(true); // rest of the batch landed
+    // …and the inverse direction is refused too.
+    store.getState().setSketchEntities('alter_characters', [entity('hero')]);
+    const after = store.getState().sketch.characters;
+    expect(after.filter((e: SketchEntity) => e.key === 'hero')).toHaveLength(1);
+    expect(after.find((e: SketchEntity) => e.key === 'hero')?.actor_role).toBeUndefined();
+  });
+
+  it('upsert under `characters` drops a stale actor_role; removal is kind-scoped', () => {
+    seedMixedCast();
+    store.getState().upsertSketchEntity('characters', { key: 'hero2', actor_role: 1, variants: [] });
+    expect(
+      store.getState().sketch.characters.find((e: SketchEntity) => e.key === 'hero2'),
+    ).toEqual({ key: 'hero2', variants: [] }); // absent ⇒ 0, no explicit 0 written
+
+    store.getState().removeSketchEntity('characters', 'hero_alt'); // wrong kind → no-op
+    expect(store.getState().sketch.characters.some((e: SketchEntity) => e.key === 'hero_alt')).toBe(true);
+    store.getState().removeSketchEntity('alter_characters', 'hero_alt');
+    expect(store.getState().sketch.characters.some((e: SketchEntity) => e.key === 'hero_alt')).toBe(false);
+  });
+
+  it('upsert REFUSES to move an entity across casts (would strip/flip actor_role silently)', () => {
+    seedMixedCast();
+    store.getState().upsertSketchEntity('characters', entity('hero_alt', [variant('base', 'hijacked')]));
+    const alt = store.getState().sketch.characters.find((e: SketchEntity) => e.key === 'hero_alt');
+    expect(alt?.actor_role).toBe(1); // still an alter
+    expect(alt?.variants).toEqual([variant('base')]); // untouched
+    // …and the inverse direction is refused too.
+    store.getState().upsertSketchEntity('alter_characters', entity('hero'));
+    expect(
+      store.getState().sketch.characters.find((e: SketchEntity) => e.key === 'hero')?.actor_role,
+    ).toBeUndefined();
+  });
+
+  it('a no-op removal (wrong cast) does NOT mark the store dirty', () => {
+    seedMixedCast();
+    store.setState((s: { sync: { isDirty: boolean } }) => { s.sync.isDirty = false; });
+    store.getState().removeSketchEntity('characters', 'hero_alt');
+    expect(store.getState().sync.isDirty).toBe(false);
   });
 });

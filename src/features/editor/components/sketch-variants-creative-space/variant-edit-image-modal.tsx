@@ -16,6 +16,7 @@ import { EditImageModal } from '@/features/editor/components/shared-components/e
 import { SPACE_TOOL_MATRIX } from '@/features/editor/components/shared-components/image-tools-space-matrix';
 import { useSketchVariantByKey, useSnapshotActions, useSnapshotId } from '@/stores/snapshot-store/selectors';
 import type { Illustration } from '@/types/prop-types';
+import { KIND_ENTITY_SOURCE } from '@/types/sketch';
 import type { SaveResourceDirective } from '@/types/save-resource';
 import { createLogger } from '@/utils/logger';
 import { titleCase, type EditImageTarget } from './sketch-variants-constants';
@@ -92,10 +93,13 @@ export function VariantEditImageModal({ target, onClose, saveResource }: Variant
   // indices) → nothing to bind.
   if (target.scope === 'raw' ? !variant?.raw_sheet : !crop) return null;
 
+  // Storage layout keyed by the REAL collection, never the UI kind — an alter's edit versions sit
+  // beside the rest of `characters[]` (same rule as the generate/crop prefixes and the Base space).
+  const collection = KIND_ENTITY_SOURCE[target.kind].collection;
   const pathPrefix =
     target.scope === 'raw'
-      ? `sketch/variant/${target.kind}/${target.entityKey}/${target.variantKey}/raw`
-      : `sketch/variant/${target.kind}/${target.entityKey}/${target.variantKey}/crop/${target.cropIndex}`;
+      ? `sketch/variant/${collection}/${target.entityKey}/${target.variantKey}/raw`
+      : `sketch/variant/${collection}/${target.entityKey}/${target.variantKey}/crop/${target.cropIndex}`;
 
   const imageTitle =
     target.scope === 'raw'

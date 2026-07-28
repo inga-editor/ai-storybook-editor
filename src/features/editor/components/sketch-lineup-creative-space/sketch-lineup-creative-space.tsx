@@ -1,6 +1,12 @@
 // sketch-lineup-creative-space.tsx — root of the Lineup creative space (design README §2). ONE
-// space for BOTH kinds (character + prop), covering EVERY variant incl. 'base'. Sidebar picks
-// variants; the content area lays their locked crops side-by-side on one shared ruler.
+// space for ALL wired kinds (character + prop + alter character), covering EVERY variant incl.
+// 'base'. Sidebar picks variants; the content area lays their locked crops side-by-side on one
+// shared ruler.
+//
+// ⚡ 2026-07-28 ALTER: alter characters are deliberately selectable HERE (the one story-facing
+// exception) — comparing an alter's height against the primary cast is the point of casting. The
+// UI knows 3 kinds; the SNAPSHOT vocabulary stays 2 (`LINEUP_ENTRY_KINDS`) — an alter persists as
+// `kind:'characters'` and is re-split by `actor_role` on read. See `toTabEntry`/`lineupEntryRef`.
 //
 // ⚡ 2026-07-25 MULTI-TAB + PERSIST (ADR-043 §Mở rộng): selection is no longer local — each tab is
 // a PERSISTED named selection in `sketch.lineups[]` (rtype 12 collab node). The space follows the
@@ -38,13 +44,16 @@ import { NewLineupTabModal } from './new-lineup-tab-modal';
 import { DeleteLineupTabAlertDialog } from './delete-lineup-tab-alert-dialog';
 import { useLineupLockSession } from './use-lineup-lock-session';
 import {
+  ALL_KINDS,
   DEFAULT_EXPANDED_GROUPS,
   KIND_GROUPS,
   LINEUP_TAB_LIMIT,
+  LINEUP_WIRED_KINDS,
   ZOOM,
   buildCleanupEntries,
   buildToggleAllEntries,
   buildToggleEntries,
+  grantKeyOf,
   mintVirtualTab,
   nextTabName,
   refOf,
@@ -52,8 +61,6 @@ import {
 } from './lineup-constants';
 
 const log = createLogger('Editor', 'SketchLineupSpace');
-
-const ALL_KINDS: ReadonlySet<BaseKind> = new Set(['characters', 'props']);
 
 type TabDialogState = { mode: 'create' } | { mode: 'rename'; tabId: string };
 
@@ -65,8 +72,11 @@ export function SketchLineupSpace() {
   useContentSyncSession(bookId);
   const { withLock } = useLineupLockSession();
 
+  // Three UI kinds. `characters` is the STORY cast only (KIND_ENTITY_SOURCE filters `actor_role`),
+  // so an alter is listed EXACTLY ONCE — in the Alter group, never also under Character.
   const charEntries = useSketchLineupEntries('characters');
   const propEntries = useSketchLineupEntries('props');
+  const alterEntries = useSketchLineupEntries('alter_characters');
   const tabs = useSketchLineups();
 
   // Peer lock on the ONE rtype-12 grain → every write affordance greys (browse stays live).
@@ -83,9 +93,13 @@ export function SketchLineupSpace() {
     if (isOwner) return ALL_KINDS;
     const sketchStep = access_rights?.steps?.sketch;
     if (!sketchStep?.enabled) return new Set<BaseKind>(); // null rights → disable all defensively
+    // Grant key = the REAL collection (`grantKeyOf`), so `alter_characters` rides the `characters`
+    // grant — alter introduces no new grant (Phase 01). Derived from LINEUP_WIRED_KINDS so a newly
+    // wired kind can never be left ungranted for the owner (that reads as a false "no edit rights").
     const granted = new Set<BaseKind>();
-    if (sketchStep.resources.characters) granted.add('characters');
-    if (sketchStep.resources.props) granted.add('props');
+    for (const kind of LINEUP_WIRED_KINDS) {
+      if (sketchStep.resources[grantKeyOf(kind)]) granted.add(kind);
+    }
     return granted;
   }, [isOwner, access_rights]);
 
@@ -122,11 +136,16 @@ export function SketchLineupSpace() {
   }, [effectiveTabs, activeTabId]);
 
   const entriesByKind = useMemo<Record<BaseKind, LineupEntry[]>>(
-    () => ({ characters: charEntries, props: propEntries }),
-    [charEntries, propEntries],
+    () => ({ characters: charEntries, props: propEntries, alter_characters: alterEntries }),
+    [charEntries, propEntries, alterEntries],
   );
-  // Sidebar order (char → prop, snapshot order) IS the canvas order (Validation S1).
-  const allEntries = useMemo(() => [...charEntries, ...propEntries], [charEntries, propEntries]);
+  // Sidebar order (KIND_GROUPS order, snapshot order within a group) IS the canvas order
+  // (Validation S1). DERIVED from KIND_GROUPS — a hand-written concat is how a newly wired kind
+  // ends up rendering rows whose checks are silently dropped on write.
+  const allEntries = useMemo(
+    () => KIND_GROUPS.flatMap((g) => entriesByKind[g.kind]),
+    [entriesByKind],
+  );
 
   // Checked = DERIVED from the active tab's persisted membership (peer edits move checkboxes).
   const checkedRefs = useMemo<ReadonlySet<string>>(
@@ -188,7 +207,14 @@ export function SketchLineupSpace() {
 
   const handleToggleEntry = useCallback(
     (entry: LineupEntry, checked: boolean) => {
-      log.info('handleToggleEntry', 'entry toggled', { ref: entry.ref, checked });
+      // `uiKind` = which GROUP the row came from; `ref` already carries the PERSIST kind as its
+      // prefix (lineupEntryRef), so one line shows both sides of the mapping — a disagreement
+      // between them is the silent-drop failure mode for alter.
+      log.info('handleToggleEntry', 'entry toggled', {
+        ref: entry.ref,
+        uiKind: entry.kind,
+        checked,
+      });
       writeActiveTabEntries((base) => buildToggleEntries(base, entry, checked));
     },
     [writeActiveTabEntries],

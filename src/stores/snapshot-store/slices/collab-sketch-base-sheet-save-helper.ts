@@ -33,6 +33,7 @@ import {
   type ResourceType,
 } from '@/stores/resource-lock-store';
 import type { BaseKind } from '@/types/sketch';
+import { BASE_SHEET_ID } from '@/types/sketch';
 import { toastLockedByOther } from '@/utils/collab-save-toasts';
 import { resolveLockHolderName } from './collab-image-save-helper';
 import { createLogger } from '@/utils/logger';
@@ -40,19 +41,24 @@ import { createLogger } from '@/utils/logger';
 const log = createLogger('Store', 'CollabSketchBaseSheetSaveHelper');
 
 /** step-1 rtype-11 `resource_id` per kind → the whole `sketch.base.{kind}_sheet` node the gateway
- *  resolver writes (character_sheet → `characters` grant · prop_sheet → `props` grant). Stage (5)
- *  has NO base sheet, so only the two base kinds are addressable here. */
-export const SKETCH_KIND_TO_SHEET_RESOURCE_ID: Record<BaseKind, string> = {
-  characters: 'character_sheet',
-  props: 'prop_sheet',
-};
+ *  resolver writes (character_sheet → `characters` grant · prop_sheet → `props` grant ·
+ *  ⚡ alter_character_sheet → `characters` grant, 2026-07-28). Stage (5) has NO base sheet, so only
+ *  the base kinds are addressable here. COPIED from `BASE_SHEET_ID` (the one kind→sheet mapping)
+ *  rather than aliased: exporting the SAME object under two public names would let a mutation
+ *  through either name silently rewrite lock routing everywhere. */
+export const SKETCH_KIND_TO_SHEET_RESOURCE_ID: Record<BaseKind, string> = { ...BASE_SHEET_ID };
 
 /** rtype 11 = base_sheet (kind-level sheet node). */
 const RESOURCE_TYPE_BASE_SHEET = 11 satisfies ResourceType;
 
-/** crud audit enum for every base-sheet save: 3 = edit (the sheet node always already exists —
- *  the base column is seeded empty on the snapshot; no create/delete of the sheet happens here). */
+/** crud audit enum for a base-sheet save: 3 = edit. The sheet node is normally seeded empty at
+ *  snapshot CREATION (`emptyBase()` → all three sheets), so an edit always resolves. See
+ *  `flushSketchBaseSheetUnderLock` for the one case where it does not (a book whose snapshot
+ *  predates a sheet) and the create-repair that heals it. */
 const ACTION_TYPE_EDIT = 3 as const;
+
+/** crud audit enum 2 = create — used ONLY by the seed repair below, never by a normal save. */
+const ACTION_TYPE_CREATE = 2 as const;
 
 /**
  * Build the STEP-1 / rtype-11 LockTarget for a per-kind base sheet node (whole-sheet grain).
@@ -78,6 +84,60 @@ export function buildSketchBaseSheetPayload(node: unknown): {
   log: true;
 } {
   return { action_type: ACTION_TYPE_EDIT, patch: node, log: true };
+}
+
+/**
+ * Repair a base-sheet save that 404'd because the sheet node is ABSENT in the stored snapshot.
+ *
+ * Why this exists: the ONLY production seeder of `sketch.base` is snapshot CREATION
+ * (`emptyBase()` in `sketch-normalize.ts`, written by `build-snapshot-from-parsed.ts`), and it
+ * seeds exactly the sheets that existed when the book was created. `normalizeSketch` back-fills a
+ * missing sheet CLIENT-side, but under collab the whole-doc autosave is suppressed, so that
+ * in-memory default is never written back — the gateway keeps 404-ing the very first save of the
+ * new sheet. One create heals it permanently.
+ *
+ * Audit policy mirrors `resource-lock-store#saveWithCreateFallback`: the create is infrastructure
+ * repair, not a user action → `log:false` (no audit row, no content-sync event), then the ORIGINAL
+ * edit is re-issued so the audit row and the server-built `metadata.sync` descriptor name the real
+ * action. If the re-issue fails the data is already saved, so the create's success is reported.
+ *
+ * LIMIT: `jsonb_set` cannot create intermediate keys, so this heals a snapshot whose `sketch.base`
+ * OBJECT exists but lacks this sheet. A snapshot with NO `sketch.base` at all (books predating the
+ * base workspace entirely) is not addressable by rtype 11 — that pre-existing gap affects all
+ * three sheets equally and is out of scope here.
+ */
+async function seedAbsentSheetNode(
+  rl: ReturnType<typeof useResourceLockStore.getState>,
+  target: LockTarget,
+  kind: BaseKind,
+  node: unknown,
+): Promise<boolean> {
+  log.info('seedAbsentSheetNode', 'sheet node absent server-side — seeding with a create', {
+    kind,
+    sheet: target.resource_id,
+  });
+  const created = await rl.save(target, {
+    action_type: ACTION_TYPE_CREATE,
+    patch: node,
+    log: false, // infrastructure repair — never audited as a user "create"
+  });
+  if (!created.ok) {
+    log.warn('seedAbsentSheetNode', 'seed create rejected', {
+      kind,
+      lost: created.lost,
+      forbidden: created.forbidden,
+      notFound: created.notFound ?? false,
+    });
+    return false;
+  }
+  const relogged = await rl.save(target, buildSketchBaseSheetPayload(node));
+  if (!relogged.ok) {
+    log.warn('seedAbsentSheetNode', 'audit re-issue failed — data already saved by the seed create', {
+      kind,
+      sheet: target.resource_id,
+    });
+  }
+  return true;
 }
 
 export interface FlushSketchBaseSheetOptions {
@@ -147,10 +207,21 @@ export async function flushSketchBaseSheetUnderLock(
       log.info('flushSketchBaseSheetUnderLock', 'saved', { kind, acquiredHere });
       return true;
     }
+    // 404 = the sheet node is ABSENT in the stored snapshot (the gateway refuses an EDIT of a node
+    // it cannot address). Books created since the sheet existed are seeded at snapshot creation
+    // (`emptyBase()` writes all three sheets), so this only happens on a book whose snapshot
+    // predates the sheet — for `alter_character_sheet` that is every book created before
+    // 2026-07-28. Repair it in-band with ONE create (the gateway skips the exists-check for
+    // action_type 2 and jsonb_set create_missing adds the key under the existing `base` object).
+    if (res.notFound) {
+      const seeded = await seedAbsentSheetNode(rl, target, kind, node);
+      if (seeded) return true;
+    }
     log.warn('flushSketchBaseSheetUnderLock', 'save rejected', {
       kind,
       lost: res.lost,
       forbidden: res.forbidden,
+      notFound: res.notFound ?? false,
     });
     if (res.forbidden) toastLockedByOther(resolveLockHolderName(target));
     return false;

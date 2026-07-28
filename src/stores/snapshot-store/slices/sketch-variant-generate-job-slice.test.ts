@@ -742,6 +742,40 @@ describe('SketchVariantGenerateJobSlice', () => {
       });
     });
 
+    // `alter_characters` is a UI kind, NOT a snapshot key: both the saveResource anchor and the
+    // storage pathPrefix must be written with the REAL collection, or the gateway anchors at a
+    // node that does not exist (silent no-op) and the assets land in an orphan folder.
+    it('anchors an ALTER variant under `key:characters` (never `key:alter_characters`)', async () => {
+      const { store } = createTestStore('snap-alter-var');
+      store
+        .getState()
+        .setSketchVariantRawSheetIllustrations('alter_characters', 'hero_alt', 'cool', rawIllustrations());
+      mockedGen.mockResolvedValueOnce(okGen('gen.png'));
+      mockedCut.mockResolvedValueOnce(okCut(['c1.png']));
+
+      store.getState().startVariantSheetGenerate({
+        kind: 'alter_characters',
+        entityKey: 'hero_alt',
+        variantKey: 'cool',
+        visualDescription: 'cool alter variant',
+        referenceImages: [],
+        baseVariantImageUrl: 'base.png',
+        artStyleId: 'style-1',
+      });
+      await tick();
+
+      expect(mockedGen.mock.calls[0][0]).toBe('alter_characters'); // route dispatch stays kind-driven
+      const path = (mockedGen.mock.calls[0][1] as { saveResource: { path: string } }).saveResource.path;
+      expect(path).toContain(
+        'col:sketch/key:characters/find:key=hero_alt/key:variants/find:key=cool/key:raw_sheet',
+      );
+      expect(path).not.toContain('alter_characters');
+      // Same rule for the crop endpoint's storage prefix (mirrors `sketches/base/characters`).
+      expect(mockedCut.mock.calls[0][0]).toMatchObject({
+        pathPrefix: 'sketches/variants/characters/hero_alt/cool',
+      });
+    });
+
     it('omits saveResource when snapshotId is null (not opted in)', async () => {
       const { store } = createTestStore(null);
       store.getState().setSketchVariantRawSheetIllustrations('characters', 'hero', 'cool', rawIllustrations());

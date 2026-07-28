@@ -1,14 +1,22 @@
 // base-kind-sidebar.tsx — left sidebar of SketchBaseSpace (design 01). Header "Base" + Excel
-// import; two collapsible groups (Character / Prop), each with edit-entity (✏) + add-style (＋)
-// and a list of Style rows (select + lock). NO Stage group — base covers char + prop only.
-// Lock is exclusive WITHIN a sheet (char/prop independent); clicking an already-locked style
-// re-sets itself (no-op) — there is no unlock-to-0 (Validation S1).
+// import; THREE collapsible groups (Character / Prop / Alter Character — ⚡2026-07-28), each with
+// edit-entity (✏) + add-style (＋) and a list of Style rows (select + lock). NO Stage group — base
+// covers char + prop + alter only. Lock is exclusive WITHIN a sheet (the three sheets are
+// independent); clicking an already-locked style re-sets itself (no-op) — there is no unlock-to-0
+// (Validation S1).
 //
 // Collab peer-lock (ADR-043): each KIND group self-reads its SHEET lock (step 1 / rtype 11,
-// resource_id character_sheet · prop_sheet). When ANOTHER editor holds the sheet, the group shows a
-// 🔒 holder badge and DISABLES the sheet acquire-seams — ＋ (add style) + each row's 🔒 (lock) —
-// greyed, NOT hidden (memory: never-hide-disabled-ui). Browse (row select) + ✏ (edit entity, grain
-// B rtype 3/4) stay enabled. Advisory — the acquire 409 is the real authority.
+// resource_id character_sheet · prop_sheet · alter_character_sheet). Three DISTINCT resource_ids ⇒
+// three INDEPENDENT lock sessions: editor A holding the character sheet never blocks editor B on
+// the alter sheet. When ANOTHER editor holds the sheet, the group shows a 🔒 holder badge and
+// DISABLES the sheet acquire-seams — ＋ (add style) + each row's 🔒 (lock) — greyed, NOT hidden
+// (memory: never-hide-disabled-ui). Browse (row select) + ✏ (edit entity, grain B rtype 3/4) stay
+// enabled. Advisory — the acquire 409 is the real authority.
+//
+// EMPTY GROUP (no base entity of that kind — typically the alter group before the Excel import
+// adds any `actor_role=1` row): the group still RENDERS, with a hint naming the Excel tab and the
+// ＋ seam greyed. Generating a sheet with zero cells is meaningless (the slice rejects it), so the
+// seam is disabled at the source instead of failing after the modal — but it is never HIDDEN.
 
 import { useMemo, useRef } from 'react';
 import {
@@ -28,7 +36,7 @@ import { useIsLockedByOther, useLockHolderName } from '@/stores/resource-lock-st
 import { resolveSketchBaseSheetLockTarget } from '@/stores/snapshot-store/slices/collab-sketch-base-sheet-save-helper';
 import { cn } from '@/utils/utils';
 import { createLogger } from '@/utils/logger';
-import type { KindGroupConfig, SelectedStyleRef } from './sketch-base-constants';
+import { emptyEntitiesHint, type KindGroupConfig, type SelectedStyleRef } from './sketch-base-constants';
 
 const log = createLogger('Editor', 'BaseKindSidebar');
 
@@ -46,6 +54,9 @@ interface BaseKindSidebarProps {
   isImporting: boolean;
   /** Single-flight generate op → drives the per-row "generating" spinner (matches kind+styleIndex). */
   generateOps: Partial<Record<BaseKind, BaseSheetGenerateOp>>;
+  /** Base-entity count per kind (entities carrying a 'base' variant — same filter the generate
+   *  slice applies). 0 → the group renders its empty hint + greys the ＋ seam. */
+  entityCountsByKind: Record<BaseKind, number>;
 }
 
 export function BaseKindSidebar({
@@ -61,6 +72,7 @@ export function BaseKindSidebar({
   onImport,
   isImporting,
   generateOps,
+  entityCountsByKind,
 }: BaseKindSidebarProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -114,6 +126,7 @@ export function BaseKindSidebar({
             expanded={expandedGroups[group.kind]}
             selectedStyle={selectedStyle}
             generateOps={generateOps}
+            entityCount={entityCountsByKind[group.kind]}
             onSelectStyle={onSelectStyle}
             onToggleGroup={onToggleGroup}
             onAddStyle={onAddStyle}
@@ -132,6 +145,7 @@ function KindGroup({
   expanded,
   selectedStyle,
   generateOps,
+  entityCount,
   onSelectStyle,
   onToggleGroup,
   onAddStyle,
@@ -143,6 +157,7 @@ function KindGroup({
   expanded: boolean;
   selectedStyle: SelectedStyleRef | null;
   generateOps: Partial<Record<BaseKind, BaseSheetGenerateOp>>;
+  entityCount: number;
   onSelectStyle: (kind: BaseKind, index: number) => void;
   onToggleGroup: (kind: BaseKind) => void;
   onAddStyle: (kind: BaseKind) => void;
@@ -157,6 +172,20 @@ function KindGroup({
   const sheetLockedByOther = useIsLockedByOther(sheetTarget);
   const sheetHolder = useLockHolderName(sheetTarget);
   const peerTip = sheetLockedByOther ? `${sheetHolder ?? 'Another editor'} is editing` : undefined;
+
+  // Nothing to lay out as sheet cells → BOTH seams are dead ends: ＋ generates an empty sheet (the
+  // slice refuses + toasts) and ✏ opens an entity editor with zero tabs. Grey both and say WHY,
+  // but keep the group visible.
+  const isEmpty = entityCount === 0;
+  const emptyHint = emptyEntitiesHint(group);
+  const hintId = `base-group-empty-${kind}`;
+  const addBlocked = sheetLockedByOther || isEmpty;
+  const addTip = sheetLockedByOther ? peerTip : isEmpty ? emptyHint : `Add ${title.toLowerCase()} style`;
+  const editTip = isEmpty ? emptyHint : `Edit ${title.toLowerCase()} entities`;
+  // `title` is not reliably announced by screen readers, so when a seam is greyed the REASON goes
+  // into the accessible name too — "dimmed" with no explanation is the failure mode being avoided.
+  const addLabel = addBlocked ? `Add ${title.toLowerCase()} style — unavailable: ${addTip}` : `Add ${title.toLowerCase()} style`;
+  const editLabel = isEmpty ? `Edit ${title.toLowerCase()} entities — unavailable: ${emptyHint}` : editTip;
 
   return (
     <div className="mb-1">
@@ -185,30 +214,44 @@ function KindGroup({
             <span className="max-w-[64px] truncate">{sheetHolder ?? 'Editing'}</span>
           </span>
         )}
-        {/* ✏ = grain B (entity text, rtype 3/4) — NOT gated by the sheet lock. */}
+        {/* ✏ = grain B (entity text, rtype 3/4) — NOT gated by the sheet lock (a peer holding the
+            sheet does not block entity text). Greyed only when the group has NO entity to edit. */}
         <Button
           variant="ghost"
           size="icon"
-          className="h-7 w-7"
-          onClick={() => onEditEntity(kind)}
-          aria-label={`Edit ${title.toLowerCase()} entities`}
-          title={`Edit ${title.toLowerCase()} entities`}
+          className={cn('h-7 w-7', isEmpty && 'cursor-not-allowed opacity-40')}
+          aria-disabled={isEmpty}
+          aria-describedby={isEmpty ? hintId : undefined}
+          onClick={() => {
+            if (isEmpty) {
+              log.debug('onEditEntity', 'blocked — group has no entity', { kind });
+              return;
+            }
+            onEditEntity(kind);
+          }}
+          aria-label={editLabel}
+          title={editTip}
         >
           <Pencil className="h-4 w-4" />
         </Button>
-        {/* ＋ = sheet acquire-seam (grain A) — greyed + click-guarded when a peer holds the sheet.
-            aria-disabled (NOT the real attr) keeps it hoverable so the peer tooltip surfaces. */}
+        {/* ＋ = sheet acquire-seam (grain A) — greyed + click-guarded when a peer holds the sheet
+            OR the group has no base entity to lay out. aria-disabled (NOT the real attr) keeps it
+            hoverable so the reason tooltip surfaces. */}
         <Button
           variant="ghost"
           size="icon"
-          className={cn('h-7 w-7', sheetLockedByOther && 'cursor-not-allowed opacity-40')}
-          aria-disabled={sheetLockedByOther}
+          className={cn('h-7 w-7', addBlocked && 'cursor-not-allowed opacity-40')}
+          aria-disabled={addBlocked}
+          aria-describedby={isEmpty ? hintId : undefined}
           onClick={() => {
-            if (sheetLockedByOther) return;
+            if (addBlocked) {
+              log.debug('onAddStyle', 'blocked', { kind, peerHeld: sheetLockedByOther, isEmpty });
+              return;
+            }
             onAddStyle(kind);
           }}
-          aria-label={`Add ${title.toLowerCase()} style`}
-          title={sheetLockedByOther ? peerTip : `Add ${title.toLowerCase()} style`}
+          aria-label={addLabel}
+          title={addTip}
         >
           <Plus className="h-4 w-4" />
         </Button>
@@ -216,10 +259,20 @@ function KindGroup({
 
       {expanded && (
         <div className="mt-0.5 space-y-0.5 pl-4">
-          {styles.length === 0 ? (
-            <p className="px-2 py-1.5 text-xs text-muted-foreground">
-              No style yet — ＋ to generate
+          {/* Empty group (e.g. a book with no alter cast yet) — rendered, never filtered out. A
+              static hint, NOT a live region: `role="status"` would make it announce on every mount
+              and expand. It is referenced by the greyed seams via aria-describedby instead. */}
+          {isEmpty && (
+            <p id={hintId} className="px-2 py-1.5 text-xs text-muted-foreground">
+              {emptyHint}
             </p>
+          )}
+          {styles.length === 0 ? (
+            !isEmpty && (
+              <p className="px-2 py-1.5 text-xs text-muted-foreground">
+                No style yet — ＋ to generate
+              </p>
+            )
           ) : (
             styles.map((style, idx) => (
               <StyleRow

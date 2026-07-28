@@ -8,6 +8,7 @@
 // and is reported when the caller passes a reporter + kind.
 
 import type {
+  ActorRole,
   SketchEntity,
   SketchVariant,
   SketchVariantCrop,
@@ -18,6 +19,7 @@ import type {
   SketchStageStyle,
   SketchStageVariant,
 } from '@/types/sketch';
+import { lineupEntryRef } from '@/types/sketch';
 import type { Illustration } from '@/types/prop-types';
 import { createLogger } from '@/utils/logger';
 import { parseHeightCm } from '@/utils/parse-height-cm';
@@ -152,10 +154,30 @@ export function coerceEntity(
       raw,
     });
   }
-  return {
+  const entity: SketchEntity = {
     key,
     variants: Array.isArray(raw.variants) ? raw.variants.map(coerceVariant) : [],
   };
+  // ⚡ 2026-07-28 alter characters — PRESENCE-GATED like `height`: an entity without the field
+  // keeps none (absent ⇒ 0 by contract), so loading a pre-alter book never churns the JSONB with
+  // `actor_role: 0`. Without this carry-through the flag would be DROPPED on every load/merge and
+  // every alter would silently rejoin the story cast.
+  // `null` counts as absent (⇒ 0): materializing it as an explicit 0 would churn the JSONB on
+  // every load of a book that never used the flag.
+  if (raw.actor_role != null) entity.actor_role = coerceActorRole(raw.actor_role, key);
+  return entity;
+}
+
+/** Any raw `actor_role` value → 0 | 1. Only a literal 1 (number/string/true) means ALTER; anything
+ *  else falls back to the 0 default — unreadable values are logged, never guessed. */
+function coerceActorRole(raw: unknown, entityKey: string): ActorRole {
+  if (raw === 1 || raw === '1' || raw === true) return 1;
+  if (raw === 0 || raw === '0' || raw === false || raw == null) return 0;
+  log.warn('coerceActorRole', 'unreadable actor_role — treated as 0 (primary)', {
+    entityKey,
+    type: typeNameOf(raw),
+  });
+  return 0;
 }
 
 export function asEntityArray(
@@ -364,7 +386,10 @@ export function coerceStyle(raw: unknown): SketchBaseStyle {
 
 // ── Lineup tabs (sketch.lineups[] — rtype 12, 2026-07-25) ────────────────────────────────────
 
-const LINEUP_ENTRY_KINDS: readonly string[] = ['characters', 'props'];
+/** Entry kinds a persisted lineup tab may hold — anything else is DROPPED on load. Exported so the
+ *  lineup sidebar's rendered groups can be pinned against it: a group whose kind is missing here
+ *  would let the user check rows that silently vanish on the next snapshot load. */
+export const LINEUP_ENTRY_KINDS: readonly string[] = ['characters', 'props'];
 const LINEUP_TAB_NAME_MAX = 60; // mirror the modal's maxLength (defense-in-depth vs peer/DB data)
 
 /**
@@ -420,14 +445,15 @@ export function coerceLineupTabs(
         log.debug('coerceLineupTabs', 'dropped malformed entry', { tabId: el.id });
         continue;
       }
-      const refKey = `${e.kind}:@${e.entity_key}/${e.variant_key}`;
+      // Narrowed by the LINEUP_ENTRY_KINDS whitelist above (a `readonly string[]`, so `.includes`
+      // cannot narrow the type on its own — this is the one cast, made once).
+      const kind = e.kind as SketchLineupEntry['kind'];
+      // Dedupe on the CANONICAL ref (same helper the sidebar rows + `refOf` use) — a hand-rolled
+      // copy of the format here would silently stop deduping the day the format changes.
+      const refKey = lineupEntryRef(kind, e.entity_key, e.variant_key);
       if (seenEntryRefs.has(refKey)) continue; // dedupe — keep first (append order preserved)
       seenEntryRefs.add(refKey);
-      entries.push({
-        kind: e.kind as SketchLineupEntry['kind'],
-        entity_key: e.entity_key,
-        variant_key: e.variant_key,
-      });
+      entries.push({ kind, entity_key: e.entity_key, variant_key: e.variant_key });
     }
     tabs.push({ id: el.id, name: el.name.trim().slice(0, LINEUP_TAB_NAME_MAX), entries });
   }

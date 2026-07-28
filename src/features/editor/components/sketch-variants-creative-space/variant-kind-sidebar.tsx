@@ -1,7 +1,10 @@
 // variant-kind-sidebar.tsx — left sidebar of SketchVariantsSpace (design 01). Header "Variants"
-// (title only — NO Excel import; variants are seeded from the Base space import). Two collapsible
-// groups (Character / Prop), each listing every NON-BASE variant as a row: mention label (select) +
-// ✏ (edit text) + ✨ (generate raw sheet) / spinner while busy. Rows are read-only (no add/delete).
+// (title only — NO Excel import, per the design doc; the stale variant-sidebar.png mock shows an
+// import ⬆, which belongs to the Base space only). One collapsible group per KIND_GROUPS entry
+// (Character / Prop / Alter Character), each listing every NON-BASE variant as a FLAT row: mention
+// label (select) + ✏ (edit text) + ✨ (generate raw sheet) / spinner while busy. Rows are read-only
+// (no add/delete). An EMPTY group still renders, with a hint instead of rows — never filtered out
+// (memory: never-hide-disabled-ui).
 //
 // Generate is GATED (gateByRef → reasons). Gated-off ✨ renders DISABLED + tooltip, never hidden
 // (memory: never-hide-disabled-ui). While the row's op is busy, ✨ becomes an inert spinner.
@@ -14,6 +17,7 @@ import { AlertTriangle, ChevronDown, ChevronRight, Loader2, Lock, LockOpen, Penc
 import { useMemo } from 'react';
 import { Button } from '@/components/ui/button';
 import type { BaseKind, VariantRef } from '@/types/sketch';
+import { KIND_ENTITY_SOURCE } from '@/types/sketch';
 import { cn } from '@/utils/utils';
 import { useIsLockedByOther, useLockHolderName } from '@/stores/resource-lock-store';
 import { useSketchEntityDegraded } from '@/stores/snapshot-store';
@@ -113,7 +117,7 @@ function VariantGroup({
   onEditVariant: (ref: VariantRef) => void;
   onGenerate: (ref: VariantRef) => void;
 }) {
-  const { kind, title } = group;
+  const { kind, title, noun } = group;
 
   return (
     <div className="mb-1" role="group">
@@ -137,8 +141,10 @@ function VariantGroup({
       {expanded && (
         <div className="mt-0.5 space-y-0.5 pl-4">
           {refs.length === 0 ? (
+            // Empty group RENDERS with a per-kind hint (never hidden): the alter group is empty
+            // until an alter cast exists, and saying which group is empty is the whole point.
             <p className="px-2 py-1.5 text-xs text-muted-foreground">
-              No variant — import in the Base space
+              No {noun} variant — add it in the Base space
             </p>
           ) : (
             refs.map((ref) => (
@@ -193,7 +199,12 @@ function VariantRow({
   const holderName = useLockHolderName(lockTarget);
   // ADR-047: entity data unreadable (degraded) → row greyed (NOT hidden) + edit/generate refused;
   // browse/select stays enabled (D5 — persist is blocked, interaction is not).
-  const degraded = useSketchEntityDegraded(variantRef.kind, variantRef.entityKey);
+  // `useSketchEntityDegraded` keys by the REAL collection ('characters' | 'props'): an alter
+  // entity is degraded under `characters/{key}` like any other member of that array.
+  const degraded = useSketchEntityDegraded(
+    KIND_ENTITY_SOURCE[variantRef.kind].collection,
+    variantRef.entityKey,
+  );
   const DEGRADED_TOOLTIP = 'Dữ liệu không đọc được — chỉ xem, không thể lưu. Mở hộp thoại kiểm tra dữ liệu để xử lý.';
 
   // Client fan-out cap: refuse by GREYING the row's ✨ with a reason, like every other refusal here

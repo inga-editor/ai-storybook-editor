@@ -57,8 +57,17 @@ describe('resolveSketchVariantLockTarget', () => {
       locale: null,
     });
   });
-  it('constant matches the resolver (char 3 · prop 4)', () => {
-    expect(SKETCH_KIND_TO_RESOURCE_TYPE).toEqual({ characters: 3, props: 4 });
+  it('maps alter_characters → step 1 / rtype 3 (same node type as a character)', () => {
+    // An alter IS a `characters[]` entity: same rtype, same grant; the entity key disambiguates.
+    expect(resolveSketchVariantLockTarget('alter_characters', 'kid_alt')).toEqual({
+      step: 1,
+      resource_type: 3,
+      resource_id: 'kid_alt',
+      locale: null,
+    });
+  });
+  it('constant matches the resolver (char 3 · prop 4 · alter 3)', () => {
+    expect(SKETCH_KIND_TO_RESOURCE_TYPE).toEqual({ characters: 3, props: 4, alter_characters: 3 });
   });
 });
 

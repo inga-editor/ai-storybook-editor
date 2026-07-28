@@ -57,7 +57,7 @@ import { MODAL_META } from './fixtures/sketch-manuscript-fixture';
 const SNAPSHOT: ImportedSketchSnapshot = {
   sketch: {
     id: 'sk-1',
-    base: { character_sheet: { styles: [] }, prop_sheet: { styles: [] } },
+    base: { character_sheet: { styles: [] }, prop_sheet: { styles: [] }, alter_character_sheet: { styles: [] } },
     characters: [],
     props: [],
     stages: [],

@@ -43,6 +43,9 @@ const log = createLogger('Store', 'CollabSketchVariantSaveHelper');
 export const SKETCH_KIND_TO_RESOURCE_TYPE: Record<BaseKind, ResourceType> = {
   characters: 3,
   props: 4,
+  // ⚡ 2026-07-28: an alter character IS a `characters[]` entity — same rtype 3, same grant, and
+  // `resource_id` (the entity key) is unique across the whole collection, so the two never collide.
+  alter_characters: 3,
 };
 
 /** crud audit enum used for every variant-space save: 3 = edit (the entity node always already

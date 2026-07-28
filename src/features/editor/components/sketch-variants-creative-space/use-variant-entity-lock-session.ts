@@ -36,6 +36,7 @@ import {
 import { useRegisterEditCommit } from '@/stores/edit-session-status-store';
 import { useHeldResourceSession } from '@/features/editor/hooks/use-held-resource-session';
 import type { BaseKind } from '@/types/sketch';
+import { sketchEntitiesOfKind } from '@/types/sketch';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('Editor', 'useVariantEntityLockSession');
@@ -82,9 +83,9 @@ export function useVariantEntityLockSession(): UseVariantEntityLockSessionResult
   const getNode = useCallback(
     () =>
       activeLockEntity
-        ? useSnapshotStore
-            .getState()
-            .sketch[activeLockEntity.kind].find((e) => e.key === activeLockEntity.entityKey) ?? null
+        ? sketchEntitiesOfKind(useSnapshotStore.getState().sketch, activeLockEntity.kind).find(
+            (e) => e.key === activeLockEntity.entityKey,
+          ) ?? null
         : null,
     [activeLockEntity],
   );
@@ -164,7 +165,9 @@ export function useVariantEntityLockSession(): UseVariantEntityLockSessionResult
    */
   const flushEntityNow = useCallback((ref: ActiveLockEntity) => {
     const node =
-      useSnapshotStore.getState().sketch[ref.kind].find((e) => e.key === ref.entityKey) ?? null;
+      sketchEntitiesOfKind(useSnapshotStore.getState().sketch, ref.kind).find(
+        (e) => e.key === ref.entityKey,
+      ) ?? null;
     log.debug('flushEntityNow', 'baseline-independent flush', {
       kind: ref.kind,
       entityKey: ref.entityKey,

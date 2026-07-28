@@ -1,7 +1,8 @@
 // lineup-sidebar.tsx — left sidebar of SketchLineupSpace (design 01). Header = tri-state select-all
 // checkbox + title "Lineup" + ＋ New tab (2026-07-25 multi-tab — the ＋ mirrors the tab strip's).
-// Two collapsible groups (Character / Prop); each row = ONE variant (base INCLUDED, unlike the
-// Variants space) with a checkbox.
+// One collapsible group per wired kind (Character / Prop / Alter Character — `LINEUP_WIRED_KINDS`);
+// each row = ONE variant (base INCLUDED, unlike the Variants space) with a checkbox. An EMPTY group
+// still renders, with a hint instead of rows (never-hide-disabled-ui).
 //
 // Rows lacking a locked crop or a height render DISABLED + greyed + ⓘ reason tooltip — never
 // filtered out (memory: never-hide-disabled-ui): the WHY + where-to-fix must stay discoverable.

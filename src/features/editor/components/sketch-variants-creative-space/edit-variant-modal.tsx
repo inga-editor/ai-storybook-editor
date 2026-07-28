@@ -33,6 +33,7 @@ import { useSnapshotActions } from '@/stores/snapshot-store/selectors';
 import { useSnapshotStore } from '@/stores/snapshot-store';
 import { useInteractionLayer } from '@/features/editor/contexts';
 import type { BaseKind } from '@/types/sketch';
+import { sketchEntitiesOfKind } from '@/types/sketch';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('Editor', 'EditVariantModal');
@@ -57,9 +58,8 @@ export function EditVariantModal({ kind, entityKey, variantKey, onClose }: EditV
   // Baseline seeded ONCE from the store (getState — non-reactive read; mirrors edit-base-entity-modal)
   // keyed on the variant identity → no re-seed on every keystroke, no set-state-in-effect (React 19).
   const seed = useMemo<VariantTextDraft>(() => {
-    const variant = useSnapshotStore
-      .getState()
-      .sketch[kind].find((e) => e.key === entityKey)
+    const variant = sketchEntitiesOfKind(useSnapshotStore.getState().sketch, kind)
+      .find((e) => e.key === entityKey)
       ?.variants.find((v) => v.key === variantKey);
     return {
       height: heightToDraft(variant?.height),

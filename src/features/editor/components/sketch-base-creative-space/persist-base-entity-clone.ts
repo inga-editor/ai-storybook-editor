@@ -8,7 +8,7 @@
 
 import { useSnapshotStore } from '@/stores/snapshot-store';
 import { flushSketchEntityUnderLock } from '@/stores/snapshot-store/slices/collab-sketch-variant-save-helper';
-import { sheetOf, type BaseKind } from '@/types/sketch';
+import { sheetOf, sketchEntitiesOfKind, type BaseKind } from '@/types/sketch';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('Editor', 'PersistBaseEntityClone');
@@ -33,7 +33,7 @@ export async function persistBaseEntityCloneIfLocked(
     });
     return;
   }
-  const entity = st.sketch[kind].find((e) => e.key === entityKey);
+  const entity = sketchEntitiesOfKind(st.sketch, kind).find((e) => e.key === entityKey);
   if (!entity) {
     log.warn('persistBaseEntityCloneIfLocked', 'entity missing — skip', { kind, entityKey });
     return;
