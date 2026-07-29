@@ -1,0 +1,187 @@
+// build-actors-tree.ts — PURE derive of the 4-level Actors sidebar tree
+// (axis → preset → actant → row) from `book.casting_slot` (READ-ONLY) joined with
+// the `actors` rows. No React, no store imports — phase 10 unit-tests this in
+// isolation.
+//
+// Design ref: ai-storybook-design/component/editor-page/actors-creative-space/
+//             01-actors-sidebar.md §4 + README §4.1/§4.8.
+//
+// Complexity: O(actants + mappings + pairs) — the pair index is a single Map so
+// row → pair lookup is O(1); we never nest `find` over `actorPairs`.
+
+import type { BookCastingSlot, CastingAssignment } from '@/types/editor';
+import type { ActorPair, ActorType, AddActorInput } from '@/types/actors';
+
+/** A row backed by a real `actors` row (has a `pairId`). Shared across presets:
+ *  the SAME `pairId` can appear in N preset rows — select/coverage stay unified. */
+export interface PairTreeRow {
+  kind: 'pair';
+  pairId: string;
+  actantId: string;
+  actorId: string;
+  actorType: ActorType;
+}
+
+/** A casting mapping that has NO `actors` row yet — muted "(no flow)" + [+ Add].
+ *  `prefill` pre-selects all 4 cascade fields in the AddActorModal (phase 07). */
+export interface UncastTreeRow {
+  kind: 'uncast';
+  actantId: string;
+  actorId: string;
+  actorType: ActorType;
+  prefill: AddActorInput;
+}
+
+/** A pair whose actant no longer exists in ANY axis (removed from casting config).
+ *  Rendered "(deleted)" + only [🗑] — never hidden into dead data. */
+export interface DanglingTreeRow {
+  kind: 'dangling';
+  pairId: string;
+  actantId: string;
+  actorId: string;
+  actorType: ActorType;
+}
+
+export type ActorsTreeRow = PairTreeRow | UncastTreeRow | DanglingTreeRow;
+
+export interface ActantGroup {
+  actantId: string;
+  actantName: string;
+  rows: ActorsTreeRow[]; // pair | uncast
+}
+
+export interface PresetGroup {
+  presetId: string;
+  presetName: string;
+  isDefault: boolean;
+  actants: ActantGroup[];
+}
+
+export interface AxisGroup {
+  axisId: string;
+  axisName: string;
+  presets: PresetGroup[];
+  /** Pairs whose actant belongs to THIS axis but no preset mapping references
+   *  the exact (actant, actor, type) — still a valid, openable pair row. */
+  unassigned: PairTreeRow[];
+}
+
+export interface ActorsTree {
+  axes: AxisGroup[];
+  /** Pairs whose actant is in NO axis (actant removed from casting config). */
+  danglingOrphans: DanglingTreeRow[];
+}
+
+/** Composite index key for a casting mapping ↔ `actors` row. */
+function pairKey(actantId: string, actorId: string, actorType: ActorType): string {
+  return `${actantId}|${actorId}|${actorType}`;
+}
+
+/**
+ * Derive the sidebar tree. Order follows `casting_slot` (axes → presets →
+ * `preset.actants[]`); pairs not referenced by any mapping fall into the axis
+ * `unassigned` bucket, or `danglingOrphans` if their actant is gone entirely.
+ */
+export function buildActorsTree(
+  castingSlot: BookCastingSlot,
+  actorPairs: ActorPair[],
+): ActorsTree {
+  // 1) Index every actors row by (actant, actor, type) for O(1) mapping lookup.
+  const pairIndex = new Map<string, ActorPair>();
+  for (const p of actorPairs) {
+    pairIndex.set(pairKey(p.actant_id, p.actor_id, p.actor_type), p);
+  }
+
+  const usedPairIds = new Set<string>();
+  // First axis that owns each actant — decides where an unassigned pair lands.
+  const actantToAxis = new Map<string, string>();
+
+  const axes: AxisGroup[] = [];
+  for (const axis of castingSlot.casting_axes) {
+    const actantById = new Map(axis.actants.map((a) => [a.id, a]));
+    for (const a of axis.actants) {
+      if (!actantToAxis.has(a.id)) actantToAxis.set(a.id, axis.id);
+    }
+
+    const presets: PresetGroup[] = axis.presets.map((preset) => {
+      // Group mappings by actant_id, preserving first-seen order.
+      const groupsMap = new Map<string, CastingAssignment[]>();
+      for (const m of preset.actants) {
+        const list = groupsMap.get(m.actant_id);
+        if (list) list.push(m);
+        else groupsMap.set(m.actant_id, [m]);
+      }
+
+      const actantGroups: ActantGroup[] = [];
+      for (const [actantId, mappings] of groupsMap) {
+        const actant = actantById.get(actantId);
+        if (!actant) continue; // mapping references an unknown actant — skip (normalize drops these)
+
+        const rows: ActorsTreeRow[] = mappings.map((m) => {
+          const pair = pairIndex.get(pairKey(m.actant_id, m.actor_id, m.actor_type));
+          if (pair) {
+            usedPairIds.add(pair.id);
+            return {
+              kind: 'pair',
+              pairId: pair.id,
+              actantId,
+              actorId: m.actor_id,
+              actorType: m.actor_type,
+            };
+          }
+          return {
+            kind: 'uncast',
+            actantId,
+            actorId: m.actor_id,
+            actorType: m.actor_type,
+            prefill: {
+              axisId: axis.id,
+              presetId: preset.id,
+              actantId,
+              actorId: m.actor_id,
+              actorType: m.actor_type,
+            },
+          };
+        });
+
+        actantGroups.push({ actantId, actantName: actant.name, rows });
+      }
+
+      return {
+        presetId: preset.id,
+        presetName: preset.name,
+        isDefault: preset.is_default,
+        actants: actantGroups,
+      };
+    });
+
+    axes.push({ axisId: axis.id, axisName: axis.name, presets, unassigned: [] });
+  }
+
+  // 2) Second pass — place pairs not referenced by any preset mapping.
+  const axisById = new Map(axes.map((ax) => [ax.axisId, ax]));
+  const danglingOrphans: DanglingTreeRow[] = [];
+  for (const p of actorPairs) {
+    if (usedPairIds.has(p.id)) continue;
+    const axisId = actantToAxis.get(p.actant_id);
+    if (axisId) {
+      axisById.get(axisId)!.unassigned.push({
+        kind: 'pair',
+        pairId: p.id,
+        actantId: p.actant_id,
+        actorId: p.actor_id,
+        actorType: p.actor_type,
+      });
+    } else {
+      danglingOrphans.push({
+        kind: 'dangling',
+        pairId: p.id,
+        actantId: p.actant_id,
+        actorId: p.actor_id,
+        actorType: p.actor_type,
+      });
+    }
+  }
+
+  return { axes, danglingOrphans };
+}

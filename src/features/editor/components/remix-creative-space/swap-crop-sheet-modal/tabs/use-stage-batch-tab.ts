@@ -17,17 +17,13 @@
 import { useCallback, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { createLogger } from '@/utils/logger';
-import {
-  useRemixById,
-  useRemixActions,
-  useStageFinals,
-} from '@/stores/remix-store';
 import type {
   BatchSwapTaskStatus,
   RemixStageBatch,
   StageKind,
 } from '@/types/remix';
 import { PREV_STAGE } from '@/types/remix';
+import { useStageDataAdapter } from '../stage-data-adapter';
 import { STAGE_TAB_CONFIG, type StageTabConfig } from '../stage-tab-config';
 import type { RelayoutConfirmKind } from '../relayout-confirm-dialog';
 import { useCollapseState, type CollapseSetApi } from '../sidebar/use-collapse-state';
@@ -152,8 +148,9 @@ export function useStageBatchTab(
   precondition?: (batch: RemixStageBatch) => StageGateResult,
 ): StageBatchTabState {
   const cfg = STAGE_TAB_CONFIG[stage];
+  // `remixId` stays on StageBatchTabProps (public contract) but the owner is now
+  // implicit in the adapter — no direct store call keyed on it here.
   const {
-    remixId,
     batches,
     activeBatchRef,
     anyJobRunning,
@@ -175,14 +172,16 @@ export function useStageBatchTab(
     toggle: toggleSwapCropSelection,
     clear: clearSwapCropSelection,
   } = useSelectedSwapCrops();
-  const { addStageBatch, takeFinalBack } = useRemixActions();
+  // Stage data + actions come from the modal-mounted adapter (remix today,
+  // actors in phase 08) — this hook no longer imports the remix store directly.
+  const adapter = useStageDataAdapter();
+  const { addStageBatch, takeFinalBack } = adapter;
+  const remix = adapter.remix;
 
-  const remix = useRemixById(remixId);
-
-  // Import gating — finals of the PREVIOUS stage (no-op array on mixes).
-  const prevStage = cfg.hasImport ? PREV_STAGE[stage as 'rmbgs' | 'upscales'] : stage;
-  const prevFinals = useStageFinals(cfg.hasImport ? remixId : null, prevStage);
-  const importDisabled = cfg.hasImport && prevFinals.length === 0;
+  // Import gating — finals of the PREVIOUS stage (mixes has no import → skip).
+  const importDisabled =
+    cfg.hasImport &&
+    adapter.stageFinals(PREV_STAGE[stage as 'rmbgs' | 'upscales']).length === 0;
   const importTooltip = importDisabled
     ? 'Run the previous stage and pick finals first'
     : '';
@@ -277,7 +276,6 @@ export function useStageBatchTab(
     });
     try {
       const newBatchId = await addStageBatch(
-        remixId,
         stage,
         activeBatchId,
         selectedSwapCrops,
@@ -306,7 +304,6 @@ export function useStageBatchTab(
     activeBatchRef,
     batches,
     addStageBatch,
-    remixId,
     selectedSwapCrops,
     clearSwapCropSelection,
     onActivateBatch,
@@ -337,7 +334,7 @@ export function useStageBatchTab(
         cropKey,
         targetBatchId: currentBatchId,
       });
-      takeFinalBack(remixId, stage, spreadId, layerId, currentBatchId)
+      takeFinalBack(stage, spreadId, layerId, currentBatchId)
         .then((ok) => {
           if (!ok) toast.error('Could not take the final crop back.');
         })
@@ -353,7 +350,7 @@ export function useStageBatchTab(
           );
         });
     },
-    [remixId, stage, currentBatchId, getOwnership, takeFinalBack],
+    [stage, currentBatchId, getOwnership, takeFinalBack],
   );
 
   // ── Destructive-action guard (deferred-action pattern) ──────────────────────

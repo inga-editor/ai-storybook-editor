@@ -1,0 +1,67 @@
+[
+  {
+    "id": "pair-hero-cat",
+    "snapshot_id": "snap-1",
+    "owner_id": "user-1",
+    "actant_id": "act-hero",
+    "actor_id": "miu_cat",
+    "actor_type": 1,
+    "mixes": [],
+    "rmbgs": [],
+    "upscales": [],
+    "created_at": "2026-07-29T00:00:00Z",
+    "updated_at": "2026-07-29T00:00:00Z"
+  },
+  {
+    "id": "pair-hero-dog",
+    "snapshot_id": "snap-1",
+    "owner_id": "user-1",
+    "actant_id": "act-hero",
+    "actor_id": "rex_dog",
+    "actor_type": 1,
+    "mixes": [],
+    "rmbgs": [],
+    "upscales": [],
+    "created_at": "2026-07-29T00:00:00Z",
+    "updated_at": "2026-07-29T00:00:00Z"
+  },
+  {
+    "id": "pair-shared",
+    "snapshot_id": "snap-1",
+    "owner_id": "user-1",
+    "actant_id": "act-sidekick",
+    "actor_id": "shared_dog",
+    "actor_type": 1,
+    "mixes": [],
+    "rmbgs": [],
+    "upscales": [],
+    "created_at": "2026-07-29T00:00:00Z",
+    "updated_at": "2026-07-29T00:00:00Z"
+  },
+  {
+    "id": "pair-orphan",
+    "snapshot_id": "snap-1",
+    "owner_id": "user-1",
+    "actant_id": "act-sidekick",
+    "actor_id": "lone_wolf",
+    "actor_type": 1,
+    "mixes": [],
+    "rmbgs": [],
+    "upscales": [],
+    "created_at": "2026-07-29T00:00:00Z",
+    "updated_at": "2026-07-29T00:00:00Z"
+  },
+  {
+    "id": "pair-dangling",
+    "snapshot_id": "snap-1",
+    "owner_id": "user-1",
+    "actant_id": "act-ghost",
+    "actor_id": "ghost_char",
+    "actor_type": 1,
+    "mixes": [],
+    "rmbgs": [],
+    "upscales": [],
+    "created_at": "2026-07-29T00:00:00Z",
+    "updated_at": "2026-07-29T00:00:00Z"
+  }
+]

@@ -16,9 +16,10 @@
 import { useCallback } from 'react';
 import { Eraser } from 'lucide-react';
 import { createLogger } from '@/utils/logger';
-import { useJobsForRemix, deriveDetectView } from '@/stores/remix-store';
+import { deriveDetectView } from '@/stores/remix-store';
 import { useDefectDetection } from '@/features/editor/hooks/use-defect-detection';
 import type { RemixStageBatch } from '@/types/remix';
+import { useStageDataAdapter } from '../stage-data-adapter';
 import { CropSheetStage } from '../crop-sheet-stage';
 import { RelayoutConfirmDialog } from '../relayout-confirm-dialog';
 import { evaluateDetect, type DetectActionState } from './detect-gating';
@@ -53,7 +54,9 @@ export function RmbgTab(props: RmbgTabProps) {
   // Generic `useDefectDetection('rmbg', …)` derives the active batch's detect
   // view (the overlay reads the SHEET being viewed); the per-row evaluator
   // derives each batch inline via the pure `deriveDetectView` (no hook in a loop).
-  const jobs = useJobsForRemix(remixId);
+  // Jobs come from the stage adapter (owner-scoped, all phases); the rmbg detect
+  // view is derived per batch below via the pure `deriveDetectView`.
+  const { jobs } = useStageDataAdapter();
   const activeBatchId = t.batch?.id ?? null;
   const activeDetect = useDefectDetection('rmbg', remixId, activeBatchId);
   const detectSheetResult =

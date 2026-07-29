@@ -15,7 +15,7 @@
 import { useCallback, useMemo } from 'react';
 import { AlertTriangle, Expand } from 'lucide-react';
 import { createLogger } from '@/utils/logger';
-import { useJobsForRemix } from '@/stores/remix-store';
+import { useStageDataAdapter } from '../stage-data-adapter';
 import { CropSheetStage } from '../crop-sheet-stage';
 import { RelayoutConfirmDialog } from '../relayout-confirm-dialog';
 import {
@@ -46,7 +46,7 @@ function readCropProgress(
 
 export function UpscaleTab(props: UpscaleTabProps) {
   const t = useStageBatchTab('upscales', props);
-  const jobs = useJobsForRemix(props.remixId);
+  const { jobs } = useStageDataAdapter();
 
   // Latest upscale job of the ACTIVE batch — crop-level heartbeat + the
   // terminal `upscale_skipped_count` warn badge.

@@ -1,0 +1,55 @@
+[
+  {
+    "id": "s1",
+    "pages": [],
+    "textboxes": [],
+    "images": [
+      {
+        "id": "L1",
+        "geometry": { "x": 0, "y": 0, "w": 200, "h": 300 },
+        "media_url": "https://cdn.example.invalid/L1-effective.png",
+        "tags": [{ "object_key": "hero" }],
+        "casting_slot": {
+          "actant_id": "act-hero",
+          "actors": [
+            {
+              "id": "miu_cat",
+              "actor_type": 1,
+              "media_url": "https://cdn.example.invalid/cat-default.png",
+              "is_default": true
+            },
+            {
+              "id": "rex_dog",
+              "actor_type": 1,
+              "media_url": "https://cdn.example.invalid/dog.png",
+              "is_default": false
+            }
+          ]
+        }
+      },
+      {
+        "id": "L2",
+        "geometry": { "x": 0, "y": 0, "w": 100, "h": 100 },
+        "media_url": "https://cdn.example.invalid/L2-effective.png",
+        "tags": [],
+        "casting_slot": {
+          "actant_id": "act-other",
+          "actors": []
+        }
+      }
+    ]
+  },
+  {
+    "id": "s2",
+    "pages": [],
+    "textboxes": [],
+    "images": [
+      {
+        "id": "L3",
+        "geometry": { "x": 0, "y": 0, "w": 50, "h": 50 },
+        "media_url": "https://cdn.example.invalid/L3-plain.png",
+        "tags": []
+      }
+    ]
+  }
+]

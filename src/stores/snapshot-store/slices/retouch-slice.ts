@@ -79,6 +79,53 @@ export const createRetouchSlice: StateCreator<
       }
     }),
 
+  // --- Casting (Actors space Inject, rtype 13 / step 3) ---
+
+  // Reconcile illustration image `casting_slot.actors[]` after a SUCCESSFUL
+  // apply-casting response (see runLockedApplyCasting). Post-response reconcile,
+  // NOT optimistic — the server may have skipped entries. NO `sync.isDirty`: the
+  // gateway already persisted; this only mirrors the server into the local store
+  // so the display canvas + coverage badge update without a full refetch.
+  applyCastingResult: (actor, entries, skipped) =>
+    set((state) => {
+      const skippedKeys = new Set(skipped.map((s) => `${s.spread_id}|${s.image_id}`));
+      let applied = 0;
+      for (const e of entries) {
+        if (skippedKeys.has(`${e.spread_id}|${e.image_id}`)) continue;
+        const spread = state.illustration.spreads.find((s) => s.id === e.spread_id);
+        if (!spread) continue;
+        const image = spread.images.find((i) => i.id === e.image_id);
+        // Entries are pre-filtered client-side to layers whose casting_slot targets
+        // this actant; guard defensively against a race deleting the slot meanwhile.
+        if (!image?.casting_slot) continue;
+        const slot = image.casting_slot;
+        if (!slot.actors) slot.actors = [];
+        const existing = slot.actors.find(
+          (a) => a.id === actor.actorId && a.actor_type === actor.actorType,
+        );
+        if (existing) {
+          // Refresh media only — NEVER touch an existing entry's is_default.
+          existing.media_url = e.media_url;
+        } else {
+          // First-ever actor becomes default (mirrors the server seed); any later
+          // actor is non-default and never steals the existing default.
+          slot.actors.push({
+            id: actor.actorId,
+            actor_type: actor.actorType,
+            media_url: e.media_url,
+            is_default: slot.actors.length === 0,
+          });
+        }
+        applied += 1;
+      }
+      log.debug('applyCastingResult', 'reconciled', {
+        actorId: actor.actorId,
+        actorType: actor.actorType,
+        applied,
+        skipped: skipped.length,
+      });
+    }),
+
   // --- Textboxes (playable) ---
 
   addRetouchTextbox: (spreadId, textbox) =>

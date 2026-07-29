@@ -1,4 +1,4 @@
-import type { ManuscriptDoc, SnapshotMeta, SyncState, DocType, TypographyStep, TypographySettings } from '@/types/editor';
+import type { ManuscriptDoc, SnapshotMeta, SyncState, DocType, TypographyStep, TypographySettings, CastingActorType } from '@/types/editor';
 import type {
   Sketch,
   SketchEntity,
@@ -557,6 +557,19 @@ export interface RetouchSlice {
    *  the baseline are deleted (drops what was added since acquire). Used when the retouch lock is
    *  stolen mid-edit so un-saved local changes don't linger. */
   revertRetouchOwnedSubtree: (spreadId: string, baselineSubtree: unknown) => void;
+
+  /** Actors casting-swap Inject (rtype 13, step 3) — reconcile the LOCAL snapshot
+   *  with a SUCCESSFUL /api/resource/apply-casting response. For every entry NOT in
+   *  `skipped`, upsert an actor into the target illustration image's `casting_slot.actors[]`
+   *  by `(id, actor_type)`: existing → refresh `media_url`; new → push (first-ever entry
+   *  becomes `is_default` to mirror the server seed, existing entries' `is_default` is NEVER
+   *  touched). Pure reconcile — does NOT set `sync.isDirty` (the server already persisted;
+   *  this is a transient-lock write path, NOT a held-session edit). */
+  applyCastingResult: (
+    actor: { actorId: string; actorType: CastingActorType },
+    entries: ReadonlyArray<{ spread_id: string; image_id: string; media_url: string }>,
+    skipped: ReadonlyArray<{ spread_id: string; image_id: string }>,
+  ) => void;
 }
 
 export interface PropsSlice {

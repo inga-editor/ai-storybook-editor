@@ -72,7 +72,7 @@ export interface CandidateUsersResult {
 export const STEP_RESOURCES: Record<PipelineStep, readonly string[]> = {
   sketch: ['characters', 'props', 'stages', 'spreads', 'image', 'textbox'],
   illustration: ['characters', 'props', 'stages', 'spreads', 'image', 'textbox', 'branches'],
-  retouch: ['objects', 'quiz', 'remixes'],
+  retouch: ['objects', 'quiz', 'actors', 'remixes'],
 } as const;
 
 /** Status → badge metadata. NOTE: status 2 label is "Active" (new-mock decision, not "Accepted"). */

@@ -11,6 +11,7 @@
 
 import { callImageApi, type ImageApiFailure } from './image-api-client';
 import { DETECT_JOB_CONFIG, type DetectPlane } from '@/types/remix';
+import { ACTOR_STAGE_ENDPOINT, type ActorStageKind } from '@/types/actors';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('API', 'JobsApi');
@@ -185,6 +186,109 @@ export type EnqueueSpriteSwapData =
   | EnqueueSpriteSwapEnqueuedData
   | EnqueueSpriteSwapSkippedData
   | EnqueueSpriteSwapDedupedData;
+
+// ── Actor stage jobs (api/jobs/14 swap + 15 rmbg + 16 upscale — batch-level) ──
+// Actors casting-swap pipeline. Path shape differs from the remix stage jobs:
+// `/api/jobs/actors/{pair_id}/{swap|rmbg|upscale}` (stage-1 segment is `swap`,
+// NOT `mix-swap`). Body/response share the SAME shape as job 05 (deliberately
+// not forked). `grain` is TOP-LEVEL + upscale-only. Auth = X-API-Key + Bearer
+// via callImageApi (BE `verify_api_key`), identical to the remix jobs.
+
+/** Body for an actor stage job (jobs 14/15/16). Structurally identical to the
+ *  remix `EnqueueStageJobBody`; kept as its own type for the actors domain.
+ *  `grain` is upscale-stage-only (top-level) — the wrapper strips it otherwise. */
+export interface EnqueueActorStageBody {
+  batch_id: string;
+  force_resweep?: boolean;
+  /** Per-model params (model + temperature/noise). */
+  model_params?: ModelParamsBody;
+  /** TOP-LEVEL grain knobs (sibling of model_params) — stage `upscales` only;
+   *  swap/rmbg omit it (client strips defensively). */
+  grain?: GrainBody;
+}
+
+export type ActorStageJobType = 'actor_swap' | 'actor_rmbg' | 'actor_upscale';
+
+export interface EnqueueActorStageEnqueuedData {
+  job_id: string;
+  status: 'queued';
+  type: ActorStageJobType;
+  pair_id: string;
+  batch_id: string;
+  total_steps: number;
+  sheets_to_process: number;
+  estimated_duration_sec: number;
+  skipped?: false;
+  deduped?: false;
+  [k: string]: unknown;
+}
+
+export interface EnqueueActorStageSkippedData {
+  skipped: true;
+  /** Opaque per-job reason (e.g. 'all_sheets_already_swapped') — FE displays it. */
+  reason: string;
+  sheets_to_process: 0;
+}
+
+export interface EnqueueActorStageDedupedData {
+  job_id: string;
+  status: 'queued' | 'running';
+  type: ActorStageJobType;
+  pair_id: string;
+  active_swap_key: string;
+  deduped: true;
+}
+
+export type ActorStageJobData =
+  | EnqueueActorStageEnqueuedData
+  | EnqueueActorStageSkippedData
+  | EnqueueActorStageDedupedData;
+
+/** POST /api/jobs/actors/{pairId}/{swap|rmbg|upscale} (jobs 14/15/16). Segment
+ *  resolved from `ACTOR_STAGE_ENDPOINT[stage]`. Returns parsed `data` on 2xx
+ *  (enqueued/skipped/deduped — union preserved); throws `EnqueueJobError`
+ *  (with backend `code` + `httpStatus`) on non-2xx so the caller can distinguish
+ *  422 REFERENCE_IMAGE_MISSING / EMPTY_BATCH from a generic failure. `grain` is
+ *  TOP-LEVEL + upscale-only — stripped on swap/rmbg. */
+export async function enqueueActorStageJob(
+  pairId: string,
+  stage: ActorStageKind,
+  body: EnqueueActorStageBody,
+): Promise<ActorStageJobData> {
+  const segment = ACTOR_STAGE_ENDPOINT[stage];
+  log.info('enqueueActorStageJob', 'request', {
+    pairId,
+    stage,
+    segment,
+    batchId: body.batch_id,
+    forceResweep: body.force_resweep ?? true,
+    model: body.model_params?.model,
+    // grain present (upscale only) — log the toggle, not the knobs.
+    grainEnabled: stage === 'upscales' ? body.grain?.enabled : undefined,
+  });
+  const result = await callImageApi<EnqueueJobResponse<ActorStageJobData>>(
+    `/api/jobs/actors/${encodeURIComponent(pairId)}/${segment}`,
+    {
+      batch_id: body.batch_id,
+      force_resweep: body.force_resweep ?? true,
+      ...(body.model_params ? { model_params: body.model_params } : {}),
+      // grain is TOP-LEVEL (sibling of model_params) + upscale-only — defensively
+      // stripped on swap/rmbg so an errant grain never trips a 400.
+      ...(stage === 'upscales' && body.grain ? { grain: body.grain } : {}),
+    },
+  );
+  if (!result.success) {
+    const failure = result as ImageApiFailure;
+    log.error('enqueueActorStageJob', 'failed', {
+      pairId,
+      stage,
+      httpStatus: failure.httpStatus,
+      errorCode: failure.errorCode,
+    });
+    throw new EnqueueJobError(failure.error, failure.httpStatus, failure.errorCode);
+  }
+  return result.data;
+}
 
 // ── Detect swap defects (api/jobs/11 sprite + 12 mix — generic Check) ─────────
 // Mirror swap: enqueue a background job that loops every swapped sheet and

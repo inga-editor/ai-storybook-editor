@@ -215,6 +215,7 @@ export const useBackgroundJobsStore = create<BackgroundJobsState>()(
 export type { BackgroundJob, JobEvent, JobPredicate, JobTransition } from './types';
 export {
   REMIX_SWAP_TYPES,
+  ACTOR_SWAP_TYPES,
   EXPORT_TYPES,
   ACTIVE_STATUSES,
   TERMINAL_STATUSES,

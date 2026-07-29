@@ -100,6 +100,17 @@ export const REMIX_SWAP_TYPES = [
   'remix_detect_rmbg_defects',
 ] as const;
 
+/** Actor casting-swap job types (jobs 14/15/16) — the ActorsStore consumer
+ *  subscribes to exactly these so remix/render/export never leak into the actor
+ *  `jobs[]` projection. Lockstep with `ActorStageJobType` (jobs-api) +
+ *  `ACTOR_STAGE_JOB_PHASE` (types/actors). `params.pair_id` + `params.batch_id`
+ *  carry the domain scope (the store never reads more than these). */
+export const ACTOR_SWAP_TYPES = [
+  'actor_swap',
+  'actor_rmbg',
+  'actor_upscale',
+] as const;
+
 /** Distribution export job types — export watcher subscribes to these. Includes
  *  `transcode_video` (auto-chained after `render_book_video`, ADR-037). */
 export const EXPORT_TYPES = [

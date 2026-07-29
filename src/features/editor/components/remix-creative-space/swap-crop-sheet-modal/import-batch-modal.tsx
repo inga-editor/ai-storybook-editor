@@ -25,15 +25,16 @@ import {
 import { Check, ImageOff } from 'lucide-react';
 import { cn } from '@/utils/utils';
 import { createLogger } from '@/utils/logger';
-import { PREV_STAGE } from '@/types/remix';
-import { useStageFinals } from '@/stores/remix-store';
 import type { ImportFinalEntry } from '@/stores/remix-store/stage-finals';
 import { Z_INDEX } from './swap-modal-constants';
 
 const log = createLogger('Editor', 'ImportBatchModal');
 
 export interface ImportBatchModalProps {
-  remixId: string;
+  /** Finals of the source stage (`PREV_STAGE[stage]`) — the caller resolves
+   *  these from the stage adapter and passes them in (reactive: realtime job
+   *  completions add entries while the dialog is open; keys are stable). */
+  finals: ImportFinalEntry[];
   /** Import TARGET stage; the listed finals come from `PREV_STAGE[stage]`. */
   stage: 'rmbgs' | 'upscales';
   /** Cancel / backdrop / Esc — closes THIS dialog only. */
@@ -58,14 +59,11 @@ function cellLabelOf(entry: ImportFinalEntry): string {
 }
 
 export function ImportBatchModal({
-  remixId,
+  finals,
   stage,
   onClose,
   onConfirm,
 }: ImportBatchModalProps) {
-  // Fresh finals of the source stage — reactive (realtime job completions add
-  // entries while the dialog is open; keys are stable).
-  const finals = useStageFinals(remixId, PREV_STAGE[stage]);
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(() => new Set());
 
   // Portal into the enclosing swap modal (see file header) — callback ref, no

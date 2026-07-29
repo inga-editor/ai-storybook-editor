@@ -63,6 +63,10 @@ interface SpreadThumbnailListProps<TSpread extends BaseSpread> {
   // another editor dims + shows a lock badge. Omitted by non-collab spaces.
   peerLock?: { step: number; resourceType: number };
 
+  /** Opt-in dot indicator (Actors space) — spreads whose id is in this set show a
+   *  small dot on their thumbnail. Omitted → no dot, unchanged for other spaces. */
+  spreadIndicatorIds?: Set<string>;
+
   // Feature flags
   canAdd: boolean;
   canReorder: boolean;
@@ -95,6 +99,7 @@ export const SpreadThumbnailList = forwardRef(function SpreadThumbnailListInner<
   renderRawImage,
   renderRawTextbox,
   peerLock,
+  spreadIndicatorIds,
   canAdd,
   canReorder,
   canDelete,
@@ -288,6 +293,7 @@ export const SpreadThumbnailList = forwardRef(function SpreadThumbnailListInner<
               renderRawImage={renderRawImage}
               renderRawTextbox={renderRawTextbox}
               peerLock={peerLock}
+              showIndicatorDot={spreadIndicatorIds?.has(spread.id) ?? false}
               isDragEnabled={canReorder}
               isDragging={spread.id === draggedId}
               isDropTarget={spread.id === dropTargetId}

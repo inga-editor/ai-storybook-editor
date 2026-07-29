@@ -17,7 +17,7 @@ export type PipelineStep = 'sketch' | 'illustration' | 'retouch';
 export type SketchSpace = 'sketch-base' | 'sketch-variant' | 'sketch-lineup' | 'sketch-stage' | 'sketch-spread';
 export type IllustrationSpace = 'character' | 'prop' | 'stage' | 'spread' | 'branch';
 // 'animation' removed — merged into 'object' space per ADR-028. Phase-06 cleans up consumer references.
-export type RetouchSpace = 'object' | 'quiz' | 'remix';
+export type RetouchSpace = 'object' | 'quiz' | 'actors' | 'remix';
 export type DefaultSpace = 'preview' | 'history' | 'issue' | 'share' | 'collaborator' | 'setting';
 export type CreativeSpaceType = SketchSpace | IllustrationSpace | RetouchSpace | DefaultSpace;
 

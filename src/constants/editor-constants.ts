@@ -55,6 +55,7 @@ export const ILLUSTRATION_ICONS: IconRailItemConfig[] = [
 export const RETOUCH_ICONS: IconRailItemConfig[] = [
   { id: 'object', icon: 'Layers', label: 'Objects' },
   { id: 'quiz', icon: 'HelpCircle', label: 'Quizzes' },
+  { id: 'actors', icon: 'Tags', label: 'Actors' },
   { id: 'remix', icon: 'RefreshCw', label: 'Remix' },
 ];
 
@@ -137,6 +138,7 @@ export const ENTITY_RESOURCE_MAP: Record<string, string | string[]> = {
   branch: 'branches',
   object: 'objects',
   quiz: 'quiz',
+  actors: 'actors',
   remix: 'remixes',
 };
 

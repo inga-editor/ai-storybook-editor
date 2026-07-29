@@ -19,8 +19,10 @@ export type Step = 1 | 2 | 3;
  *  11 base_sheet (sketch-base per-kind sheet — step=1; the whole `sketch.base.{kind}_sheet`
  *  node, resource_id `character_sheet`|`prop_sheet`; ADR-043 sketch-base collab, Phase 01) ·
  *  12 lineup (`sketch.lineups[]` — the WHOLE multi-tab lineup array, collection-scope
- *  column-root save; resource_id sentinel `lineups`, step=1; ADR-043 §Mở rộng 2026-07-25). */
-export type ResourceType = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12;
+ *  column-root save; resource_id sentinel `lineups`, step=1; ADR-043 §Mở rộng 2026-07-25) ·
+ *  13 actor (casting-swap grain = actant; the whole `actors[]` row addressed by actant_id,
+ *  step=3 retouch; Actors creative space — actors-casting design 2026-07-29). */
+export type ResourceType = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13;
 
 /** Addresses one lockable resource. `locale` is set for textboxes (per-language)
  *  and null for language-agnostic resources (image / entity / spread). */

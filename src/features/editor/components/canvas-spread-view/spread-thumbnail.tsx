@@ -67,6 +67,10 @@ interface SpreadThumbnailProps<TSpread extends BaseSpread> {
   // (preview/dummy) → no lock lookup, no badge. Stable module-const object from the space → memo-safe.
   peerLock?: { step: number; resourceType: number };
 
+  /** Opt-in dot indicator (Actors space) — draws a small primary dot on the
+   *  thumbnail (top-right) when true. Default false → unchanged for other spaces. */
+  showIndicatorDot?: boolean;
+
   // Drag state
   isDragEnabled?: boolean;
   isDragging?: boolean;
@@ -100,6 +104,7 @@ function SpreadThumbnailInner<TSpread extends BaseSpread>({
   renderRawImage,
   renderRawTextbox,
   peerLock,
+  showIndicatorDot = false,
   isDragEnabled = false,
   isDragging = false,
   isDropTarget = false,
@@ -484,6 +489,15 @@ function SpreadThumbnailInner<TSpread extends BaseSpread>({
               />
             </svg>
           </button>
+        )}
+
+        {/* Casting indicator dot (Actors space, opt-in) — spread contains a layer of the
+            selected actant. Top-right, non-interactive. */}
+        {showIndicatorDot && (
+          <span
+            className="absolute top-1 right-1 z-30 h-2.5 w-2.5 rounded-full bg-primary ring-2 ring-white pointer-events-none"
+            aria-label="Casts selected actant"
+          />
         )}
 
         {/* Collab peer-lock — light dim + centered lock icon (holder name in tooltip). Above content

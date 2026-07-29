@@ -107,6 +107,11 @@ interface CanvasSpreadViewProps<TSpread extends BaseSpread> {
   // dims + shows a lock/holder badge. Omitted by non-collab spaces → zero behavior change.
   peerLock?: { step: number; resourceType: number };
 
+  /** Opt-in thumbnail dot indicator (Actors space, phase 06): spreads whose id is in
+   *  this set render a small dot on their thumbnail. Omitted → no dot, zero behavior
+   *  change for every other space. */
+  spreadIndicatorIds?: Set<string>;
+
   // Feature flags
   isEditable?: boolean;
   canAddSpread?: boolean;
@@ -200,6 +205,7 @@ export function CanvasSpreadView<TSpread extends BaseSpread>({
   onDeleteSpread,
   onUpdateSpreadItem,
   peerLock,
+  spreadIndicatorIds,
   isEditable = true,
   canAddSpread = false,
   canReorderSpread = false,
@@ -508,6 +514,7 @@ export function CanvasSpreadView<TSpread extends BaseSpread>({
                 selectedId={selectedSpreadId}
                 layout="horizontal"
                 peerLock={peerLock}
+                spreadIndicatorIds={spreadIndicatorIds}
                 renderItems={renderItems}
                 renderImageItem={renderImageItem}
                 renderTextItem={renderTextItem}
@@ -539,6 +546,7 @@ export function CanvasSpreadView<TSpread extends BaseSpread>({
             layout="grid"
             columnsPerRow={columnsPerRow}
             peerLock={peerLock}
+            spreadIndicatorIds={spreadIndicatorIds}
             renderItems={renderItems}
             renderImageItem={renderImageItem}
             renderTextItem={renderTextItem}

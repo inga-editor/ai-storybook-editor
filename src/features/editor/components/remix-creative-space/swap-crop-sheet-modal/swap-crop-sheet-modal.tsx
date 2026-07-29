@@ -53,6 +53,9 @@ import type {
   SwapCropSheetTarget,
   SwapModelParams,
 } from '@/types/remix';
+import { PREV_STAGE } from '@/types/remix';
+import { useRemixStageAdapter } from '../hooks/use-remix-stage-adapter';
+import { StageDataAdapterProvider } from './stage-data-adapter';
 import { RemixModalHeader } from './remix-modal-header';
 import { SwapParametersSidebar } from './swap-parameters-sidebar';
 import { STAGE_TAB_CONFIG, STAGE_OF_TAB } from './stage-tab-config';
@@ -170,6 +173,10 @@ function mapSpriteSwapError(code: string | undefined): string {
 
 export function SwapCropSheetModal({ target, onClose }: Props) {
   const remix = useRemixById(target.remixId);
+  // Stage seam — the 3 stage tabs + Import dialog read their data/actions from
+  // this adapter (StageDataAdapterProvider below) instead of the remix store
+  // directly, so the same tab layer can be reused by the actors modal (phase 08).
+  const stageAdapter = useRemixStageAdapter(target.remixId);
   const sprites = useRemixSprites(target.remixId);
   const anySpriteSwapRunning = useAnySpriteSwapRunning(target.remixId);
   // Detect (Check) — 1 job/remix/plane (dedup). The 3 planes are independent →
@@ -777,6 +784,7 @@ export function SwapCropSheetModal({ target, onClose }: Props) {
     activeTab === 'variants' ? null : STAGE_OF_TAB[activeTab];
 
   return (
+    <StageDataAdapterProvider value={stageAdapter}>
     <Dialog
       open
       onOpenChange={(open) => {
@@ -876,7 +884,7 @@ export function SwapCropSheetModal({ target, onClose }: Props) {
         {importModal && (
           // Dialog OVER the modal (05-14) — Esc/backdrop close THIS only.
           <ImportBatchModal
-            remixId={target.remixId}
+            finals={stageAdapter.stageFinals(PREV_STAGE[importModal.stage])}
             stage={importModal.stage}
             onClose={() => setImportModal(null)}
             onConfirm={(keys) => void handleImportStageBatch(importModal.stage, keys)}
@@ -884,5 +892,6 @@ export function SwapCropSheetModal({ target, onClose }: Props) {
         )}
       </DialogContent>
     </Dialog>
+    </StageDataAdapterProvider>
   );
 }

@@ -1,0 +1,56 @@
+{
+  "casting_axes": [
+    {
+      "id": "axis-1",
+      "name": "Species",
+      "actants": [
+        { "id": "act-hero", "name": "Hero" },
+        { "id": "act-sidekick", "name": "Sidekick" },
+        { "id": "act-uncast", "name": "Uncast Role" }
+      ],
+      "presets": [
+        {
+          "id": "preset-cat",
+          "name": "Cat",
+          "is_default": true,
+          "actants": [
+            { "actant_id": "act-hero", "actor_id": "miu_cat", "actor_type": 1 },
+            { "actant_id": "act-sidekick", "actor_id": "shared_dog", "actor_type": 1 }
+          ]
+        },
+        {
+          "id": "preset-dog",
+          "name": "Dog",
+          "is_default": false,
+          "actants": [
+            { "actant_id": "act-hero", "actor_id": "rex_dog", "actor_type": 1 },
+            { "actant_id": "act-sidekick", "actor_id": "shared_dog", "actor_type": 1 }
+          ]
+        },
+        {
+          "id": "preset-bird",
+          "name": "Bird",
+          "is_default": false,
+          "actants": [
+            { "actant_id": "act-uncast", "actor_id": "tweety_bird", "actor_type": 1 }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "axis-2",
+      "name": "Mood",
+      "actants": [{ "id": "act-mood", "name": "Mood Role" }],
+      "presets": [
+        {
+          "id": "preset-happy",
+          "name": "Happy",
+          "is_default": true,
+          "actants": [
+            { "actant_id": "act-mood", "actor_id": "sunny_prop", "actor_type": 2 }
+          ]
+        }
+      ]
+    }
+  ]
+}

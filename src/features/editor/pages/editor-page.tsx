@@ -37,6 +37,7 @@ import { useMyCollaboration } from '../components/collaborators-creative-space/h
 import { useLogBookLogin } from '../components/collaborators-creative-space/hooks/use-log-book-login';
 import { ConfigCreativeSpace } from '../components/config-creative-space';
 import { RemixCreativeSpace } from '../components/remix-creative-space';
+import { ActorsCreativeSpace } from '../components/actors-creative-space';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { InteractionLayerProvider } from '../contexts';
 import { EditHistoryBridge } from '../components/edit-history-bridge';
@@ -319,6 +320,8 @@ export function EditorPage() {
         return <SharesCreativeSpace />;
       case 'remix':
         return <RemixCreativeSpace />;
+      case 'actors':
+        return <ActorsCreativeSpace />;
       // ── Sketch step (redesign 2026-07-13): 5 functional spaces ──────────────
       // Base (char + prop sheets — 1 space, no `kind` prop). Overlays (generate/edit/import)
       // land in Phase 06.
