@@ -28,6 +28,7 @@ const row: PairTreeRow = {
   kind: 'pair',
   pairId: 'pair-1',
   actantId: 'act-hero',
+  actantName: 'Hero',
   actorId: 'miu_cat',
   actorType: 1,
 };
@@ -98,6 +99,7 @@ describe('ActorPairRow', () => {
     const uncast: UncastTreeRow = {
       kind: 'uncast',
       actantId: 'act-hero',
+      actantName: 'Hero',
       actorId: 'kid',
       actorType: 1,
       isDefaultActor: true,
@@ -132,6 +134,7 @@ describe('ActorPairRow', () => {
     const uncast: UncastTreeRow = {
       kind: 'uncast',
       actantId: 'act-hero',
+      actantName: 'Hero',
       actorId: 'rex',
       actorType: 1,
       isDefaultActor: false,

@@ -38,6 +38,19 @@ export interface ActorPairRowProps {
 const ACTION_BTN =
   'h-5 w-5 p-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100';
 
+/** Inline actant prefix — "YOUNGER →" before the actor name. Replaces the old
+ *  separate actant heading level (1 actant casts 1 actor per preset). */
+function ActantLabel({ name }: { name: string }) {
+  return (
+    <>
+      <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
+        {name || 'Untitled role'}
+      </span>
+      <span className="shrink-0 text-[10px] text-muted-foreground/50">→</span>
+    </>
+  );
+}
+
 /** Coverage badge — `{injected}/{total}`; total===0 warns (no layer casts it). */
 function CoverageBadge({ coverage }: { coverage?: ActorCoverage }) {
   if (!coverage) return null;
@@ -46,7 +59,7 @@ function CoverageBadge({ coverage }: { coverage?: ActorCoverage }) {
   return (
     <span
       className={cn(
-        'ml-auto shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium tabular-nums',
+        'shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium tabular-nums',
         isWarn
           ? 'bg-amber-500/15 text-amber-600'
           : 'bg-muted text-muted-foreground',
@@ -94,7 +107,8 @@ export function ActorPairRow({
   if (row.kind === 'uncast') {
     const isDefault = row.isDefaultActor;
     return (
-      <div className="group flex items-center gap-2 rounded px-2 py-1 text-xs text-muted-foreground hover:bg-muted/50">
+      <div className="group flex items-center gap-1 rounded px-1.5 py-1 text-xs text-muted-foreground hover:bg-muted/50">
+        <ActantLabel name={row.actantName} />
         <span className="truncate">{displayName}</span>
         <span className="shrink-0 text-[10px] italic opacity-70">
           {isDefault ? '(default)' : '(no flow)'}
@@ -128,7 +142,7 @@ export function ActorPairRow({
     return (
       <div
         className={cn(
-          'group flex items-center gap-2 rounded px-2 py-1 text-xs',
+          'group flex items-center gap-1 rounded px-1.5 py-1 text-xs',
           isSelected ? 'bg-primary/10' : 'hover:bg-muted/50',
         )}
         onClick={() => onSelect(row.pairId)}
@@ -165,13 +179,14 @@ export function ActorPairRow({
   return (
     <div
       className={cn(
-        'group flex items-center gap-2 rounded px-2 py-1 text-xs',
+        'group flex items-center gap-1 rounded px-1.5 py-1 text-xs',
         isSelected ? 'bg-primary/10 text-foreground' : 'hover:bg-muted/50',
       )}
       onClick={() => onSelect(row.pairId)}
       role="button"
       tabIndex={0}
     >
+      <ActantLabel name={row.actantName} />
       <span className={cn('truncate', isDeletedName && 'text-muted-foreground')}>
         {displayName}
       </span>
@@ -182,7 +197,7 @@ export function ActorPairRow({
 
       <CoverageBadge coverage={coverage} />
 
-      <div className="flex shrink-0 items-center gap-0.5">
+      <div className="ml-auto flex shrink-0 items-center">
         <Button
           variant="ghost"
           size="icon"

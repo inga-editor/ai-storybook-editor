@@ -19,6 +19,10 @@ export interface PairTreeRow {
   kind: 'pair';
   pairId: string;
   actantId: string;
+  /** Actant display name — rendered INLINE on the row ("Younger → Kaka"); the
+   *  sidebar no longer draws a separate actant heading level (1 actant casts 1
+   *  actor per preset, so the extra level was pure noise). */
+  actantName: string;
   actorId: string;
   actorType: ActorType;
 }
@@ -31,6 +35,8 @@ export interface PairTreeRow {
 export interface UncastTreeRow {
   kind: 'uncast';
   actantId: string;
+  /** Actant display name — inline row label (see PairTreeRow.actantName). */
+  actantName: string;
   actorId: string;
   actorType: ActorType;
   isDefaultActor: boolean;
@@ -99,13 +105,16 @@ export function buildActorsTree(
 
   const usedPairIds = new Set<string>();
   // First axis that owns each actant — decides where an unassigned pair lands.
-  const actantToAxis = new Map<string, string>();
+  // Carries the actant name too so unassigned rows get their inline label.
+  const actantToAxis = new Map<string, { axisId: string; actantName: string }>();
 
   const axes: AxisGroup[] = [];
   for (const axis of castingSlot.casting_axes) {
     const actantById = new Map(axis.actants.map((a) => [a.id, a]));
     for (const a of axis.actants) {
-      if (!actantToAxis.has(a.id)) actantToAxis.set(a.id, axis.id);
+      if (!actantToAxis.has(a.id)) {
+        actantToAxis.set(a.id, { axisId: axis.id, actantName: a.name });
+      }
     }
 
     // Default actor per actant (memoized) — the actor the axis's DEFAULT preset
@@ -144,6 +153,7 @@ export function buildActorsTree(
               kind: 'pair',
               pairId: pair.id,
               actantId,
+              actantName: actant.name,
               actorId: m.actor_id,
               actorType: m.actor_type,
             };
@@ -151,6 +161,7 @@ export function buildActorsTree(
           return {
             kind: 'uncast',
             actantId,
+            actantName: actant.name,
             actorId: m.actor_id,
             actorType: m.actor_type,
             isDefaultActor: isDefaultActor(actantId, m.actor_id, m.actor_type),
@@ -183,12 +194,13 @@ export function buildActorsTree(
   const danglingOrphans: DanglingTreeRow[] = [];
   for (const p of actorPairs) {
     if (usedPairIds.has(p.id)) continue;
-    const axisId = actantToAxis.get(p.actant_id);
-    if (axisId) {
-      axisById.get(axisId)!.unassigned.push({
+    const owner = actantToAxis.get(p.actant_id);
+    if (owner) {
+      axisById.get(owner.axisId)!.unassigned.push({
         kind: 'pair',
         pairId: p.id,
         actantId: p.actant_id,
+        actantName: owner.actantName,
         actorId: p.actor_id,
         actorType: p.actor_type,
       });

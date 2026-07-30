@@ -1,6 +1,8 @@
 // actors-tree-node.tsx — Renders ONE axis of the Actors sidebar tree:
-//   axis (chevron) → preset (chevron + ★ default) → actant label (uppercase,
-//   NON-collapsible) → rows. Also renders the axis "Unassigned" bucket.
+//   axis (chevron) → preset (chevron + ★ default) → rows. The actant renders
+//   INLINE on each row ("Younger → Kaka") — one actant casts one actor per
+//   preset, so a separate actant heading level would be pure noise. Also
+//   renders the axis "Unassigned" bucket.
 //
 // Collapse state is owned by the parent sidebar (local, not persisted) and
 // threaded in via `collapsedAxisIds` / `collapsedPresetIds` sets.
@@ -91,7 +93,7 @@ export function ActorsTreeNode({
       </button>
 
       {!axisCollapsed && (
-        <div className="ml-2 border-l border-border/60 pl-1.5">
+        <div className="ml-1 border-l border-border/60 pl-1">
           {axis.presets.map((preset) => {
             const presetCollapsed = collapsedPresetIds.has(preset.presetId);
             return (
@@ -113,22 +115,19 @@ export function ActorsTreeNode({
                 </button>
 
                 {!presetCollapsed && (
-                  <div className="ml-3">
+                  <div>
                     {preset.actants.length === 0 ? (
                       <p className="px-2 py-1 text-[11px] italic text-muted-foreground/70">
                         No roles cast in this preset
                       </p>
                     ) : (
-                      preset.actants.map((group) => (
-                        <div key={group.actantId} className="mb-0.5">
-                          <div className="px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
-                            {group.actantName || 'Untitled role'}
-                          </div>
-                          {group.rows.map((row) =>
-                            renderRow(row, `${preset.presetId}:${group.actantId}`, ctx),
-                          )}
-                        </div>
-                      ))
+                      // Actant renders INLINE on each row ("Younger → Kaka") — one
+                      // actant casts one actor per preset, so no heading level.
+                      preset.actants.map((group) =>
+                        group.rows.map((row) =>
+                          renderRow(row, `${preset.presetId}:${group.actantId}`, ctx),
+                        ),
+                      )
                     )}
                   </div>
                 )}
