@@ -34,6 +34,10 @@ import {
   useActorStageAdapter,
 } from '@/stores/actors-store';
 import { buildModelParams } from '@/stores/remix-store/slices/build-model-params';
+import {
+  DIMENSION_CANVAS_SIZE,
+  DEFAULT_CANVAS_SIZE,
+} from '@/constants/canvas-dimension-constants';
 import { EnqueueJobError } from '@/apis/jobs-api';
 import type { RemixStageBatch, SwapModelParams } from '@/types/remix';
 import type { ActorStageKind } from '@/types/actors';
@@ -137,11 +141,18 @@ export function SwapCastingSlotModal({ target, onClose }: Props) {
   const [dividerPosition, setDividerPosition] = useState(50);
   const [params, setParams] = useState<SwapModelParams>(DEFAULT_SWAP_PARAMS);
 
+  // Book spread px — resolves the layout basis so the seed can convert per-axis
+  // %-geometry to real px (keeps crop aspect ratios true; see seedInitialActorBatch).
+  const spreadPx = useMemo(() => {
+    const dim = currentBook?.dimension ?? null;
+    return dim != null ? (DIMENSION_CANVAS_SIZE[dim] ?? DEFAULT_CANVAS_SIZE) : DEFAULT_CANVAS_SIZE;
+  }, [currentBook?.dimension]);
+
   // Crops-stage seed refs — the layers that cast this actant. null → no layer
   // casts the actant (empty state; no batch seeded).
   const seedRefs = useMemo(
-    () => (pair ? seedInitialActorBatch(pair, spreads) : null),
-    [pair, spreads],
+    () => (pair ? seedInitialActorBatch(pair, spreads, spreadPx) : null),
+    [pair, spreads, spreadPx],
   );
   const hasCastLayers = seedRefs !== null;
   const actorVisualOk = useMemo(

@@ -22,10 +22,19 @@ import { resolveEffectiveImageUrl } from '@/features/editor/components/shared-co
  * Returns `null` when NO playable layer casts the pair's actant (→ modal empty
  * state, never an empty batch). A layer with a matching actant but no resolvable
  * media is skipped (cannot seed a crop without a URL).
+ *
+ * `spreadPx` = the book's REAL spread px (DIMENSION_CANVAS_SIZE[dimension] ??
+ * DEFAULT_CANVAS_SIZE). `layer.geometry.{w,h}` are PER-AXIS percentages of the
+ * spread (w = %width, h = %height), so the true pixel aspect ratio is
+ * (w%·spreadW):(h%·spreadH). We resolve to real px HERE so the packer
+ * (`absolutePx: true`) preserves that ratio instead of collapsing it to the
+ * axis-independent w%:h% (which squishes every crop by spreadH/spreadW and
+ * makes the fixed inter-crop gutter dwarf the %-scale boxes).
  */
 export function seedInitialActorBatch(
   pair: ActorPair,
   spreads: BaseSpread[],
+  spreadPx: { width: number; height: number },
 ): CropRef[] | null {
   const refs: CropRef[] = [];
 
@@ -44,9 +53,12 @@ export function seedInitialActorBatch(
         media_url: mediaUrl,
         // Clone tags — the batch owns its own snapshot (never aliases the layer).
         tags: layer.tags ? [...layer.tags] : [],
-        // Layer geometry is the native-piece dim estimate (composer rescales
-        // defensively — packed with absolutePx:true by the store builder).
-        nativeDim: { w: layer.geometry.w, h: layer.geometry.h },
+        // %-of-spread geometry → REAL px (native-piece dim estimate). Both axes
+        // scaled by their own spread dimension so the ratio is true px.
+        nativeDim: {
+          w: (layer.geometry.w / 100) * spreadPx.width,
+          h: (layer.geometry.h / 100) * spreadPx.height,
+        },
       });
     }
   }

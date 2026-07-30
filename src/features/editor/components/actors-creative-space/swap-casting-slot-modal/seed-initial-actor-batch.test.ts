@@ -9,6 +9,9 @@ import spreadsJson from '../__fixtures__/spreads-with-casting.json';
 
 const spreads = spreadsJson as unknown as BaseSpread[];
 
+// Fixed spread px basis for the %→px conversion (800×600 = DEFAULT_CANVAS_SIZE).
+const SPREAD_PX = { width: 800, height: 600 };
+
 function makePair(actantId: string): ActorPair {
   return {
     id: 'pair-1',
@@ -27,24 +30,25 @@ function makePair(actantId: string): ActorPair {
 
 describe('seedInitialActorBatch', () => {
   it('returns null when no playable layer casts the pair actant', () => {
-    expect(seedInitialActorBatch(makePair('act-nobody'), spreads)).toBeNull();
+    expect(seedInitialActorBatch(makePair('act-nobody'), spreads, SPREAD_PX)).toBeNull();
   });
 
-  it('seeds one crop-ref per matching layer using the is_default media_url', () => {
-    const refs = seedInitialActorBatch(makePair('act-hero'), spreads);
+  it('seeds one crop-ref, converting %-geometry to real px via spread size', () => {
+    const refs = seedInitialActorBatch(makePair('act-hero'), spreads, SPREAD_PX);
     expect(refs).not.toBeNull();
     expect(refs).toHaveLength(1);
     expect(refs![0]).toMatchObject({
       spread_id: 's1',
       id: 'L1',
       media_url: 'https://cdn.example.invalid/cat-default.png',
-      nativeDim: { w: 200, h: 300 },
+      // geometry {w:25%, h:40%} × {800, 600} → real px (aspect preserved).
+      nativeDim: { w: 200, h: 240 },
     });
   });
 
   it('clones the layer tags into a fresh array', () => {
     const layerTags = spreads[0].images[0].tags;
-    const refs = seedInitialActorBatch(makePair('act-hero'), spreads)!;
+    const refs = seedInitialActorBatch(makePair('act-hero'), spreads, SPREAD_PX)!;
     expect(refs[0].tags).toEqual(layerTags);
     // Must be a distinct array — the batch owns its own snapshot.
     expect(refs[0].tags).not.toBe(layerTags);

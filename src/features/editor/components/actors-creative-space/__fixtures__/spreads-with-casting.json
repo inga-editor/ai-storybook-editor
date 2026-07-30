@@ -6,7 +6,7 @@
     "images": [
       {
         "id": "L1",
-        "geometry": { "x": 0, "y": 0, "w": 200, "h": 300 },
+        "geometry": { "x": 0, "y": 0, "w": 25, "h": 40 },
         "media_url": "https://cdn.example.invalid/L1-effective.png",
         "tags": [{ "object_key": "hero" }],
         "casting_slot": {
