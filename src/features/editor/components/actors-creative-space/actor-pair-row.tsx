@@ -35,8 +35,11 @@ export interface ActorPairRowProps {
   onAdd: (prefill: import('@/types/actors').AddActorInput) => void;
 }
 
+// `disabled:opacity-0` neutralises the Button base's `disabled:opacity-50` (via
+// tailwind-merge), otherwise a disabled action (e.g. inject with no finals) stays
+// half-visible without hover. On row hover the disabled state re-reads as 50%.
 const ACTION_BTN =
-  'h-5 w-5 p-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100';
+  'h-5 w-5 p-0 opacity-0 disabled:opacity-0 group-hover:opacity-100 group-hover:disabled:opacity-50 focus-visible:opacity-100';
 
 /** Inline actant prefix — "YOUNGER →" before the actor name. Replaces the old
  *  separate actant heading level (1 actant casts 1 actor per preset). */
