@@ -7,7 +7,7 @@
 // Design ref: ai-storybook-design/component/editor-page/actors-creative-space/README.md
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Tags } from 'lucide-react';
+import { Drama } from 'lucide-react';
 import { useCurrentBook, useBookTemplateLayout } from '@/stores/book-store';
 import {
   useSnapshotId,
@@ -137,7 +137,7 @@ export function ActorsCreativeSpace() {
     log.debug('render', 'blocked — no snapshot', { hasBook: !!currentBook, snapshotId });
     return (
       <EmptyState
-        icon={<Tags className="h-12 w-12" />}
+        icon={<Drama className="h-12 w-12" />}
         title="No snapshot loaded"
         description="Save the book first to enable casting."
       />
@@ -151,7 +151,7 @@ export function ActorsCreativeSpace() {
     log.debug('render', 'blocked — casting not configured', { bookId: currentBook.id });
     return (
       <EmptyState
-        icon={<Tags className="h-12 w-12" />}
+        icon={<Drama className="h-12 w-12" />}
         title="Casting not configured"
         description="Define casting axes in Settings → Casting to start casting actors."
       />

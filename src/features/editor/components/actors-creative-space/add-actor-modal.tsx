@@ -143,8 +143,18 @@ export function AddActorModal({
     setActorSel(null); // actant re-derives actor options
   }, []);
 
-  // ── V3 — Create enabled only with axis + actant + actor. ─────────────────────
-  const canCreate = !!axisId && !!actantId && !!actorSel && !isCreating;
+  // The selected actor may be a disabled option (already_added / current_default /
+  // deleted) — a prefill from the tree's [+ Add] can pre-set it, bypassing the
+  // dropdown's `disabled`. Block Create for those instead of writing a no-op row.
+  const selectedActorReason = useMemo(() => {
+    if (!actorSel) return null;
+    const opt = actorOptions.find((o) => encodeActor(o.actorType, o.actorId) === actorSel);
+    return opt?.disabledReason ?? null;
+  }, [actorOptions, actorSel]);
+
+  // ── V3 — Create enabled only with axis + actant + a swappable actor. ─────────
+  const canCreate =
+    !!axisId && !!actantId && !!actorSel && selectedActorReason == null && !isCreating;
 
   const handleCreate = useCallback(async () => {
     if (!axisId || !actantId || !actorSel) return;
@@ -282,7 +292,13 @@ export function AddActorModal({
           {/* ACTOR */}
           <Field
             label="Actor"
-            hint={noActorOptions ? 'Uncast in this preset — pick another preset' : undefined}
+            hint={
+              noActorOptions
+                ? 'Uncast in this preset — pick another preset'
+                : selectedActorReason
+                  ? ACTOR_OPTION_DISABLED_LABEL[selectedActorReason]
+                  : undefined
+            }
           >
             <Select
               value={actorSel ?? ''}

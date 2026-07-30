@@ -151,7 +151,6 @@ export function ActorsSidebar({
   );
 
   const hasAxes = castingSlot.casting_axes.length > 0;
-  const hasPairs = actorPairs.length > 0;
 
   return (
     <aside className="flex h-full w-[280px] shrink-0 flex-col border-r border-border">
@@ -182,20 +181,6 @@ export function ActorsSidebar({
           </div>
         ) : (
           <>
-            {!hasPairs && (
-              <div className="mb-2 rounded-md border border-dashed border-border bg-muted/30 px-3 py-3 text-center">
-                <p className="text-xs text-muted-foreground">No actors yet.</p>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="mt-2 h-7 gap-1 text-xs"
-                  onClick={() => onAddActor()}
-                >
-                  <Plus className="h-3 w-3" /> Add your first actor
-                </Button>
-              </div>
-            )}
-
             {tree.axes.map((axis) => (
               <ActorsTreeNode
                 key={axis.axisId}

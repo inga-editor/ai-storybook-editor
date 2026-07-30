@@ -43,6 +43,9 @@ describe('buildActorsTree', () => {
     expect(row.kind).toBe('uncast');
     if (row.kind !== 'uncast') throw new Error('expected uncast');
     expect(row.actorId).toBe('tweety_bird');
+    // Not the actant's default (act-uncast is absent from the default preset) →
+    // still swappable, [+ Add] stays enabled.
+    expect(row.isDefaultActor).toBe(false);
     expect(row.prefill).toMatchObject({
       axisId: 'axis-1',
       presetId: 'preset-bird',
@@ -50,6 +53,35 @@ describe('buildActorsTree', () => {
       actorId: 'tweety_bird',
       actorType: 1,
     });
+  });
+
+  it('flags an uncast row as isDefaultActor when its actor is the actant default', () => {
+    // Default preset binds role→kid but NO actors row exists yet ⇒ uncast row
+    // whose actor IS the story default ⇒ nothing to swap.
+    const slot: BookCastingSlot = {
+      casting_axes: [
+        {
+          id: 'ax',
+          name: 'Main',
+          actants: [{ id: 'role', name: 'Hero' }],
+          presets: [
+            {
+              id: 'p-def',
+              name: 'Boy',
+              is_default: true,
+              actants: [{ actant_id: 'role', actor_id: 'kid', actor_type: 1 }],
+            },
+          ],
+        },
+      ],
+    } as BookCastingSlot;
+
+    const t = buildActorsTree(slot, []);
+    const group = t.axes[0].presets[0].actants.find((g) => g.actantId === 'role')!;
+    const row = group.rows[0];
+    expect(row.kind).toBe('uncast');
+    if (row.kind !== 'uncast') throw new Error('expected uncast');
+    expect(row.isDefaultActor).toBe(true);
   });
 
   it('places a pair referenced by no preset into the axis unassigned bucket', () => {

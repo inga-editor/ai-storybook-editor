@@ -11,6 +11,7 @@
 
 import type { BookCastingSlot, CastingAssignment } from '@/types/editor';
 import type { ActorPair, ActorType, AddActorInput } from '@/types/actors';
+import { defaultActorOfActant } from './derive-actor-options';
 
 /** A row backed by a real `actors` row (has a `pairId`). Shared across presets:
  *  the SAME `pairId` can appear in N preset rows — select/coverage stay unified. */
@@ -23,12 +24,16 @@ export interface PairTreeRow {
 }
 
 /** A casting mapping that has NO `actors` row yet — muted "(no flow)" + [+ Add].
- *  `prefill` pre-selects all 4 cascade fields in the AddActorModal (phase 07). */
+ *  `prefill` pre-selects all 4 cascade fields in the AddActorModal (phase 07).
+ *  `isDefaultActor` = this actor is the actant's story default (the axis default
+ *  preset binds it) ⇒ swapping to itself is a no-op ("nothing to swap"), so the
+ *  [+ Add] affordance is gated off (parity with the modal's disabled option). */
 export interface UncastTreeRow {
   kind: 'uncast';
   actantId: string;
   actorId: string;
   actorType: ActorType;
+  isDefaultActor: boolean;
   prefill: AddActorInput;
 }
 
@@ -103,6 +108,20 @@ export function buildActorsTree(
       if (!actantToAxis.has(a.id)) actantToAxis.set(a.id, axis.id);
     }
 
+    // Default actor per actant (memoized) — the actor the axis's DEFAULT preset
+    // binds. An uncast row matching it is a self-swap ("nothing to swap"); the UI
+    // greys its [+ Add]. Single source of truth: derive-actor-options helper.
+    const defaultKeyCache = new Map<string, string | null>();
+    const isDefaultActor = (actantId: string, actorId: string, actorType: ActorType): boolean => {
+      let key = defaultKeyCache.get(actantId);
+      if (key === undefined) {
+        const d = defaultActorOfActant(castingSlot, axis.id, actantId);
+        key = d ? `${d.actorId}|${d.actorType}` : null;
+        defaultKeyCache.set(actantId, key);
+      }
+      return key === `${actorId}|${actorType}`;
+    };
+
     const presets: PresetGroup[] = axis.presets.map((preset) => {
       // Group mappings by actant_id, preserving first-seen order.
       const groupsMap = new Map<string, CastingAssignment[]>();
@@ -134,6 +153,7 @@ export function buildActorsTree(
             actantId,
             actorId: m.actor_id,
             actorType: m.actor_type,
+            isDefaultActor: isDefaultActor(actantId, m.actor_id, m.actor_type),
             prefill: {
               axisId: axis.id,
               presetId: preset.id,

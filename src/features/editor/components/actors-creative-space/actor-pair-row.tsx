@@ -87,17 +87,32 @@ export function ActorPairRow({
   const displayName = actorName ?? `@${row.actorId}`;
   const isDeletedName = actorName == null;
 
-  // ── Uncast row — greyed, [+ Add] with prefill (never hidden). ────────────────
+  // ── Uncast row — greyed, [+ Add] with prefill (never hidden). The actant's
+  // story default actor is a self-swap ("nothing to swap") → [+ Add] gated off.
+  // aria-disabled (NOT native disabled) keeps the reason tooltip firing on hover
+  // — same pattern as icon-rail-item.tsx.
   if (row.kind === 'uncast') {
+    const isDefault = row.isDefaultActor;
     return (
       <div className="group flex items-center gap-2 rounded px-2 py-1 text-xs text-muted-foreground hover:bg-muted/50">
         <span className="truncate">{displayName}</span>
-        <span className="shrink-0 text-[10px] italic opacity-70">(no flow)</span>
+        <span className="shrink-0 text-[10px] italic opacity-70">
+          {isDefault ? '(default)' : '(no flow)'}
+        </span>
         <Button
           variant="ghost"
           size="sm"
-          className="ml-auto h-5 shrink-0 gap-1 px-1.5 text-[11px]"
+          aria-disabled={isDefault || undefined}
+          title={isDefault ? 'Current default — nothing to swap' : 'Add swap flow'}
+          className={cn(
+            'ml-auto h-5 shrink-0 gap-1 px-1.5 text-[11px]',
+            isDefault && 'cursor-not-allowed opacity-40 hover:bg-transparent hover:text-muted-foreground',
+          )}
           onClick={() => {
+            if (isDefault) {
+              log.debug('onAddUncast', 'ignored — actor is current default', { actorId: row.actorId });
+              return;
+            }
             log.debug('onAddUncast', 'add from uncast row', { actorId: row.actorId });
             onAdd(row.prefill);
           }}

@@ -22,7 +22,7 @@ vi.mock('@/apis/jobs-api', () => ({
 
 import { useActorsStore } from '@/stores/actors-store';
 import { ActorPairRow } from './actor-pair-row';
-import type { PairTreeRow } from './build-actors-tree';
+import type { PairTreeRow, UncastTreeRow } from './build-actors-tree';
 
 const row: PairTreeRow = {
   kind: 'pair',
@@ -92,5 +92,71 @@ describe('ActorPairRow', () => {
     fireEvent.keyDown(rowEl, { key: 'Delete' });
     fireEvent.keyDown(rowEl, { key: 'Backspace' });
     expect(props.onDelete).not.toHaveBeenCalled();
+  });
+
+  it('gates [+ Add] on a default-actor uncast row (nothing to swap)', () => {
+    const uncast: UncastTreeRow = {
+      kind: 'uncast',
+      actantId: 'act-hero',
+      actorId: 'kid',
+      actorType: 1,
+      isDefaultActor: true,
+      prefill: {
+        axisId: 'ax',
+        presetId: 'p-def',
+        actantId: 'act-hero',
+        actorId: 'kid',
+        actorType: 1,
+      },
+    };
+    const onAdd = vi.fn();
+    render(
+      <ActorPairRow
+        row={uncast}
+        isSelected={false}
+        actorName="Kid"
+        onSelect={vi.fn()}
+        onOpenSwap={vi.fn()}
+        onInject={vi.fn()}
+        onDelete={vi.fn()}
+        onAdd={onAdd}
+      />,
+    );
+    const add = screen.getByTitle('Current default — nothing to swap');
+    expect(add).toHaveAttribute('aria-disabled', 'true');
+    fireEvent.click(add);
+    expect(onAdd).not.toHaveBeenCalled();
+  });
+
+  it('allows [+ Add] on a non-default uncast row', () => {
+    const uncast: UncastTreeRow = {
+      kind: 'uncast',
+      actantId: 'act-hero',
+      actorId: 'rex',
+      actorType: 1,
+      isDefaultActor: false,
+      prefill: {
+        axisId: 'ax',
+        presetId: 'p-alt',
+        actantId: 'act-hero',
+        actorId: 'rex',
+        actorType: 1,
+      },
+    };
+    const onAdd = vi.fn();
+    render(
+      <ActorPairRow
+        row={uncast}
+        isSelected={false}
+        actorName="Rex"
+        onSelect={vi.fn()}
+        onOpenSwap={vi.fn()}
+        onInject={vi.fn()}
+        onDelete={vi.fn()}
+        onAdd={onAdd}
+      />,
+    );
+    fireEvent.click(screen.getByTitle('Add swap flow'));
+    expect(onAdd).toHaveBeenCalledWith(uncast.prefill);
   });
 });

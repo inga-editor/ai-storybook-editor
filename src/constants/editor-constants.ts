@@ -55,7 +55,7 @@ export const ILLUSTRATION_ICONS: IconRailItemConfig[] = [
 export const RETOUCH_ICONS: IconRailItemConfig[] = [
   { id: 'object', icon: 'Layers', label: 'Objects' },
   { id: 'quiz', icon: 'HelpCircle', label: 'Quizzes' },
-  { id: 'actors', icon: 'Tags', label: 'Actors' },
+  { id: 'actors', icon: 'Drama', label: 'Actors' },
   { id: 'remix', icon: 'RefreshCw', label: 'Remix' },
 ];
 
