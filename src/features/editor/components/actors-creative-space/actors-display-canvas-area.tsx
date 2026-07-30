@@ -81,11 +81,14 @@ export function ActorsDisplayCanvasArea({
   const { activeSpreadId, viewMode, zoomLevel, columnsPerRow, patch } =
     useSpaceViewState('actors');
 
-  // Failed-preview memory (per layer). Set in the img onError EVENT handler (NOT
-  // an effect) so a dead injected-actor URL falls back once and never retries.
-  const [failedLayers, setFailedLayers] = useState<Map<string, true>>(() => new Map());
-  const markFailed = useCallback((layerId: string) => {
-    setFailedLayers((prev) => (prev.has(layerId) ? prev : new Map(prev).set(layerId, true)));
+  // Failed-preview memory, keyed `${layerId}|${url}` (NOT layer-only: Inject can
+  // write a NEW media_url for a layer whose old URL failed — the new URL must get
+  // a fresh chance). Set in the img onError EVENT handler (NOT an effect) so a
+  // dead injected-actor URL falls back once and never retries.
+  const [failedPreviews, setFailedPreviews] = useState<Set<string>>(() => new Set());
+  const markFailed = useCallback((layerId: string, url: string) => {
+    const key = `${layerId}|${url}`;
+    setFailedPreviews((prev) => (prev.has(key) ? prev : new Set(prev).add(key)));
   }, []);
 
   // Chip names — resolved once per pair (actant ← book casting, actor ← snapshot).
@@ -135,7 +138,7 @@ export function ActorsDisplayCanvasArea({
   // view-mode changes do NOT recreate it, and a pair change repaints only overlays.
   const renderImageItem = useCallback(
     (ctx: ImageItemContext<BaseSpread>): ReactNode => {
-      const { isHighlighted } = resolveCastingPreviewUrl(ctx.item, selectedPair);
+      const { isHighlighted, url } = resolveCastingPreviewUrl(ctx.item, selectedPair);
       if (isHighlighted && selectedPair) {
         return (
           <CastingHighlightImage
@@ -144,7 +147,7 @@ export function ActorsDisplayCanvasArea({
             actantName={actantName}
             actorName={actorName}
             zIndex={ctx.zIndex}
-            initiallyFailed={failedLayers.has(ctx.item.id)}
+            initiallyFailed={url ? failedPreviews.has(`${ctx.item.id}|${url}`) : false}
             onLoadError={markFailed}
           />
         );
@@ -161,7 +164,7 @@ export function ActorsDisplayCanvasArea({
         />
       );
     },
-    [selectedPair, actantName, actorName, failedLayers, markFailed],
+    [selectedPair, actantName, actorName, failedPreviews, markFailed],
   );
 
   if (spreads.length === 0) {

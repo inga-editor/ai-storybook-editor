@@ -27,11 +27,12 @@ interface CastingHighlightImageProps {
   actantName: string;
   actorName: string;
   zIndex?: number;
-  /** True when this layer already failed to load in this session (parent Map).
-   *  Seeds error state so a remount (spread switch) does not retry the dead URL. */
+  /** True when this layer's CURRENT resolved URL already failed to load in this
+   *  session (parent memory, keyed layer|url). Seeds error state so a remount
+   *  (spread/row switch) does not retry the dead URL. */
   initiallyFailed?: boolean;
-  /** Report a load failure to the parent's per-layer Map. */
-  onLoadError?: (layerId: string) => void;
+  /** Report a load failure to the parent's per-(layer, url) memory. */
+  onLoadError?: (layerId: string, url: string) => void;
 }
 
 export function CastingHighlightImage({
@@ -49,6 +50,22 @@ export function CastingHighlightImage({
   const resolved = resolveCastingPreviewUrl(layer, selectedPair);
   const fallbackUrl = resolveEffectiveImageUrl(layer);
 
+  // Error state is scoped to ONE resolved URL: when Inject writes a NEW media_url
+  // for this layer, the fresh URL must get a fresh chance — otherwise a transient
+  // failure would pin the fallback (old visual) forever. Adjust-during-render
+  // (sanctioned React pattern), NOT an effect.
+  const [erroredForUrl, setErroredForUrl] = useState<string | undefined>(resolved.url);
+  if (resolved.url !== erroredForUrl) {
+    setErroredForUrl(resolved.url);
+    setErrored(false);
+  }
+
+  // Last URL that actually painted. While a NEW target URL is downloading (e.g.
+  // right after Inject swaps entry.media_url), keep the previous visual beneath —
+  // without it the layer goes blank and the raw scene under it shows through,
+  // which reads as "Inject didn't update anything".
+  const [paintedUrl, setPaintedUrl] = useState<string | null>(null);
+
   const url = errored ? fallbackUrl : resolved.url;
   const status: CastingPreviewStatus = errored ? 'error' : resolved.status;
 
@@ -59,8 +76,8 @@ export function CastingHighlightImage({
       status: resolved.status,
     });
     setErrored(true);
-    onLoadError?.(layer.id);
-  }, [layer.id, resolved.status, onLoadError]);
+    if (url) onLoadError?.(layer.id, url);
+  }, [layer.id, resolved.status, url, onLoadError]);
 
   const rotation = Number.isFinite(layer.geometry.rotation) ? layer.geometry.rotation : 0;
 
@@ -82,14 +99,26 @@ export function CastingHighlightImage({
           pointerEvents: 'none',
         }}
       >
+        {/* Previous visual stays beneath until the new target paints (removed on load
+            so a transparent cutout PNG never shows the stale visual through it). */}
+        {paintedUrl && paintedUrl !== url && (
+          <img
+            src={paintedUrl}
+            alt=""
+            aria-hidden
+            className="absolute inset-0 h-full w-full object-contain"
+            draggable={false}
+          />
+        )}
         {url && (
           <img
             key={url}
             src={url}
             alt={layer.title ?? ''}
-            className="h-full w-full object-contain"
+            className="absolute inset-0 h-full w-full object-contain"
             loading="lazy"
             draggable={false}
+            onLoad={() => setPaintedUrl(url)}
             onError={handleError}
           />
         )}

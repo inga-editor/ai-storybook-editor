@@ -8,7 +8,8 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Drama } from 'lucide-react';
-import { useCurrentBook, useBookTemplateLayout } from '@/stores/book-store';
+import { useCurrentBook, useCurrentBookId, useBookTemplateLayout } from '@/stores/book-store';
+import { useCollabPersistSession } from '@/features/editor/hooks/use-collab-persist-session';
 import {
   useSnapshotId,
   useCharacters,
@@ -46,6 +47,11 @@ interface AddModalState {
 
 export function ActorsCreativeSpace() {
   const currentBook = useCurrentBook();
+  const bookId = useCurrentBookId();
+  // Collab lock session (10th collab space): connects the resource-lock store to the
+  // book so the Inject rtype-13 acquire reaches the gateway — without this, acquire()
+  // early-returns "blocked" (bookId null) and Inject can never run.
+  useCollabPersistSession(bookId);
   const snapshotId = useSnapshotId();
   const { syncFromServer, reset, createActorPair, deleteActorPair, setSelectedPairId, injectActorFinals } =
     useActorsActions();
