@@ -5,11 +5,17 @@
 // does not support the current narrationLanguage.
 "use client";
 
-import { useState, useMemo, useEffect, useLayoutEffect } from "react";
+import { useState, useMemo, useEffect, useLayoutEffect, useRef } from "react";
 import { toast } from "sonner";
 import { PlayerAnimationSidebar } from "./player-animation-sidebar";
 import { PlayerHeader } from "./player-header";
 import { resolveEffectiveLanguage } from "./resolve-effective-language";
+import {
+  resolveEffectiveCastSelection,
+  castKeyOf,
+  applyCastingToSpreads,
+} from "./resolve-preview-casting";
+import { normalizeCastingSlot } from "@/features/editor/components/config-creative-space/casting-slot-helpers";
 import {
   PlayableSpreadView,
   type PlayableSpread,
@@ -29,7 +35,11 @@ import {
   type InitializePayload,
 } from "@/stores/animation-playback-store";
 import { useRemixes, useRemixById } from "@/stores/remix-store";
-import { useBookTemplateLayout, useCurrentBook } from "@/stores/book-store";
+import {
+  useBookTemplateLayout,
+  useCurrentBook,
+  useBookCastingSlot,
+} from "@/stores/book-store";
 import { createLogger } from "@/utils/logger";
 import type { BaseSpread } from "@/types/spread-types";
 import type { Section } from "@/types/illustration-types";
@@ -76,6 +86,11 @@ export function PreviewCreativeSpace() {
   // (Remix space's selection MUST NOT leak into Preview's source picker).
   const [userSelectedRemixId, setUserSelectedRemixId] = useState<string | null>(null);
   const [userSelectedSpreadId, setUserSelectedSpreadId] = useState<string | null>(null);
+  // Casting preset overrides — ephemeral, NOT persisted, reset each mount
+  // (parity with `userSelectedRemixId`). axisId → presetId (partial override map).
+  const [userSelectedPresets, setUserSelectedPresets] = useState<
+    Record<string, string>
+  >({});
 
   const remixes = useRemixes();
   const activeRemix = useRemixById(userSelectedRemixId);
@@ -141,20 +156,45 @@ export function PreviewCreativeSpace() {
     [currentSpread, itemsMap],
   );
 
-  const playableSpreads = useMemo((): PlayableSpread[] => {
-    return spreads.map((spread) => ({
-      ...spread,
-      animations: spread.animations ?? [],
-    } as PlayableSpread));
-  }, [spreads]);
+  const activeRemixId = activeRemix?.id ?? null;
+
+  // === Casting (Preview source = Original only) ===
+  // castingAxes memoized on the JSONB REFERENCE (`useBookCastingSlot` returns the
+  // store field directly, stable while book unchanged) — normalizeCastingSlot
+  // mints a fresh array each call, so without this memo castKey/build re-run every
+  // render.
+  const bookCastingSlot = useBookCastingSlot();
+  const castingAxes = useMemo(
+    () => normalizeCastingSlot(bookCastingSlot).casting_axes,
+    [bookCastingSlot],
+  );
+
+  const effectiveCastSelection = useMemo(
+    () =>
+      resolveEffectiveCastSelection(
+        activeRemixId,
+        castingAxes,
+        userSelectedPresets,
+      ),
+    [activeRemixId, castingAxes, userSelectedPresets],
+  );
+  const castKey = useMemo(
+    () => castKeyOf(effectiveCastSelection),
+    [effectiveCastSelection],
+  );
+
+  // Build clone collapses cast URLs into image fields; layer/preload untouched.
+  const playableSpreads = useMemo(
+    (): PlayableSpread[] =>
+      applyCastingToSpreads(spreads, castingAxes, effectiveCastSelection),
+    [spreads, castingAxes, effectiveCastSelection],
+  );
 
   const branchSetting = currentSpread?.branch_setting ?? null;
 
   // Default edition for this session. Editor has no availableEditions constraint
   // → always pick `interactive` (full feature). Future per-source overrides land here.
   const defaultEdition: PlayEdition = "interactive";
-
-  const activeRemixId = activeRemix?.id ?? null;
 
   // === Lifecycle: build payload + dispatch initialize ===
   // useLayoutEffect runs sync after DOM mutation but BEFORE paint and before
@@ -169,18 +209,35 @@ export function PreviewCreativeSpace() {
   // - `effectiveLanguage`: language changes go through `setNarrationLanguage`
   //   (user-pref action, unguarded). Re-`initialize` on language change would
   //   also clobber playback state.
+  // castKey folds into sessionId so a preset switch (Original source) re-inits the
+  // session (new preload key + fresh playback state). `castKey` is a string ⇒ safe
+  // memo dep. Deps STILL exclude `effectiveSpreadId` — see the block comment above;
+  // the current spread is preserved via `latestSpreadIdRef` at dispatch time.
   const firstSpreadId = spreadIds[0] ?? null;
   const payload: InitializePayload | null = useMemo(() => {
     if (!bookId || !firstSpreadId) return null;
+    const sessionId = activeRemixId
+      ? `remix:${activeRemixId}`
+      : `original:${bookId}` + (castKey ? `:cast:${castKey}` : "");
     return {
-      sessionId: activeRemixId ? `remix:${activeRemixId}` : `original:${bookId}`,
+      sessionId,
       language: effectiveLanguage,
       edition: defaultEdition,
       availableEditions: undefined, // editor = no constraint = all editions
-      startSpreadId: firstSpreadId,
+      startSpreadId: firstSpreadId, // seed only; overridden by ref at dispatch
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bookId, activeRemixId, firstSpreadId, retryNonce]);
+  }, [bookId, activeRemixId, firstSpreadId, castKey, retryNonce]);
+
+  // Keep the current spread across a session re-init (preset switch). Reading the
+  // spread at DISPATCH time (via ref) — instead of adding `effectiveSpreadId` to
+  // `payload` deps — avoids re-initializing on in-session spread navigation (which
+  // would wipe steps/spreadHistories/phase). This effect MUST be declared BEFORE
+  // the lifecycle effect below so the ref is fresh when initialize() runs.
+  const latestSpreadIdRef = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    latestSpreadIdRef.current = effectiveSpreadId;
+  }, [effectiveSpreadId]);
 
   // Single lifecycle effect: initialize on mount/session-switch, teardown on
   // unmount/session-switch. Effective key is `payload.sessionId` (changes when
@@ -188,11 +245,30 @@ export function PreviewCreativeSpace() {
   // absorbed by the store's idempotent guard inside `initialize`.
   useLayoutEffect(() => {
     if (!payload) return;
-    initialize(payload);
+    initialize({
+      ...payload,
+      startSpreadId: latestSpreadIdRef.current ?? payload.startSpreadId,
+    });
     return () => {
       teardown();
     };
   }, [payload, initialize, teardown]);
+
+  // Trade-off (accepted per spec): switching preset while playing re-inits the
+  // session → loses playback progress WITHIN the current spread. The spread itself
+  // is preserved (ref above). Casting is a deliberate action; no disabled guard.
+  const handlePresetSelect = (axisId: string, presetId: string | null) => {
+    log.info("casting.preset.select", "override changed", { axisId, presetId });
+    setUserSelectedPresets((prev) => {
+      if (presetId === null) {
+        if (!(axisId in prev)) return prev; // keep reference
+        const { [axisId]: _drop, ...rest } = prev;
+        return rest;
+      }
+      if (prev[axisId] === presetId) return prev; // no-op keep reference
+      return { ...prev, [axisId]: presetId };
+    });
+  };
 
   // Language fallback write-back + toast. Only fires on transition; the guard
   // (effectiveLanguage === narrationLanguage after write-back) prevents looping.
@@ -220,6 +296,8 @@ export function PreviewCreativeSpace() {
     spreadCount: spreads.length,
     effectiveLanguage,
     hasBranch: !!branchSetting,
+    castKey,
+    axisCount: castingAxes.length,
   });
 
   if (spreadIds.length === 0) {
@@ -232,8 +310,11 @@ export function PreviewCreativeSpace() {
         <div className="flex flex-1 flex-col overflow-hidden">
           <PlayerHeader
             remixes={remixes}
-            selectedRemixId={userSelectedRemixId}
+            selectedRemixId={effectiveSelectedRemixId}
             onSelect={setUserSelectedRemixId}
+            castingAxes={castingAxes}
+            selectedPresets={userSelectedPresets}
+            onPresetSelect={handlePresetSelect}
           />
           <div className="flex flex-1 items-center justify-center">
             <p className="text-muted-foreground">No spreads available for preview</p>
@@ -254,6 +335,9 @@ export function PreviewCreativeSpace() {
           remixes={remixes}
           selectedRemixId={effectiveSelectedRemixId}
           onSelect={setUserSelectedRemixId}
+          castingAxes={castingAxes}
+          selectedPresets={userSelectedPresets}
+          onPresetSelect={handlePresetSelect}
         />
         {lifecycle === "error" && (
           <div className="bg-destructive/10 text-destructive border-b border-destructive/30 px-4 py-2 text-sm flex items-center justify-between">

@@ -15,8 +15,10 @@ import {
 import { Button } from "@/components/ui/button";
 import { useLatestAudioJob } from "@/stores/remix-store";
 import type { Remix } from "@/types/remix";
+import type { CastingAxis } from "@/types/editor";
 import { createLogger } from "@/utils/logger";
 import { deriveBadge, type PreviewSourceBadge } from "./derive-badge";
+import { CastingPresetSelector } from "./casting-preset-selector";
 
 const log = createLogger("Editor", "PlayerHeader");
 
@@ -26,6 +28,10 @@ export interface PlayerHeaderProps {
   remixes: Remix[];
   selectedRemixId: string | null;
   onSelect: (remixId: string | null) => void;
+
+  castingAxes: CastingAxis[]; // book.casting_slot.casting_axes ?? []
+  selectedPresets: Record<string, string>; // axisId → presetId (OVERRIDE map, partial)
+  onPresetSelect: (axisId: string, presetId: string | null) => void; // null = clear override
 }
 
 function truncate(s: string, max = MAX_LABEL_CHARS): string {
@@ -36,8 +42,19 @@ export function PlayerHeader({
   remixes,
   selectedRemixId,
   onSelect,
+  castingAxes,
+  selectedPresets,
+  onPresetSelect,
 }: PlayerHeaderProps) {
   const [isOpen, setIsOpen] = useState(false);
+
+  // Cast disabled matrix (order = priority): no axes → not configured; else a
+  // remix source freezes cast. Kept here so the header owns the props→UI mapping.
+  const isCastDisabled = castingAxes.length === 0 || selectedRemixId !== null;
+  const castDisabledReason =
+    castingAxes.length === 0
+      ? "No casting configured"
+      : "Cast is frozen in this remix";
 
   const selectedLabel = useMemo(() => {
     if (selectedRemixId === null) return "Original";
@@ -63,7 +80,7 @@ export function PlayerHeader({
   };
 
   return (
-    <div className="flex h-14 shrink-0 items-center px-3 border-b border-border bg-background">
+    <div className="flex h-14 shrink-0 items-center gap-2 px-3 border-b border-border bg-background">
       <Popover open={isOpen} onOpenChange={setIsOpen}>
         <PopoverTrigger asChild>
           <Button
@@ -111,6 +128,14 @@ export function PlayerHeader({
           )}
         </PopoverContent>
       </Popover>
+
+      <CastingPresetSelector
+        castingAxes={castingAxes}
+        selectedPresets={selectedPresets}
+        onPresetSelect={onPresetSelect}
+        isDisabled={isCastDisabled}
+        disabledReason={castDisabledReason}
+      />
     </div>
   );
 }
