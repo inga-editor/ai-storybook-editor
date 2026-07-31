@@ -142,17 +142,50 @@ export interface RemixCharacterEntry {
   traits: RemixTraitEntry[]; // always 5 entries (TRAIT_TYPES); reader fills missing → true
 }
 
+/**
+ * @deprecated Reshape 2026-07-31 dropped `props[]` from book.remix (props are no
+ * longer remix-swappable). Kept only for remix-creative-space PropsTab plumbing
+ * until the RemixConfigModal follow-up removes it. Do not use for new code.
+ */
 export interface RemixPropEntry {
   key: string;
   name: string;
   is_enabled: boolean;
 }
 
+// Generic single-toggle node ({is_enabled} object, not a bare boolean, so
+// future fields — e.g. an allowed-preset allowlist — stay non-breaking).
+export interface RemixToggleEntry {
+  is_enabled: boolean;
+}
+
+// STORY tab — story-level remix gates. preset = remixer may switch casting
+// preset (book.casting_slot presets); branch = remix keeps branching sections.
+export interface RemixStory {
+  preset: RemixToggleEntry;
+  branch: RemixToggleEntry;
+}
+
+// MEMORIES — availability overlay per photo slot. key soft-refs
+// book.parametric_slot.photos[].key; rows derive from that list (missing entry = OFF).
+export interface RemixMemoryPhotoEntry {
+  key: string;
+  is_enabled: boolean;
+}
+
+// Section-level gate: OFF keeps photos[] state (parity parametric country gate).
+export interface RemixMemories {
+  is_enabled: boolean;
+  photos: RemixMemoryPhotoEntry[];
+}
+
+// Reshape 2026-07-31 (4-tab layout): + story + memories, − props[].
 export interface BookRemix {
-  languages: RemixLanguageEntry[];
-  voices: RemixVoiceEntry[];
+  story: RemixStory;
   characters: RemixCharacterEntry[];
-  props: RemixPropEntry[];
+  memories: RemixMemories;
+  voices: RemixVoiceEntry[];
+  languages: RemixLanguageEntry[];
 }
 
 // Reading effects (book.effects JSONB) — page transition + gyroscope toggle.

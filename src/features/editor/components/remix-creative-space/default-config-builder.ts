@@ -25,14 +25,9 @@ export function defaultConfigFromBookRemix(book: BookRemix): RemixConfig {
         base_image_url: null,
         is_enabled: true,
       })),
-    props: book.props
-      .filter((p) => p.is_enabled)
-      .map((p) => ({
-        key: p.key,
-        prop_id: null,
-        visual: null,
-        is_enabled: true,
-      })),
+    // Reshape 2026-07-31: book.remix dropped props[] — new remixes seed an empty
+    // props list (RemixConfig keeps the field so existing remix rows still parse).
+    props: [],
     // Voice availability lives in book.voices[] (key='narrator' | <char.key>).
     // Concrete voice_id is chosen per-remix; name is materialized for fallback.
     voices: book.voices
@@ -55,10 +50,12 @@ export function defaultConfigFromBookRemix(book: BookRemix): RemixConfig {
 
 export function isBookRemixEmpty(book: BookRemix | null): boolean {
   if (!book) return true;
+  // DELIBERATE: story/memories gates are NOT counted — the remix space has no
+  // UI consuming them until the RemixConfigModal follow-up (reshape 2026-07-31).
+  // A book enabling only story/memories still reads as "not configured" here.
   return (
     book.voices.every((v) => !v.is_enabled) &&
     book.characters.every((c) => !c.is_enabled) &&
-    book.props.every((p) => !p.is_enabled) &&
     book.languages.every((l) => !l.is_enabled)
   );
 }

@@ -57,7 +57,7 @@ export const createCharactersSlice: StateCreator<
       }
     });
     if (typeof updates.name === 'string') {
-      cascadeRemixName('character', key, updates.name);
+      cascadeRemixName(key, updates.name);
     }
     // collab: mutate + dirty only — the entity held session saves the whole node on release. The
     // book.remix cascade above is a SEPARATE persistence path (books table, not suppressed).
@@ -70,7 +70,7 @@ export const createCharactersSlice: StateCreator<
       state.imageTasks = state.imageTasks.filter((t) => !(t.entityType === 'character' && t.entityKey === key));
       state.sync.isDirty = true;
     });
-    cascadeRemixDelete('character', key);
+    cascadeRemixDelete(key);
     cascadeCastingDelete('character', key);
     // collab: DELETE is a collection remove → explicit save (action 4). The held session's release
     // then sees getNode()===null and skips its node-save (null-node guard), so no redundant 400.

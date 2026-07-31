@@ -19,6 +19,10 @@ export type {
   RemixTraitEntry,
   RemixCharacterEntry,
   RemixPropEntry,
+  RemixToggleEntry,
+  RemixStory,
+  RemixMemoryPhotoEntry,
+  RemixMemories,
   RemixLanguageCode,
   CharacterRemixType,
 } from './editor';

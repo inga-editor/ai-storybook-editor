@@ -5,7 +5,7 @@
 import { Check } from 'lucide-react';
 import { Separator } from '@/components/ui/separator';
 import { cn } from '@/utils/utils';
-import type { BookRemix } from '@/types/editor';
+import type { BookRemix, RemixPropEntry } from '@/types/editor';
 import type { RemixFilterState } from '@/types/remix';
 
 interface Props {
@@ -16,7 +16,9 @@ interface Props {
 
 export function RemixFilterPopover({ bookRemix, value, onChange }: Props) {
   const allowedChars = bookRemix.characters.filter((c) => c.is_enabled);
-  const allowedProps = bookRemix.props.filter((p) => p.is_enabled);
+  // Reshape 2026-07-31: book.remix dropped props[] — prop filter section renders
+  // empty (never-enabled) until the remix-space follow-up removes the plumbing.
+  const allowedProps: RemixPropEntry[] = [];
 
   const isCharChecked = (key: string) =>
     value.characterKeys.length === 0 || value.characterKeys.includes(key);

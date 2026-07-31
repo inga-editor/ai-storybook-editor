@@ -1,7 +1,6 @@
 import type { StateCreator } from 'zustand';
 import type { SnapshotStore, PropsSlice } from '../types';
 import { createLogger } from '@/utils/logger';
-import { cascadeRemixName, cascadeRemixDelete } from '../utils/remix-name-resync';
 import { cascadeCastingDelete } from '../utils/casting-slot-resync';
 // ADR-044 §Revision 2026-07-10 (per-entity HELD session): create/edit/delete mutators mutate +
 // dirty only — the entity held session saves the WHOLE prop node on lock release. Only the
@@ -53,11 +52,8 @@ export const createPropsSlice: StateCreator<
         state.sync.isDirty = true;
       }
     });
-    if (typeof updates.name === 'string') {
-      cascadeRemixName('prop', key, updates.name);
-    }
-    // collab: mutate + dirty only — held session saves the whole node on release. The book.remix
-    // cascade above is a SEPARATE persistence path (books table, not suppressed).
+    // Reshape 2026-07-31: book.remix dropped props[] — no remix name cascade for props.
+    // collab: mutate + dirty only — held session saves the whole node on release.
   },
 
   deleteProp: (key) => {
@@ -68,7 +64,7 @@ export const createPropsSlice: StateCreator<
       state.imageTasks = state.imageTasks.filter((t) => !(t.entityType === 'prop' && t.entityKey === key));
       state.sync.isDirty = true;
     });
-    cascadeRemixDelete('prop', key);
+    // Reshape 2026-07-31: book.remix dropped props[] — no remix delete cascade for props.
     cascadeCastingDelete('prop', key);
     // collab: DELETE is a collection remove → explicit save (action 4); held session skips its
     // node-save on the now-null node (null-node guard).

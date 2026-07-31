@@ -327,9 +327,15 @@ export const useBookStore = create<BookStore>()(
           log.info("setCurrentBook", "transition", { prev, next });
           // Hydrated books from print-export / share-preview may carry raw
           // (legacy-flat) typography; normalize so consumers read the nested
-          // step shape. Idempotent for already-nested books.
+          // step shape. Idempotent for already-nested books. Remix likewise —
+          // a raw row here could carry legacy `props[]` that cascades would
+          // otherwise re-persist (reshape 2026-07-31).
           const normalized = book
-            ? { ...book, typography: normalizeBookTypography(book.typography) }
+            ? {
+                ...book,
+                typography: normalizeBookTypography(book.typography),
+                remix: normalizeBookRemix(book.remix),
+              }
             : null;
           set({ currentBook: normalized });
         },

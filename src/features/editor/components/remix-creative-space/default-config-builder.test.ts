@@ -8,6 +8,8 @@ import { TRAIT_TYPES } from '@/constants/trait-constants';
 import type { BookRemix } from '@/types/editor';
 
 const book: BookRemix = {
+  story: { preset: { is_enabled: false }, branch: { is_enabled: true } },
+  memories: { is_enabled: true, photos: [{ key: 'photo_1', is_enabled: true }] },
   languages: [
     { name: 'English', code: 'en_US', is_enabled: true },
     { name: 'Vietnamese', code: 'vi_VN', is_enabled: false },
@@ -30,7 +32,6 @@ const book: BookRemix = {
     },
     { key: 'char_b', name: 'Bob', is_enabled: false, traits: [] },
   ],
-  props: [{ key: 'prop_a', name: 'Sword', is_enabled: true }],
 };
 
 describe('defaultConfigFromBookRemix — reshape', () => {
@@ -58,8 +59,8 @@ describe('defaultConfigFromBookRemix — reshape', () => {
     expect(a.visual).toBeNull();
   });
 
-  it('filters props + languages by book gate', () => {
-    expect(config.props.map((p) => p.key)).toEqual(['prop_a']);
+  it('seeds empty props (book.remix dropped props 2026-07-31) + filters languages by book gate', () => {
+    expect(config.props).toEqual([]);
     expect(config.languages.map((l) => l.code)).toEqual(['en_US']);
   });
 });
@@ -72,10 +73,11 @@ describe('isBookRemixEmpty', () => {
     expect(isBookRemixEmpty(null)).toBe(true);
     expect(
       isBookRemixEmpty({
+        story: { preset: { is_enabled: false }, branch: { is_enabled: false } },
+        memories: { is_enabled: false, photos: [] },
         languages: [{ name: 'English', code: 'en_US', is_enabled: false }],
         voices: [{ key: 'narrator', name: 'Narrator', is_enabled: false }],
         characters: [],
-        props: [],
       }),
     ).toBe(true);
   });

@@ -1,9 +1,12 @@
 // config-constants.test.ts — Unit tests for book.remix normalization helpers.
 // Covers the 2026-05-21 reshape (narrator singular → voices[]) + unified trait
-// order. Key regression guards:
+// order + the 2026-07-31 4-tab reshape (story/memories added, props dropped).
+// Key regression guards:
 //   - normalizeBookRemix MUST drop legacy `narrator` and NOT seed voices[]
 //     (Validation S1 decision; remix not in production). This test exists so a
 //     future change cannot silently re-introduce narrator→voices seeding.
+//   - normalizeBookRemix MUST drop legacy `props[]` (never re-emit) and fill
+//     story/memories defaults (all OFF) for pre-reshape rows.
 //   - normalizeRemixTraits MUST always emit the 5 canonical entries in order,
 //     filling missing ones with is_enabled: true.
 
@@ -27,9 +30,63 @@ describe('normalizeBookRemix', () => {
     expect(normalizeBookRemix(42)).toBeNull();
   });
 
-  it('coerces missing arrays to empty (full shape contract)', () => {
+  it('coerces missing fields to full default shape (story/memories all OFF)', () => {
     const result = normalizeBookRemix({});
-    expect(result).toEqual({ languages: [], voices: [], characters: [], props: [] });
+    expect(result).toEqual({
+      story: { preset: { is_enabled: false }, branch: { is_enabled: false } },
+      characters: [],
+      memories: { is_enabled: false, photos: [] },
+      voices: [],
+      languages: [],
+    });
+  });
+
+  it('drops legacy props[] and never re-emits the key (reshape 2026-07-31)', () => {
+    const result = normalizeBookRemix({
+      props: [{ key: 'magic_sword', name: 'Magic Sword', is_enabled: true }],
+    });
+    expect(result).not.toBeNull();
+    expect(result as unknown as Record<string, unknown>).not.toHaveProperty('props');
+  });
+
+  it('preserves story gates and memories overlay when present', () => {
+    const result = normalizeBookRemix({
+      story: { preset: { is_enabled: true }, branch: { is_enabled: false } },
+      memories: { is_enabled: true, photos: [{ key: 'photo_1', is_enabled: true }] },
+    });
+    expect(result!.story.preset.is_enabled).toBe(true);
+    expect(result!.story.branch.is_enabled).toBe(false);
+    expect(result!.memories.is_enabled).toBe(true);
+    expect(result!.memories.photos).toEqual([{ key: 'photo_1', is_enabled: true }]);
+  });
+
+  it('coerces partial/garbage story + memories nodes to safe defaults', () => {
+    const result = normalizeBookRemix({
+      story: { preset: {} }, // branch missing, preset.is_enabled missing
+      memories: { photos: 'garbage' }, // is_enabled missing, photos not an array
+    });
+    expect(result!.story).toEqual({
+      preset: { is_enabled: false },
+      branch: { is_enabled: false },
+    });
+    expect(result!.memories).toEqual({ is_enabled: false, photos: [] });
+  });
+
+  it('coerces memories.photos entries (keyless dropped, is_enabled → strict boolean)', () => {
+    const result = normalizeBookRemix({
+      memories: {
+        is_enabled: true,
+        photos: [
+          { key: 'photo_1', is_enabled: 'yes' }, // truthy non-boolean → false
+          { foo: 1 }, // keyless garbage → dropped
+          { key: 'photo_2', is_enabled: true },
+        ],
+      },
+    });
+    expect(result!.memories.photos).toEqual([
+      { key: 'photo_1', is_enabled: false },
+      { key: 'photo_2', is_enabled: true },
+    ]);
   });
 
   it('drops legacy narrator singular and does NOT seed voices[]', () => {

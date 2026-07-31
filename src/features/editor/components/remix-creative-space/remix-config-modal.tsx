@@ -29,7 +29,7 @@ import {
 import { useHumans } from '@/stores/humans-store';
 import { createLogger } from '@/utils/logger';
 import { TRAIT_TYPES } from '@/constants/trait-constants';
-import type { BookRemix } from '@/types/editor';
+import type { BookRemix, RemixPropEntry } from '@/types/editor';
 import {
   REMIX_NAME_DEFAULT,
   type RemixCharacterChoice,
@@ -79,10 +79,9 @@ export function RemixConfigModal({
     () => bookRemix.characters.filter((c) => c.is_enabled),
     [bookRemix],
   );
-  const allowedProps = useMemo(
-    () => bookRemix.props.filter((p) => p.is_enabled),
-    [bookRemix],
-  );
+  // Reshape 2026-07-31: book.remix dropped props[] — props are never-enabled
+  // for new remixes. PropsTab plumbing kept until the modal follow-up removes it.
+  const allowedProps = useMemo(() => [] as RemixPropEntry[], []);
   const allowedLangs = useMemo(
     () => bookRemix.languages.filter((l) => l.is_enabled),
     [bookRemix],

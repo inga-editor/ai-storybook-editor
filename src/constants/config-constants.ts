@@ -14,6 +14,9 @@ import type {
   CharacterRemixType,
   RemixCharacterEntry,
   RemixTraitEntry,
+  RemixStory,
+  RemixMemories,
+  RemixMemoryPhotoEntry,
   RemixLanguageCode,
   BookTypography,
   StepTypography,
@@ -266,15 +269,38 @@ export const DEFAULT_CHARACTER_REMIX_TYPE: CharacterRemixType = 'body';
 // Discriminator key for the narrator voice slot inside book.remix.voices[].
 export const NARRATOR_VOICE_KEY = 'narrator' as const;
 
+// Tab ids of the 4-tab Remix Settings panel (reshape 2026-07-31).
+export type RemixSettingsTab = 'story' | 'cast' | 'voices' | 'languages';
+export const REMIX_SETTINGS_DEFAULT_TAB: RemixSettingsTab = 'story';
+
+// STORY tab rows — fixed feature gates (keys index into BookRemix.story).
+export type RemixStoryFeatureKey = keyof RemixStory;
+export const REMIX_STORY_FEATURES: ReadonlyArray<{ key: RemixStoryFeatureKey; label: string }> = [
+  { key: 'preset', label: 'Preset' },
+  { key: 'branch', label: 'Branch' },
+] as const;
+
 // Every trait defaults enabled when a character is first added to remix.
 export const makeDefaultTraits = (): RemixTraitEntry[] =>
   TRAIT_TYPES.map((type) => ({ type, is_enabled: true }));
 
+// Fresh default sub-objects (factories — callers get their own copies).
+export const makeDefaultRemixStory = (): RemixStory => ({
+  preset: { is_enabled: false },
+  branch: { is_enabled: false },
+});
+
+export const makeDefaultRemixMemories = (): RemixMemories => ({
+  is_enabled: false,
+  photos: [],
+});
+
 export const DEFAULT_REMIX: BookRemix = {
-  languages: [],
-  voices:    [],
+  story: makeDefaultRemixStory(),
   characters: [],
-  props:      [],
+  memories: makeDefaultRemixMemories(),
+  voices: [],
+  languages: [],
 };
 
 /**
@@ -288,6 +314,10 @@ export const DEFAULT_REMIX: BookRemix = {
  * production; prior toggle is acceptable to drop) and overrides the design
  * changelog wording about seeding voices from narrator. Do not "restore" seeding.
  *
+ * Reshape 2026-07-31 (4-tab): legacy `props[]` is DROPPED (props no longer
+ * remix-swappable — warn only); `story` + `memories` fill defaults (all OFF)
+ * when absent/partial. No backfill — next write emits the new shape.
+ *
  * Returns null only when the raw value is null/undefined (preserves the
  * "remix not configured" empty-state branch).
  */
@@ -297,10 +327,15 @@ export function normalizeBookRemix(raw: unknown): BookRemix | null {
     log.warn('normalizeBookRemix', 'unexpected non-object', { type: typeof raw });
     return null;
   }
-  const r = raw as Partial<BookRemix> & { narrator?: unknown };
+  const r = raw as Partial<BookRemix> & { narrator?: unknown; props?: unknown };
   if (r.narrator !== undefined) {
     log.warn('normalizeBookRemix', 'legacy narrator field dropped (not seeded into voices)', {
       hadNarrator: true,
+    });
+  }
+  if (r.props !== undefined) {
+    log.warn('normalizeBookRemix', 'legacy props field dropped (reshape 2026-07-31)', {
+      hadProps: true,
     });
   }
   const characters = (Array.isArray(r.characters) ? r.characters : []).map((c) => ({
@@ -308,10 +343,33 @@ export function normalizeBookRemix(raw: unknown): BookRemix | null {
     traits: normalizeRemixTraits((c as Partial<RemixCharacterEntry>).traits),
   }));
   return {
-    languages:  Array.isArray(r.languages) ? r.languages : [],
-    voices:     Array.isArray(r.voices)    ? r.voices    : [],
+    story: normalizeRemixStory(r.story),
     characters,
-    props:      Array.isArray(r.props)     ? r.props     : [],
+    memories: normalizeRemixMemories(r.memories),
+    voices: Array.isArray(r.voices) ? r.voices : [],
+    languages: Array.isArray(r.languages) ? r.languages : [],
+  };
+}
+
+/** Coerce a raw `story` node — missing/partial gates fall back to OFF. */
+function normalizeRemixStory(raw: RemixStory | undefined): RemixStory {
+  return {
+    preset: { is_enabled: raw?.preset?.is_enabled === true },
+    branch: { is_enabled: raw?.branch?.is_enabled === true },
+  };
+}
+
+/** Coerce a raw `memories` node — gate defaults OFF; photos[] entries are
+ *  coerced per-entry (string key required, is_enabled → strict boolean) so
+ *  garbage never round-trips back to the DB via panel writes. */
+function normalizeRemixMemories(raw: RemixMemories | undefined): RemixMemories {
+  const rawPhotos = Array.isArray(raw?.photos) ? raw.photos : [];
+  const photos: RemixMemoryPhotoEntry[] = rawPhotos
+    .filter((p): p is RemixMemoryPhotoEntry => typeof (p as Partial<RemixMemoryPhotoEntry>)?.key === 'string')
+    .map((p) => ({ key: p.key, is_enabled: p.is_enabled === true }));
+  return {
+    is_enabled: raw?.is_enabled === true,
+    photos,
   };
 }
 
