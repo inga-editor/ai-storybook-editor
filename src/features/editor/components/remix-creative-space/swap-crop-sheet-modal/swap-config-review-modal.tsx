@@ -1,9 +1,16 @@
 // swap-config-review-modal.tsx — Read-only review of the frozen remix_config
-// (characters + props), opened from the Sprites tab stage header.
+// (story + characters), opened from the Sprites tab stage header.
 //
 // The remix config is FROZEN after create (create-only RemixConfigModal), so
-// this dialog presents it as a plain table (Character / Human / Visual Profile
-// / Traits) — a reference view while preparing a sprite swap, NOT an editor.
+// this dialog presents it as plain read-only views — a reference while
+// preparing a sprite swap, NOT an editor. Tabs mirror the create modal's
+// leading pair: Story (frozen preset/branch choices) + Characters. Props tab
+// removed with the 2026-07-31 reshape (`remix_config.props` is legacy-only).
+//
+// Story labels resolve through the SAME live sources the create modal reads
+// (book casting_slot axes + snapshot branch spreads) — both are soft refs, so
+// a choice whose axis/preset/spread/section has since been deleted or renamed
+// falls back to its raw id, muted.
 //
 // Trait display = the FROZEN `remix_config.traits[].is_enabled` verbatim
 // (product call 2026-06-10): this reviews what was SAVED at create time, not
@@ -31,12 +38,10 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { cn } from '@/utils/utils';
 import { createLogger } from '@/utils/logger';
 import { TRAIT_TYPES, TRAIT_LABELS } from '@/constants/trait-constants';
+import { useBookCastingSlot } from '@/stores/book-store';
+import { useBranchSpreadOptions } from '../hooks/use-branch-spread-options';
 import type { Human, VisualProfile } from '@/types/human';
-import type {
-  Remix,
-  RemixCharacterChoice,
-  RemixPropChoice,
-} from '@/types/remix';
+import type { Remix, RemixCharacterChoice } from '@/types/remix';
 import { Z_INDEX } from './swap-modal-constants';
 
 const log = createLogger('Editor', 'SwapConfigReviewModal');
@@ -59,6 +64,22 @@ interface CharacterRowView {
   /** Resolved visual profile (null when human/visual unset or human deleted). */
   profile: VisualProfile | null;
   thumbnail: string | null;
+}
+
+/** One resolved preset choice row. Unresolved soft refs keep the raw id. */
+interface PresetRowView {
+  axisId: string;
+  axisLabel: string;
+  presetLabel: string;
+  resolved: boolean;
+}
+
+/** One resolved branch choice row. Unresolved soft refs keep the raw ids. */
+interface BranchRowView {
+  spreadId: string;
+  spreadLabel: string;
+  sectionLabel: string;
+  resolved: boolean;
 }
 
 /** Muted placeholder for an unset value. */
@@ -115,9 +136,45 @@ export function SwapConfigReviewModal({
   }, []);
 
   const configCharacters = remix.remix_config.characters;
-  // Reshape 2026-07-31: `props` is deprecated/optional on RemixConfig — new rows
-  // omit it entirely; coalesce so the Props tab renders its empty state.
-  const configProps = remix.remix_config.props ?? [];
+  // Reshape 2026-07-31: story frozen choices are always materialized at create;
+  // coalesce for pre-reshape rows that predate the `story` node.
+  const configStory = remix.remix_config.story ?? { presets: [], branches: [] };
+
+  // Live label sources (same as the create modal's lookups) — soft-ref joins.
+  const castingSlot = useBookCastingSlot();
+  const branchSpreads = useBranchSpreadOptions();
+
+  const presetRows = useMemo<PresetRowView[]>(() => {
+    const axes = castingSlot?.casting_axes ?? [];
+    return configStory.presets.map((choice) => {
+      const axis = axes.find((a) => a.id === choice.axis_id) ?? null;
+      const preset =
+        axis?.presets.find((p) => p.id === choice.preset_id) ?? null;
+      return {
+        axisId: choice.axis_id,
+        axisLabel: axis?.name ?? choice.axis_id,
+        presetLabel: preset?.name ?? choice.preset_id,
+        resolved: axis !== null && preset !== null,
+      };
+    });
+  }, [configStory.presets, castingSlot]);
+
+  const branchRows = useMemo<BranchRowView[]>(() => {
+    return configStory.branches.map((choice) => {
+      const option =
+        branchSpreads.find((o) => o.spread_id === choice.spread_id) ?? null;
+      const section =
+        option?.branches.find((b) => b.section_id === choice.section_id) ?? null;
+      return {
+        spreadId: choice.spread_id,
+        spreadLabel: option
+          ? `Spread ${option.spread_number} — ${option.title}`
+          : choice.spread_id,
+        sectionLabel: section?.title ?? choice.section_id,
+        resolved: option !== null && section !== null,
+      };
+    });
+  }, [configStory.branches, branchSpreads]);
 
   // Display joins: config entries are keyed; names live on the remix's
   // character/prop snapshots, human name/profile on the live humans cache.
@@ -145,17 +202,13 @@ export function SwapConfigReviewModal({
     });
   }, [configCharacters, remix.characters, humans]);
 
-  const propNameByKey = useMemo(
-    () => new Map(remix.props.map((p) => [p.key, p.name])),
-    [remix.props],
-  );
-
   // Component stays mounted while closed (VariantsTab renders it whenever the
   // remix exists) — only log renders that actually show the dialog.
   if (open) {
     log.debug('render', 'review modal', {
       characterCount: configCharacters.length,
-      propCount: configProps.length,
+      presetCount: configStory.presets.length,
+      branchCount: configStory.branches.length,
     });
   }
 
@@ -186,17 +239,83 @@ export function SwapConfigReviewModal({
       >
         <DialogTitle>Remix settings</DialogTitle>
         <DialogDescription className="sr-only">
-          Read-only view of the character and prop swap configuration for this
+          Read-only view of the story and character swap configuration for this
           remix. The configuration is frozen after the remix is created.
         </DialogDescription>
 
-        <Tabs defaultValue="characters" className="flex min-h-0 flex-1 flex-col">
+        <Tabs defaultValue="story" className="flex min-h-0 flex-1 flex-col">
           <TabsList className="self-start">
+            <TabsTrigger value="story">Story</TabsTrigger>
             <TabsTrigger value="characters">Characters</TabsTrigger>
-            <TabsTrigger value="props">Props</TabsTrigger>
           </TabsList>
 
           <div className="min-h-0 flex-1 overflow-y-auto pr-1 pt-2">
+            <TabsContent value="story" className="mt-0">
+              {presetRows.length === 0 && branchRows.length === 0 ? (
+                <p className="py-8 text-center text-sm text-muted-foreground">
+                  No story options configured in this remix.
+                </p>
+              ) : (
+                <div className="space-y-6">
+                  {presetRows.length > 0 && (
+                    <section>
+                      <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                        Presets
+                      </h3>
+                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                        {presetRows.map((row) => (
+                          <div
+                            key={row.axisId}
+                            className="flex min-w-0 flex-col gap-1 rounded-md border p-2"
+                          >
+                            <span className="truncate text-xs font-medium text-muted-foreground">
+                              {row.axisLabel}
+                            </span>
+                            <span
+                              className={cn(
+                                'truncate text-sm',
+                                !row.resolved && 'text-muted-foreground',
+                              )}
+                            >
+                              {row.presetLabel}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </section>
+                  )}
+
+                  {branchRows.length > 0 && (
+                    <section>
+                      <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                        Branches
+                      </h3>
+                      <div className="space-y-1">
+                        {branchRows.map((row) => (
+                          <div
+                            key={row.spreadId}
+                            className="flex items-baseline gap-3 rounded-md border p-2 text-sm"
+                          >
+                            <span className="min-w-0 flex-1 truncate text-muted-foreground">
+                              {row.spreadLabel}
+                            </span>
+                            <span
+                              className={cn(
+                                'shrink-0 font-medium',
+                                !row.resolved && 'font-normal text-muted-foreground',
+                              )}
+                            >
+                              {row.sectionLabel}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </section>
+                  )}
+                </div>
+              )}
+            </TabsContent>
+
             <TabsContent value="characters" className="mt-0">
               {characterRows.length === 0 ? (
                 <p className="py-8 text-center text-sm text-muted-foreground">
@@ -258,52 +377,6 @@ export function SwapConfigReviewModal({
                         </td>
                         <td className={TD_CLASS}>
                           <TraitColumn entry={row.entry} />
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </TabsContent>
-
-            <TabsContent value="props" className="mt-0">
-              {configProps.length === 0 ? (
-                <p className="py-8 text-center text-sm text-muted-foreground">
-                  No props configured in this remix.
-                </p>
-              ) : (
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr>
-                      <th className={cn(TH_CLASS, 'w-[40%]')}>Prop</th>
-                      <th className={cn(TH_CLASS, 'w-[30%]')}>Item</th>
-                      <th className={cn(TH_CLASS, 'w-[30%]')}>Visual</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {configProps.map((entry: RemixPropChoice) => (
-                      <tr
-                        key={entry.key}
-                        className={cn(!entry.is_enabled && 'opacity-60')}
-                      >
-                        <td className={TD_CLASS}>
-                          <div className="font-medium leading-tight">
-                            {propNameByKey.get(entry.key) ?? entry.key}
-                            {!entry.is_enabled && (
-                              <span className="ml-1.5 text-xs font-normal text-muted-foreground">
-                                (disabled)
-                              </span>
-                            )}
-                          </div>
-                          <div className="text-xs leading-tight text-muted-foreground">
-                            @{entry.key}
-                          </div>
-                        </td>
-                        <td className={TD_CLASS}>
-                          {entry.prop_id ?? <EmptyValue label="No item" />}
-                        </td>
-                        <td className={TD_CLASS}>
-                          {entry.visual ?? <EmptyValue label="No visual" />}
                         </td>
                       </tr>
                     ))}
