@@ -32,6 +32,7 @@ import {
   defaultConfigFromBookRemix,
   isBookRemixEmpty,
 } from './default-config-builder';
+import { useRemixLookupSources } from './hooks/use-remix-lookup-sources';
 import type {
   RemixFilterState,
   SwapCropSheetTarget,
@@ -81,7 +82,9 @@ export function RemixCreativeSpace() {
         );
       const propMatch =
         filter.propKeys.length === 0 ||
-        filter.propKeys.some((k) => r.props.some((p) => p.key === k));
+        // Inert for new remixes (UI no longer sets propKeys); kept so legacy
+        // rows carrying props[] still filter. `?.` tolerates absent props.
+        filter.propKeys.some((k) => r.props?.some((p) => p.key === k));
       return charMatch && propMatch;
     });
   }, [remixes, filter]);
@@ -96,6 +99,16 @@ export function RemixCreativeSpace() {
       setActiveRemixId(filtered[0]?.id ?? null);
     }
   }, [filtered, activeRemixId, setActiveRemixId]);
+
+  // Lookup bundle (casting axes / branch spreads / photo slots / char keys) +
+  // the create-modal's initial draft. Hoisted above the early returns (hooks
+  // rules) and memoized so opening the modal does not reset the draft each render.
+  // `null` while the book has no remix config (early-returned before the modal).
+  const lookups = useRemixLookupSources();
+  const initialConfig = useMemo(
+    () => (bookRemix ? defaultConfigFromBookRemix({ bookRemix, ...lookups }) : null),
+    [bookRemix, lookups],
+  );
 
   if (!currentBook || !snapshotId) {
     return (
@@ -116,8 +129,6 @@ export function RemixCreativeSpace() {
       />
     );
   }
-
-  const initialConfig = defaultConfigFromBookRemix(bookRemix);
 
   return (
     <div className="flex h-full">
@@ -154,10 +165,11 @@ export function RemixCreativeSpace() {
         )}
       </div>
 
-      {configModal.open && (
+      {configModal.open && initialConfig && (
         <RemixConfigModal
           bookRemix={bookRemix}
           initialConfig={initialConfig}
+          lookups={lookups}
           onSave={async (config, name) => {
             try {
               const remix = await createRemix(config, name);

@@ -1,11 +1,16 @@
 // remix-filter-popover.tsx — Pure controlled filter selector for sidebar.
 // Empty arrays = "all checked" (no filter applied); auto-collapses back to
 // empty when the user re-selects every option.
+//
+// Reshape 2026-07-31: book.remix dropped props[] and the RemixConfigModal no
+// longer emits prop choices — the prop-filter UI is removed. `propKeys` stays on
+// RemixFilterState (passed through untouched) so legacy remix rows carrying
+// props[] can still be filtered by any pre-existing selection (inert branch in
+// remix-creative-space.tsx). No UI can set propKeys anymore.
 
 import { Check } from 'lucide-react';
-import { Separator } from '@/components/ui/separator';
 import { cn } from '@/utils/utils';
-import type { BookRemix, RemixPropEntry } from '@/types/editor';
+import type { BookRemix } from '@/types/editor';
 import type { RemixFilterState } from '@/types/remix';
 
 interface Props {
@@ -16,14 +21,9 @@ interface Props {
 
 export function RemixFilterPopover({ bookRemix, value, onChange }: Props) {
   const allowedChars = bookRemix.characters.filter((c) => c.is_enabled);
-  // Reshape 2026-07-31: book.remix dropped props[] — prop filter section renders
-  // empty (never-enabled) until the remix-space follow-up removes the plumbing.
-  const allowedProps: RemixPropEntry[] = [];
 
   const isCharChecked = (key: string) =>
     value.characterKeys.length === 0 || value.characterKeys.includes(key);
-  const isPropChecked = (key: string) =>
-    value.propKeys.length === 0 || value.propKeys.includes(key);
 
   const toggleChar = (key: string, next: boolean) => {
     const all = value.characterKeys.length === 0;
@@ -38,26 +38,11 @@ export function RemixFilterPopover({ bookRemix, value, onChange }: Props) {
     } else {
       nextArr = value.characterKeys;
     }
+    // propKeys passed through untouched (inert legacy filter).
     onChange({ characterKeys: nextArr, propKeys: value.propKeys });
   };
 
-  const toggleProp = (key: string, next: boolean) => {
-    const all = value.propKeys.length === 0;
-    let nextArr: string[];
-    if (all && !next) {
-      nextArr = allowedProps.map((p) => p.key).filter((k) => k !== key);
-    } else if (!all && next) {
-      nextArr = [...value.propKeys, key];
-      if (nextArr.length === allowedProps.length) nextArr = [];
-    } else if (!all && !next) {
-      nextArr = value.propKeys.filter((k) => k !== key);
-    } else {
-      nextArr = value.propKeys;
-    }
-    onChange({ characterKeys: value.characterKeys, propKeys: nextArr });
-  };
-
-  if (allowedChars.length === 0 && allowedProps.length === 0) {
+  if (allowedChars.length === 0) {
     return (
       <div className="w-60 p-3">
         <p className="text-center text-sm text-muted-foreground">
@@ -69,33 +54,17 @@ export function RemixFilterPopover({ bookRemix, value, onChange }: Props) {
 
   return (
     <div className="w-60 space-y-2 p-2">
-      {allowedChars.length > 0 && (
-        <div>
-          <SectionLabel>Filter by Characters</SectionLabel>
-          {allowedChars.map((c) => (
-            <CheckboxRow
-              key={c.key}
-              label={c.name}
-              checked={isCharChecked(c.key)}
-              onChange={(v) => toggleChar(c.key, v)}
-            />
-          ))}
-        </div>
-      )}
-      {allowedChars.length > 0 && allowedProps.length > 0 && <Separator />}
-      {allowedProps.length > 0 && (
-        <div>
-          <SectionLabel>Filter by Props</SectionLabel>
-          {allowedProps.map((p) => (
-            <CheckboxRow
-              key={p.key}
-              label={p.name}
-              checked={isPropChecked(p.key)}
-              onChange={(v) => toggleProp(p.key, v)}
-            />
-          ))}
-        </div>
-      )}
+      <div>
+        <SectionLabel>Filter by Characters</SectionLabel>
+        {allowedChars.map((c) => (
+          <CheckboxRow
+            key={c.key}
+            label={c.name}
+            checked={isCharChecked(c.key)}
+            onChange={(v) => toggleChar(c.key, v)}
+          />
+        ))}
+      </div>
     </div>
   );
 }

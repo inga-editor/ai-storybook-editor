@@ -1,15 +1,26 @@
-// default-config-builder.test.ts — Reshape coverage (2026-05-20/21):
-// narrator singular → voices[] collection; characters[] gain traits[] (5 entries,
-// book-gated) + base_image_url:null. Only book-enabled entries seed the draft.
+// default-config-builder.test.ts — Reshape 2026-07-31 (4-tab): object-param
+// signature; story materialize-always (even with book gate OFF); memories filter
+// against parametric_slot; props no longer emitted; characters follow the
+// effective cast of the default presets.
 
 import { describe, it, expect } from 'vitest';
 import { defaultConfigFromBookRemix, isBookRemixEmpty } from './default-config-builder';
+import type { DefaultConfigInput } from './default-config-builder';
 import { TRAIT_TYPES } from '@/constants/trait-constants';
-import type { BookRemix } from '@/types/editor';
+import type { BookRemix, CastingAxis, ParametricPhotoEntry } from '@/types/editor';
+import type { BranchSpreadOption } from '@/types/remix';
 
 const book: BookRemix = {
-  story: { preset: { is_enabled: false }, branch: { is_enabled: true } },
-  memories: { is_enabled: true, photos: [{ key: 'photo_1', is_enabled: true }] },
+  // Story gates OFF on purpose — story must still materialize (materialize-always).
+  story: { preset: { is_enabled: false }, branch: { is_enabled: false } },
+  memories: {
+    is_enabled: true,
+    photos: [
+      { key: 'photo_1', is_enabled: true }, // present in parametric slot → kept
+      { key: 'photo_2', is_enabled: true }, // NOT in parametric slot → dropped
+      { key: 'photo_3', is_enabled: false }, // disabled → dropped
+    ],
+  },
   languages: [
     { name: 'English', code: 'en_US', is_enabled: true },
     { name: 'Vietnamese', code: 'vi_VN', is_enabled: false },
@@ -24,7 +35,6 @@ const book: BookRemix = {
       key: 'char_a',
       name: 'Alice',
       is_enabled: true,
-      // Partial gate: face on, hair off; missing traits → reader fills enabled.
       traits: [
         { type: 'face', is_enabled: true },
         { type: 'hair', is_enabled: false },
@@ -34,18 +44,52 @@ const book: BookRemix = {
   ],
 };
 
-describe('defaultConfigFromBookRemix — reshape', () => {
-  const config = defaultConfigFromBookRemix(book);
+const castingAxes: CastingAxis[] = [
+  {
+    id: 'axis1',
+    name: 'Lead',
+    actants: [{ id: 'act1', name: 'Hero' }],
+    presets: [
+      { id: 'p1', name: 'Default', is_default: true, actants: [{ actant_id: 'act1', actor_id: 'char_a', actor_type: 1 }] },
+      { id: 'p2', name: 'Alt', is_default: false, actants: [{ actant_id: 'act1', actor_id: 'char_b', actor_type: 1 }] },
+    ],
+  },
+];
 
-  it('builds voices[] from enabled book voices (no narrator singular)', () => {
-    expect(config.voices.map((v) => v.key)).toEqual(['narrator', 'char_a']);
-    expect(config.voices.every((v) => v.voice_id === null)).toBe(true);
-    expect(config.voices.find((v) => v.key === 'narrator')?.name).toBe('Narrator');
-    // Legacy singular field must not exist on the reshaped config.
-    expect(config as unknown as Record<string, unknown>).not.toHaveProperty('narrator');
+const branchSpreads: BranchSpreadOption[] = [
+  {
+    spread_id: 'sp1',
+    spread_number: '3',
+    title: 'Which way?',
+    branches: [
+      { section_id: 'sec_left', title: 'Left', is_default: false },
+      { section_id: 'sec_right', title: 'Right', is_default: true },
+    ],
+  },
+];
+
+const parametricPhotos: ParametricPhotoEntry[] = [
+  { key: 'photo_1', is_enabled: true, original: true, real: false, styled: false },
+];
+
+const input: DefaultConfigInput = {
+  bookRemix: book,
+  castingAxes,
+  branchSpreads,
+  parametricPhotos,
+  snapshotCharacterKeys: ['char_a', 'char_b'],
+};
+
+describe('defaultConfigFromBookRemix — reshape 2026-07-31', () => {
+  const config = defaultConfigFromBookRemix(input);
+
+  it('materializes story ALWAYS (gates OFF): one preset/branch entry seeded to defaults', () => {
+    expect(config.story.presets).toEqual([{ axis_id: 'axis1', preset_id: 'p1' }]);
+    // default branch (is_default) wins over array-first.
+    expect(config.story.branches).toEqual([{ spread_id: 'sp1', section_id: 'sec_right' }]);
   });
 
-  it('seeds only book-enabled characters with 5 trait toggles + null base_image_url', () => {
+  it('seeds characters from the effective cast (default presets), snapshot order + 5 traits', () => {
     expect(config.characters.map((c) => c.key)).toEqual(['char_a']);
     const a = config.characters[0];
     expect(a.traits).toHaveLength(TRAIT_TYPES.length);
@@ -59,16 +103,49 @@ describe('defaultConfigFromBookRemix — reshape', () => {
     expect(a.visual).toBeNull();
   });
 
-  it('seeds empty props (book.remix dropped props 2026-07-31) + filters languages by book gate', () => {
-    expect(config.props).toEqual([]);
+  it('filters memories photos to enabled ∩ parametric_slot; style default; url null', () => {
+    expect(config.memories.is_enabled).toBe(true);
+    expect(config.memories.style).toBe('styled');
+    expect(config.memories.photos.map((p) => p.key)).toEqual(['photo_1']);
+    expect(config.memories.photos[0].media_url).toBeNull();
+    expect(config.memories.photos[0].is_enabled).toBe(true);
+  });
+
+  it('does NOT emit props; builds voices/languages from book gates', () => {
+    expect(config.props).toBeUndefined();
+    expect(config.voices.map((v) => v.key)).toEqual(['narrator', 'char_a']);
+    expect(config.voices.every((v) => v.voice_id === null)).toBe(true);
     expect(config.languages.map((l) => l.code)).toEqual(['en_US']);
+    // Legacy singular field must not exist on the reshaped config.
+    expect(config as unknown as Record<string, unknown>).not.toHaveProperty('narrator');
+  });
+
+  it('drops story entries when an axis has no preset / a spread has no branch', () => {
+    const cfg = defaultConfigFromBookRemix({
+      ...input,
+      castingAxes: [{ id: 'axis0', name: 'Empty', actants: [], presets: [] }],
+      branchSpreads: [{ spread_id: 'sp0', spread_number: '1', title: 'x', branches: [] }],
+    });
+    expect(cfg.story.presets).toEqual([]);
+    expect(cfg.story.branches).toEqual([]);
   });
 });
 
 describe('isBookRemixEmpty', () => {
-  it('is false when any section has an enabled entry', () => {
-    expect(isBookRemixEmpty(book)).toBe(false);
+  it('is false when any section (incl. story/memories) has an enabled entry', () => {
+    expect(isBookRemixEmpty(book)).toBe(false); // memories enabled
+    expect(
+      isBookRemixEmpty({
+        ...book,
+        story: { preset: { is_enabled: true }, branch: { is_enabled: false } },
+        memories: { is_enabled: false, photos: [] },
+        voices: [{ key: 'narrator', name: 'Narrator', is_enabled: false }],
+        characters: [],
+        languages: [{ name: 'English', code: 'en_US', is_enabled: false }],
+      }),
+    ).toBe(false); // story.preset enabled
   });
+
   it('is true for null or all-disabled book remix', () => {
     expect(isBookRemixEmpty(null)).toBe(true);
     expect(

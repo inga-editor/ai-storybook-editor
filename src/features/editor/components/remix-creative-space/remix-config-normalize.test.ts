@@ -8,11 +8,16 @@ import {
   supportedTraitSetFor,
   maxTraitChoicesFor,
   normalizeRemixConfigTraits,
+  normalizeRemixConfig,
 } from './remix-config-normalize';
 import { TRAIT_TYPES } from '@/constants/trait-constants';
 import type { Human, TraitType } from '@/types/human';
-import type { RemixCharacterEntry } from '@/types/editor';
-import type { RemixConfig, RemixCharacterChoice } from '@/types/remix';
+import type { BookRemix, CastingAxis, RemixCharacterEntry } from '@/types/editor';
+import type {
+  BranchSpreadOption,
+  RemixConfig,
+  RemixCharacterChoice,
+} from '@/types/remix';
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -65,7 +70,9 @@ function choice(overrides: Partial<RemixCharacterChoice>): RemixCharacterChoice 
 
 function configWith(characters: RemixCharacterChoice[]): RemixConfig {
   return {
+    story: { presets: [], branches: [] },
     characters,
+    memories: { is_enabled: false, style: 'styled', photos: [] },
     props: [{ key: 'prop_a', prop_id: null, visual: null, is_enabled: true }],
     voices: [],
     languages: [],
@@ -197,5 +204,119 @@ describe('normalizeRemixConfigTraits — WYSIWYG', () => {
     const snapshot = JSON.parse(JSON.stringify(cfg));
     normalizeRemixConfigTraits(cfg, [bookChar], [human]);
     expect(cfg).toEqual(snapshot);
+  });
+});
+
+// ── normalizeRemixConfig (full save) ─────────────────────────────────────────
+
+const bookRemix: BookRemix = {
+  story: { preset: { is_enabled: true }, branch: { is_enabled: true } },
+  characters: [bookChar],
+  memories: { is_enabled: false, photos: [] },
+  voices: [],
+  languages: [],
+};
+
+// Axis with default preset "p_def" and alt "p_alt".
+const axis: CastingAxis = {
+  id: 'ax',
+  name: 'Lead',
+  actants: [{ id: 'a1', name: 'Hero' }],
+  presets: [
+    { id: 'p_def', name: 'Default', is_default: true, actants: [] },
+    { id: 'p_alt', name: 'Alt', is_default: false, actants: [] },
+  ],
+};
+
+const branchSpread: BranchSpreadOption = {
+  spread_id: 's1',
+  spread_number: '4',
+  title: 'Which way?',
+  branches: [
+    { section_id: 'sec_def', title: 'Left', is_default: true },
+    { section_id: 'sec_alt', title: 'Right', is_default: false },
+  ],
+};
+
+const ctx = () => ({
+  bookRemix,
+  castingAxes: [axis],
+  branchSpreads: [branchSpread],
+  humans: [human],
+});
+
+describe('normalizeRemixConfig — story fill + props drop', () => {
+  it('keeps a still-valid chosen preset / branch', () => {
+    const draft: RemixConfig = {
+      ...configWith([]),
+      story: {
+        presets: [{ axis_id: 'ax', preset_id: 'p_alt' }],
+        branches: [{ spread_id: 's1', section_id: 'sec_alt' }],
+      },
+    };
+    const out = normalizeRemixConfig(draft, ctx());
+    expect(out.story.presets).toEqual([{ axis_id: 'ax', preset_id: 'p_alt' }]);
+    expect(out.story.branches).toEqual([{ spread_id: 's1', section_id: 'sec_alt' }]);
+  });
+
+  it('fills a MISSING axis / spread entry with the default', () => {
+    const draft: RemixConfig = { ...configWith([]), story: { presets: [], branches: [] } };
+    const out = normalizeRemixConfig(draft, ctx());
+    expect(out.story.presets).toEqual([{ axis_id: 'ax', preset_id: 'p_def' }]);
+    expect(out.story.branches).toEqual([{ spread_id: 's1', section_id: 'sec_def' }]);
+  });
+
+  it('resolves a DANGLING preset id back to the axis default', () => {
+    const draft: RemixConfig = {
+      ...configWith([]),
+      story: {
+        presets: [{ axis_id: 'ax', preset_id: 'ghost' }],
+        branches: [{ spread_id: 's1', section_id: 'ghost' }],
+      },
+    };
+    const out = normalizeRemixConfig(draft, ctx());
+    expect(out.story.presets).toEqual([{ axis_id: 'ax', preset_id: 'p_def' }]);
+    expect(out.story.branches).toEqual([{ spread_id: 's1', section_id: 'sec_def' }]);
+  });
+
+  it('drops entries for axes / spreads that vanished (maps over live lookups)', () => {
+    const draft: RemixConfig = {
+      ...configWith([]),
+      story: {
+        presets: [
+          { axis_id: 'ax', preset_id: 'p_def' },
+          { axis_id: 'gone', preset_id: 'x' },
+        ],
+        branches: [
+          { spread_id: 's1', section_id: 'sec_def' },
+          { spread_id: 'gone', section_id: 'x' },
+        ],
+      },
+    };
+    const out = normalizeRemixConfig(draft, ctx());
+    expect(out.story.presets.map((p) => p.axis_id)).toEqual(['ax']);
+    expect(out.story.branches.map((b) => b.spread_id)).toEqual(['s1']);
+  });
+
+  it('never emits props; applies WYSIWYG trait mask; keeps characters', () => {
+    const draft: RemixConfig = {
+      ...configWith([choice({})]),
+      story: { presets: [], branches: [] },
+    };
+    const out = normalizeRemixConfig(draft, ctx());
+    expect(out.props).toBeUndefined();
+    // facewear (no profile desc) + outfit (book gate) dropped.
+    expect(enabledTypes(out, 'char_a')).toEqual(['face', 'hair', 'skin']);
+    expect(out.characters).toHaveLength(1);
+  });
+
+  it('does not mutate the input draft', () => {
+    const draft: RemixConfig = {
+      ...configWith([choice({})]),
+      story: { presets: [], branches: [] },
+    };
+    const snapshot = JSON.parse(JSON.stringify(draft));
+    normalizeRemixConfig(draft, ctx());
+    expect(draft).toEqual(snapshot);
   });
 });

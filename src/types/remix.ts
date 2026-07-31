@@ -400,7 +400,10 @@ export type RemixSpreadImage = RemixSpread['images'][number];
 
 export interface RemixIllustration {
   spreads: RemixSpread[];
-  sections: Section[];
+  /** @deprecated Reshape 2026-07-31 — remix is linear (branch resolve-at-create);
+   *  the clone pipeline emits `[]`. Optional so consumers must tolerate absence
+   *  (read via `?? []`). Legacy rows may still carry populated sections. */
+  sections?: Section[];
 }
 
 // ── Inject (Phase 3 — client-side finalize) ──────────────────────────────────
@@ -471,11 +474,53 @@ export interface RemixLanguageChoice {
   is_enabled: boolean;
 }
 
+// ── Story config (frozen choices — reshape 2026-07-31) ───────────────────────
+// `story` materializes at create: `presets[]` drive casting materialization +
+// effective cast; `branches[]` linearize the spread path (remix has no
+// branching). Both are soft refs — `presets` → book.casting_slot, `branches` →
+// snapshot.illustration.
+
+/** Radio style của Memories — UI: 'real' = "Real Style", 'styled' = "Animated Style". */
+export type MemoryStyle = 'real' | 'styled';
+
+/** 1 entry / casting axis — frozen tại create. Soft ref → book.casting_slot. */
+export interface RemixPresetChoice {
+  axis_id: string;
+  preset_id: string;
+}
+
+/** 1 entry / branch spread — section của nhánh đã chọn. Soft ref → snapshot.illustration. */
+export interface RemixBranchChoice {
+  spread_id: string;
+  section_id: string;
+}
+
+export interface RemixStoryConfig {
+  presets: RemixPresetChoice[];
+  branches: RemixBranchChoice[];
+}
+
+export interface RemixMemoryPhotoChoice {
+  key: string; // soft ref → book.parametric_slot.photos[].key
+  is_enabled: boolean;
+  media_url: string | null; // upload flow TBD — luôn null đợt này
+}
+
+export interface RemixMemoriesConfig {
+  is_enabled: boolean; // master toggle "Use real photos"
+  style: MemoryStyle; // global per-remix, default 'styled'
+  photos: RemixMemoryPhotoChoice[];
+}
+
 export interface RemixConfig {
+  story: RemixStoryConfig;
   characters: RemixCharacterChoice[];
-  props: RemixPropChoice[];
+  memories: RemixMemoriesConfig;
   voices: RemixVoiceChoice[];
   languages: RemixLanguageChoice[];
+  /** @deprecated Reshape 2026-07-31 — writer không emit; chỉ để đọc rows cũ.
+   *  Consumers MUST read via `?? []`. */
+  props?: RemixPropChoice[];
 }
 
 // ── Modal-local option / preview types (ephemeral — never persisted) ─────────
@@ -504,6 +549,23 @@ export interface VoiceOption {
   id: string;
   name: string;
   language?: string;
+}
+
+// ── Lookup options (Story tab — derived from snapshot.illustration) ──────────
+// Ephemeral read-model built by `useBranchSpreadOptions` (Phase 02). One entry
+// per spread carrying a `branch_setting`; `branches[]` are that spread's choices.
+
+export interface BranchSpreadBranchOption {
+  section_id: string;
+  title: string;
+  is_default: boolean;
+}
+
+export interface BranchSpreadOption {
+  spread_id: string;
+  spread_number: string; // pages[0].number — label "SPREAD {n}"
+  title: string; // câu hỏi rẽ nhánh
+  branches: BranchSpreadBranchOption[];
 }
 
 /** Default name for a freshly created remix (create-only modal). */

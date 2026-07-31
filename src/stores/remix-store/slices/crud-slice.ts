@@ -5,6 +5,7 @@
 import { supabase } from '@/apis/supabase';
 import { createLogger } from '@/utils/logger';
 import type { Human } from '@/types/human';
+import type { BookRemix } from '@/types/editor';
 import { applyTextSwap } from '@/features/remix/text-swap-engine';
 import { buildRemixClonePayload } from '../clone-builder';
 import { mapRowToRemix } from '../supabase-mapping';
@@ -16,6 +17,16 @@ import { applySheetPatch } from '../slice-helpers';
 import type { RemixCrudSlice, RemixSliceCreator } from '../types';
 
 const log = createLogger('Store', 'RemixStore');
+
+/** Fallback gate when a book was never configured for remix — no enabled
+ *  characters ⇒ the effective cast resolves to empty (soft, non-blocking). */
+const EMPTY_BOOK_REMIX: BookRemix = {
+  story: { preset: { is_enabled: false }, branch: { is_enabled: false } },
+  characters: [],
+  memories: { is_enabled: false, photos: [] },
+  voices: [],
+  languages: [],
+};
 
 export const createCrudSlice: RemixSliceCreator<RemixCrudSlice> = (
   set,
@@ -32,30 +43,41 @@ export const createCrudSlice: RemixSliceCreator<RemixCrudSlice> = (
       return null;
     }
 
+    const currentBook = useBookStore.getState().currentBook;
+    const castingAxes = currentBook?.casting_slot?.casting_axes ?? [];
+    // book.remix gates the effective cast. Absent (book never configured for
+    // remix) → empty gate: effective cast resolves to no enabled characters.
+    const bookRemix: BookRemix = currentBook?.remix ?? EMPTY_BOOK_REMIX;
+
     const payload = buildRemixClonePayload(
       {
         snapshotId,
         illustration: snapshotState.illustration,
         characters: snapshotState.characters,
         props: snapshotState.props,
+        castingAxes,
+        bookRemix,
       },
       config,
       name,
     );
 
     // ── Phase 1 text swap ────────────────────────────────────────────
+    // Feed the PURGED config (effective cast only) — never the original config,
+    // so a text swap can't target a character dropped from the cast.
+    const purgedConfig = payload.remix_config;
     const humansList = useHumansStore.getState().humans;
     const humansMap: Record<string, Human> = Object.fromEntries(
       humansList.map((h) => [h.id, h]),
     );
-    const enabledLanguages = config.languages
+    const enabledLanguages = purgedConfig.languages
       .filter((l) => l.is_enabled)
       .map((l) => l.code);
 
     const swap = applyTextSwap({
       illustration: payload.illustration,
       remixCharacters: payload.characters,
-      configCharacters: config.characters,
+      configCharacters: purgedConfig.characters,
       enabledLanguages,
       humans: humansMap,
     });
@@ -67,7 +89,7 @@ export const createCrudSlice: RemixSliceCreator<RemixCrudSlice> = (
     // character/prop/mix and writes them back onto finalPayload IN PLACE so
     // they persist in the same INSERT round-trip. Replaces the old
     // fire-and-forget build-crop-sheets endpoint call.
-    const dimension = useBookStore.getState().currentBook?.dimension ?? null;
+    const dimension = currentBook?.dimension ?? null;
     computeCropSheets(finalPayload, dimension);
 
     log.info('createRemix', 'insert', { snapshotId, name: finalPayload.name });

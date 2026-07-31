@@ -106,7 +106,9 @@ export function PreviewCreativeSpace() {
   }, [activeRemix, retouchSpreads]);
 
   const sections: Section[] = useMemo(() => {
-    if (activeRemix) return activeRemix.illustration.sections;
+    // Reshape 2026-07-31: remix illustration is linear (sections optional/[]);
+    // tolerate legacy rows AND new rows → player runs pure array order.
+    if (activeRemix) return activeRemix.illustration.sections ?? [];
     return retouchSections;
   }, [activeRemix, retouchSections]);
 

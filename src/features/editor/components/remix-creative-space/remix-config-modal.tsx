@@ -1,10 +1,12 @@
-// remix-config-modal.tsx — Create-only remix configuration modal (tabbed).
-// Edit mode was removed (config is frozen after create). Four tabs:
-// Characters (config-only) / Props / Voices / Languages.
+// remix-config-modal.tsx — Create-only remix configuration modal (4-tab).
+// Config is frozen after create (no edit mode). Tabs: Story / Cast / Voices /
+// Languages (default Story). The modal owns `draft` (RemixConfig), `name`,
+// `dirty`; switching tabs never resets the draft. Story choices drive the
+// effective cast (`castRows`) consumed by the Cast tab. No AI call here — the
+// appearance swap is an async background job triggered from the swap crop-sheet
+// modal (api/jobs/02).
 //
-// The modal owns `draft` (RemixConfig), `name`, `dirty`. Switching tabs never
-// resets the draft. The appearance swap is an async background job (api/jobs/02)
-// triggered from the swap crop-sheet modal — NOT from this create modal.
+// Reshape 2026-07-31 (4-tab): PropsTab removed; + Story tab (presets/branches).
 
 import { useMemo, useState } from 'react';
 import {
@@ -17,6 +19,12 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
+import {
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -28,36 +36,49 @@ import {
 } from '@/components/ui/alert-dialog';
 import { useHumans } from '@/stores/humans-store';
 import { createLogger } from '@/utils/logger';
-import { TRAIT_TYPES } from '@/constants/trait-constants';
-import type { BookRemix, RemixPropEntry } from '@/types/editor';
+import type { BookRemix, RemixCharacterEntry } from '@/types/editor';
+import { REMIX_NAME_DEFAULT, type RemixConfig } from '@/types/remix';
+import type { RemixCharacterChoice } from '@/types/remix';
+import type { RemixLookupSources } from './hooks/use-remix-lookup-sources';
+import { effectiveCastKeys } from '@/features/remix/effective-cast';
+import { normalizeRemixConfig } from './remix-config-normalize';
 import {
-  REMIX_NAME_DEFAULT,
-  type RemixCharacterChoice,
-  type RemixConfig,
-  type RemixLanguageChoice,
-  type RemixPropChoice,
-  type RemixVoiceChoice,
-} from '@/types/remix';
-import { normalizeRemixConfigTraits } from './remix-config-normalize';
-import { CharactersTab } from './tabs/characters-tab';
-import { PropsTab } from './tabs/props-tab';
+  patchMemories,
+  upsertBranchChoice,
+  upsertCharacterChoice,
+  upsertLanguageChoice,
+  upsertPresetChoice,
+  upsertVoiceChoice,
+} from './remix-config-draft-helpers';
+import { StoryTab } from './tabs/story-tab';
+import { CastTab } from './tabs/cast-tab';
 import { VoicesTab } from './tabs/voices-tab';
 import { LanguagesTab } from './tabs/languages-tab';
 
 const log = createLogger('Editor', 'RemixConfigModal');
 
-type TabKey = 'characters' | 'props' | 'voices' | 'languages';
-const TAB_ORDER: TabKey[] = ['characters', 'props', 'voices', 'languages'];
+type TabKey = 'story' | 'cast' | 'voices' | 'languages';
+const TAB_ORDER: TabKey[] = ['story', 'cast', 'voices', 'languages'];
 const TAB_LABELS: Record<TabKey, string> = {
-  characters: 'Characters',
-  props: 'Props',
+  story: 'Story',
+  cast: 'Cast',
   voices: 'Voices',
   languages: 'Languages',
 };
 
+/** One effective-cast row derived from the chosen story presets. Consumed by the
+ *  Cast tab (Phase 04) — `bookEntry` supplies the book gate, `draftEntry` the
+ *  current human/visual/trait choices. */
+export interface RemixCastRow {
+  key: string;
+  bookEntry: RemixCharacterEntry | undefined;
+  draftEntry: RemixCharacterChoice | undefined;
+}
+
 interface Props {
   bookRemix: BookRemix;
   initialConfig: RemixConfig;
+  lookups: RemixLookupSources;
   onSave: (config: RemixConfig, name: string) => void | Promise<void>;
   onCancel: () => void;
 }
@@ -65,6 +86,7 @@ interface Props {
 export function RemixConfigModal({
   bookRemix,
   initialConfig,
+  lookups,
   onSave,
   onCancel,
 }: Props) {
@@ -72,97 +94,99 @@ export function RemixConfigModal({
   const [name, setName] = useState('');
   const [dirty, setDirty] = useState(false);
   const [showDiscard, setShowDiscard] = useState(false);
+  const [activeTab, setActiveTab] = useState<TabKey>('story');
 
   const humans = useHumans();
 
-  const allowedChars = useMemo(
-    () => bookRemix.characters.filter((c) => c.is_enabled),
-    [bookRemix],
+  // ── Gate flags (book availability) ──────────────────────────────────────────
+  const showPresets = useMemo(
+    () => bookRemix.story.preset.is_enabled && lookups.castingAxes.length > 0,
+    [bookRemix, lookups.castingAxes],
   );
-  // Reshape 2026-07-31: book.remix dropped props[] — props are never-enabled
-  // for new remixes. PropsTab plumbing kept until the modal follow-up removes it.
-  const allowedProps = useMemo(() => [] as RemixPropEntry[], []);
+  const showBranches = useMemo(
+    () => bookRemix.story.branch.is_enabled && lookups.branchSpreads.length > 0,
+    [bookRemix, lookups.branchSpreads],
+  );
+  const showMemories = useMemo(
+    () => bookRemix.memories.is_enabled && draft.memories.photos.length > 0,
+    [bookRemix, draft.memories.photos],
+  );
+
   const allowedLangs = useMemo(
     () => bookRemix.languages.filter((l) => l.is_enabled),
     [bookRemix],
   );
 
-  const firstNonEmptyTab = useMemo<TabKey>(() => {
-    if (allowedChars.length) return 'characters';
-    if (allowedProps.length) return 'props';
-    if (draft.voices.length) return 'voices';
-    if (allowedLangs.length) return 'languages';
-    return 'characters';
-  }, [allowedChars, allowedProps, allowedLangs, draft.voices]);
-
-  const [activeTab, setActiveTab] = useState<TabKey>(firstNonEmptyTab);
-
-  // ── Upsert helpers (preserve entries across toggles) ──────────────────────
+  // ── Effective cast (recompute when the chosen presets change) ───────────────
+  const castKeys = useMemo(
+    () =>
+      effectiveCastKeys({
+        storyPresets: draft.story.presets,
+        castingAxes: lookups.castingAxes,
+        bookRemix,
+        snapshotCharacterKeys: lookups.snapshotCharacterKeys,
+      }),
+    [draft.story.presets, lookups.castingAxes, lookups.snapshotCharacterKeys, bookRemix],
+  );
+  const bookCharByKey = useMemo(
+    () => new Map(bookRemix.characters.map((c) => [c.key, c])),
+    [bookRemix],
+  );
+  const draftCharByKey = useMemo(
+    () => new Map(draft.characters.map((c) => [c.key, c])),
+    [draft.characters],
+  );
+  // Cast rows exposed for the Cast tab (Phase 04 consumes the full shape).
+  const castRows = useMemo<RemixCastRow[]>(
+    () =>
+      castKeys.map((key) => ({
+        key,
+        bookEntry: bookCharByKey.get(key),
+        draftEntry: draftCharByKey.get(key),
+      })),
+    [castKeys, bookCharByKey, draftCharByKey],
+  );
+  // ── Draft mutations (pure reducers + dirty flag) ────────────────────────────
+  const selectPreset = (axisId: string, presetId: string) => {
+    setDraft((prev) => upsertPresetChoice(prev, axisId, presetId));
+    setDirty(true);
+  };
+  const selectBranch = (spreadId: string, sectionId: string) => {
+    setDraft((prev) => upsertBranchChoice(prev, spreadId, sectionId));
+    setDirty(true);
+  };
   const upsertCharacter = (key: string, patch: Partial<RemixCharacterChoice>) => {
-    setDraft((prev) => ({
-      ...prev,
-      characters: prev.characters.some((c) => c.key === key)
-        ? prev.characters.map((c) => (c.key === key ? { ...c, ...patch } : c))
-        : [
-            ...prev.characters,
-            {
-              key,
-              human_id: null,
-              visual: null,
-              traits: TRAIT_TYPES.map((type) => ({ type, is_enabled: true })),
-              base_image_url: null,
-              is_enabled: true,
-              ...patch,
-            },
-          ],
-    }));
+    setDraft((prev) => upsertCharacterChoice(prev, key, patch));
+    setDirty(true);
+  };
+  const changeMemories = (
+    patch: Parameters<typeof patchMemories>[1],
+  ) => {
+    setDraft((prev) => patchMemories(prev, patch));
+    setDirty(true);
+  };
+  const upsertVoice = (key: string, patch: Parameters<typeof upsertVoiceChoice>[2]) => {
+    setDraft((prev) => upsertVoiceChoice(prev, key, patch));
+    setDirty(true);
+  };
+  const upsertLanguage = (
+    code: string,
+    patch: Parameters<typeof upsertLanguageChoice>[2],
+  ) => {
+    setDraft((prev) => upsertLanguageChoice(prev, code, patch));
     setDirty(true);
   };
 
-  const upsertProp = (key: string, patch: Partial<RemixPropChoice>) => {
-    setDraft((prev) => ({
-      ...prev,
-      props: prev.props.some((p) => p.key === key)
-        ? prev.props.map((p) => (p.key === key ? { ...p, ...patch } : p))
-        : [...prev.props, { key, prop_id: null, visual: null, is_enabled: true, ...patch }],
-    }));
-    setDirty(true);
-  };
-
-  const upsertVoice = (key: string, patch: Partial<RemixVoiceChoice>) => {
-    setDraft((prev) => ({
-      ...prev,
-      voices: prev.voices.map((v) => (v.key === key ? { ...v, ...patch } : v)),
-    }));
-    setDirty(true);
-  };
-
-  const upsertLanguage = (code: string, patch: Partial<RemixLanguageChoice>) => {
-    setDraft((prev) => ({
-      ...prev,
-      languages: prev.languages.some((l) => l.code === code)
-        ? prev.languages.map((l) => (l.code === code ? { ...l, ...patch } : l))
-        : [...prev.languages, { name: '', code, is_enabled: false, ...patch }],
-    }));
-    setDirty(true);
-  };
-
-  // ── Validation / gating ───────────────────────────────────────────────────
-  const isValidDraft = useMemo(() => {
-    return (
+  // ── Validation (story choices NOT counted — always defaulted) ───────────────
+  const isValidDraft = useMemo(
+    () =>
       draft.characters.some((c) => c.is_enabled) ||
-      draft.props.some((p) => p.is_enabled) ||
+      draft.memories.is_enabled ||
       draft.voices.some((v) => v.is_enabled) ||
-      draft.languages.some((l) => l.is_enabled)
-    );
-  }, [draft]);
-
+      draft.languages.some((l) => l.is_enabled),
+    [draft],
+  );
   const canSave = isValidDraft;
-  const everyTabEmpty =
-    allowedChars.length === 0 &&
-    allowedProps.length === 0 &&
-    draft.voices.length === 0 &&
-    allowedLangs.length === 0;
 
   const handleCancel = () => {
     if (dirty) {
@@ -173,12 +197,14 @@ export function RemixConfigModal({
   };
 
   const handleSave = async () => {
-    log.info('handleSave', 'submitting', { name });
-    // WYSIWYG safety net: persist the DISPLAYED trait state (is_enabled ∧
-    // bookGate ∧ profileSupported). Traits already reset to the profile's max
-    // on every human/visual change (CharactersTab), so this is usually a
-    // no-op — it guards seeds/paths that bypass that reset.
-    const normalized = normalizeRemixConfigTraits(draft, allowedChars, humans);
+    log.info('handleSave', 'submitting', { name: name.trim().length });
+    log.debug('handleSave', 'gate state', { showPresets, showBranches, showMemories });
+    const normalized = normalizeRemixConfig(draft, {
+      bookRemix,
+      castingAxes: lookups.castingAxes,
+      branchSpreads: lookups.branchSpreads,
+      humans,
+    });
     await onSave(normalized, name.trim() || REMIX_NAME_DEFAULT);
   };
 
@@ -226,65 +252,77 @@ export function RemixConfigModal({
             className="w-[200px]"
           />
 
-          {everyTabEmpty ? (
-            <p className="py-10 text-center text-sm text-muted-foreground">
-              Nothing to configure. Enable items in book remix settings first.
-            </p>
-          ) : (
-            <Tabs
-              value={activeTab}
-              onValueChange={(v) => setActiveTab(v as TabKey)}
-              className="mt-2 flex min-h-0 flex-1 flex-col"
-            >
-              <TabsList>
-                {TAB_ORDER.map((key) => (
-                  <TabsTrigger key={key} value={key}>
-                    {TAB_LABELS[key]}
-                  </TabsTrigger>
-                ))}
-              </TabsList>
+          <Tabs
+            value={activeTab}
+            onValueChange={(v) => setActiveTab(v as TabKey)}
+            className="mt-2 flex min-h-0 flex-1 flex-col"
+          >
+            <TabsList>
+              {TAB_ORDER.map((key) => (
+                <TabsTrigger key={key} value={key}>
+                  {TAB_LABELS[key]}
+                </TabsTrigger>
+              ))}
+            </TabsList>
 
-              <div className="min-h-0 flex-1 overflow-y-auto pr-1">
-                <TabsContent value="characters">
-                  <CharactersTab
-                    allowedChars={allowedChars}
-                    draftCharacters={draft.characters}
-                    humans={humans}
-                    onUpsert={upsertCharacter}
-                  />
-                </TabsContent>
-                <TabsContent value="props">
-                  <PropsTab
-                    allowedProps={allowedProps}
-                    draftProps={draft.props}
-                    onUpsert={upsertProp}
-                  />
-                </TabsContent>
-                <TabsContent value="voices">
-                  <VoicesTab draftVoices={draft.voices} onUpsert={upsertVoice} />
-                </TabsContent>
-                <TabsContent value="languages">
-                  <LanguagesTab
-                    allowedLangs={allowedLangs}
-                    draftLanguages={draft.languages}
-                    onUpsert={upsertLanguage}
-                  />
-                </TabsContent>
-              </div>
-            </Tabs>
-          )}
+            <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+              <TabsContent value="story">
+                <StoryTab
+                  showPresets={showPresets}
+                  showBranches={showBranches}
+                  castingAxes={lookups.castingAxes}
+                  branchSpreads={lookups.branchSpreads}
+                  story={draft.story}
+                  onSelectPreset={selectPreset}
+                  onSelectBranch={selectBranch}
+                />
+              </TabsContent>
+              <TabsContent value="cast">
+                <CastTab
+                  castRows={castRows}
+                  humans={humans}
+                  memories={draft.memories}
+                  showMemories={showMemories}
+                  onUpsertCharacter={upsertCharacter}
+                  onMemoriesChange={changeMemories}
+                />
+              </TabsContent>
+              <TabsContent value="voices">
+                <VoicesTab draftVoices={draft.voices} onUpsert={upsertVoice} />
+              </TabsContent>
+              <TabsContent value="languages">
+                <LanguagesTab
+                  allowedLangs={allowedLangs}
+                  draftLanguages={draft.languages}
+                  onUpsert={upsertLanguage}
+                />
+              </TabsContent>
+            </div>
+          </Tabs>
 
           <DialogFooter>
             <Button variant="ghost" onClick={handleCancel}>
               Discard
             </Button>
-            <Button
-              disabled={!canSave}
-              aria-disabled={!canSave}
-              onClick={handleSave}
-            >
-              Create
-            </Button>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  {/* span wrapper so the tooltip still fires over a disabled button */}
+                  <span tabIndex={canSave ? -1 : 0}>
+                    <Button
+                      disabled={!canSave}
+                      aria-disabled={!canSave}
+                      onClick={handleSave}
+                    >
+                      OK
+                    </Button>
+                  </span>
+                </TooltipTrigger>
+                {!canSave && (
+                  <TooltipContent>Enable at least one remix target</TooltipContent>
+                )}
+              </Tooltip>
+            </TooltipProvider>
           </DialogFooter>
         </DialogContent>
       </Dialog>

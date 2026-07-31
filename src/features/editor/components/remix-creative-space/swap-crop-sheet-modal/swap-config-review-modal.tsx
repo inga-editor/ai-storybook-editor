@@ -115,7 +115,9 @@ export function SwapConfigReviewModal({
   }, []);
 
   const configCharacters = remix.remix_config.characters;
-  const configProps = remix.remix_config.props;
+  // Reshape 2026-07-31: `props` is deprecated/optional on RemixConfig — new rows
+  // omit it entirely; coalesce so the Props tab renders its empty state.
+  const configProps = remix.remix_config.props ?? [];
 
   // Display joins: config entries are keyed; names live on the remix's
   // character/prop snapshots, human name/profile on the live humans cache.

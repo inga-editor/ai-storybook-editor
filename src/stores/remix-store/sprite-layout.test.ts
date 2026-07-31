@@ -66,6 +66,7 @@ function makeRemix(opts: {
     snapshot_id: 's1',
     name: 'R',
     remix_config: {
+      story: { presets: [], branches: [] },
       characters: opts.chars.map((c) => ({
         key: c.key,
         human_id: 'h1',
@@ -74,7 +75,7 @@ function makeRemix(opts: {
         base_image_url: null,
         is_enabled: c.enabled,
       })),
-      props: [],
+      memories: { is_enabled: false, style: 'styled', photos: [] },
       voices: [],
       languages: [],
     },

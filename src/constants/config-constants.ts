@@ -22,6 +22,7 @@ import type {
   StepTypography,
 } from '@/types/editor';
 import { TYPOGRAPHY_STEPS } from '@/types/editor';
+import type { MemoryStyle } from '@/types/remix';
 import { TRAIT_TYPES } from '@/constants/trait-constants';
 import { createLogger } from '@/utils/logger';
 
@@ -272,6 +273,14 @@ export const NARRATOR_VOICE_KEY = 'narrator' as const;
 // Tab ids of the 4-tab Remix Settings panel (reshape 2026-07-31).
 export type RemixSettingsTab = 'story' | 'cast' | 'voices' | 'languages';
 export const REMIX_SETTINGS_DEFAULT_TAB: RemixSettingsTab = 'story';
+
+// MEMORIES — global per-remix render style (remix_config.memories.style). Radio:
+// 'styled' = book art style (default), 'real' = reader photo shown as-is.
+export const MEMORY_STYLE_DEFAULT: MemoryStyle = 'styled';
+export const MEMORY_STYLE_OPTIONS: ReadonlyArray<{ value: MemoryStyle; label: string }> = [
+  { value: 'styled', label: 'Animated Style' },
+  { value: 'real', label: 'Real Style' },
+] as const;
 
 // STORY tab rows — fixed feature gates (keys index into BookRemix.story).
 export type RemixStoryFeatureKey = keyof RemixStory;

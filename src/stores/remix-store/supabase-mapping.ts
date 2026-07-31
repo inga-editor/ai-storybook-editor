@@ -6,12 +6,15 @@ import type {
   RemixCharacter,
   RemixConfig,
   RemixIllustration,
+  RemixMemoriesConfig,
   RemixMix,
   RemixProp,
   RemixSpriteEntry,
   RemixStageBatchRow,
+  RemixStoryConfig,
 } from '@/types/remix';
 import type { Distribution } from '@/types/editor';
+import { MEMORY_STYLE_DEFAULT } from '@/constants/config-constants';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('Store', 'SupabaseMapping');
@@ -34,12 +37,51 @@ interface RawRemixRow {
 }
 
 const EMPTY_ILLUSTRATION: RemixIllustration = { spreads: [], sections: [] };
+const EMPTY_STORY: RemixStoryConfig = { presets: [], branches: [] };
+const EMPTY_MEMORIES: RemixMemoriesConfig = {
+  is_enabled: false,
+  style: MEMORY_STYLE_DEFAULT,
+  photos: [],
+};
 const EMPTY_CONFIG: RemixConfig = {
+  story: EMPTY_STORY,
   characters: [],
-  props: [],
+  memories: EMPTY_MEMORIES,
   voices: [],
   languages: [],
 };
+
+/**
+ * Read-time tolerance for pre-2026-07-31 `remix_config` rows. The 4-tab reshape
+ * (RemixConfigModal) ADDED required `story` + `memories`; legacy rows omit both.
+ * Coerce them to safe defaults at ingress so every downstream consumer sees the
+ * full `RemixConfig` shape and never has to `?? default` its own reads.
+ * `props` is intentionally NOT coerced — it stays optional/deprecated (new rows
+ * never emit it; consumers read via `?? []`).
+ */
+export function readRemixConfig(raw: unknown): RemixConfig {
+  if (!raw || typeof raw !== 'object') {
+    log.warn('readRemixConfig', 'missing/invalid remix_config, using EMPTY', {});
+    return EMPTY_CONFIG;
+  }
+  const cfg = raw as Partial<RemixConfig>;
+  const coercedStory = !cfg.story;
+  const coercedMemories = !cfg.memories;
+  if (coercedStory || coercedMemories) {
+    log.debug('readRemixConfig', 'coerced legacy config field(s)', {
+      coercedStory,
+      coercedMemories,
+    });
+  }
+  return {
+    story: cfg.story ?? EMPTY_STORY,
+    characters: cfg.characters ?? [],
+    memories: cfg.memories ?? EMPTY_MEMORIES,
+    voices: cfg.voices ?? [],
+    languages: cfg.languages ?? [],
+    props: cfg.props,
+  };
+}
 
 /**
  * Read-time shim for pre-2026-06-12 JSONB rows: `crop_sheets[].crops[]` was
@@ -77,7 +119,7 @@ export function mapRowToRemix(row: RawRemixRow): Remix {
     id: row.id,
     snapshot_id: row.snapshot_id,
     name: row.name ?? 'New Remix',
-    remix_config: (row.remix_config as RemixConfig | null) ?? EMPTY_CONFIG,
+    remix_config: readRemixConfig(row.remix_config),
     illustration: (row.illustration as RemixIllustration | null) ?? EMPTY_ILLUSTRATION,
     characters: (row.characters as RemixCharacter[] | null) ?? [],
     props: (row.props as RemixProp[] | null) ?? [],

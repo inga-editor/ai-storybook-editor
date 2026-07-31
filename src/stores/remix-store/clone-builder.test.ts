@@ -1,162 +1,32 @@
 // clone-builder.test.ts — Unit tests for buildRemixClonePayload pure transform.
-// rev2 (batch model, Phase 03): crops live on the batch now (entities no longer
-// carry `crop_sheets`), and exactly ONE empty batch skeleton is
-// produced (`makeBatchSkeleton(0,'Batch 1')`). The crop population +
-// single-subject/mix enumeration that the legacy builder did is gone — crops
-// are filled by `computeCropSheets` (layout engine over `groupCropsForBatch`)
-// in the same INSERT path, NOT by this pure builder.
+// Reshape 2026-07-31 (linear remix + casting materialization + effective cast):
+//   - illustration is walked to a linear path; `sections` emits [], every
+//     `branch_setting` is stripped.
+//   - `characters[]` = effective cast (preset ⊗ book gate ⊗ snapshot keys), NOT
+//     the raw config-enabled set. Appearance-check is REMOVED — a displaced
+//     default actor is dropped even if a plain layer's tags still mention it.
+//   - `props: []` always; `remix_config.props` is never emitted.
+//   - `remix_config.voices` purged to narrator + effective-cast keys.
+// Crops are still filled by `computeCropSheets` in the INSERT path (one empty
+// batch skeleton here).
 
 import { describe, it, expect } from 'vitest';
 import { buildRemixClonePayload, makeBatchSkeleton } from './clone-builder';
 import type { CloneBuilderInput } from './clone-builder';
 import type { RemixConfig } from '@/types/remix';
+import type { BookRemix, CastingAxis } from '@/types/editor';
 import type { Character } from '@/types/character-types';
-import type { Prop } from '@/types/prop-types';
 import type { IllustrationData } from '@/types/illustration-types';
+import type { BaseSpread, SpreadImage } from '@/types/spread-types';
 
 // ── Fixture builders ─────────────────────────────────────────────────────────
 
-function makeChar(key: string, name: string): Character {
-  return {
-    key,
-    name,
-    description: '',
-    variants: [],
-  } as unknown as Character;
-}
-
-function makeProp(key: string, name: string): Prop {
-  return {
-    key,
-    name,
-    description: '',
-    variants: [],
-    sounds: [],
-  } as unknown as Prop;
-}
-
-function makeIllustration(): IllustrationData {
-  return { spreads: [], sections: [] } as unknown as IllustrationData;
-}
-
-interface BuildOpts {
-  characters?: Character[];
-  props?: Prop[];
-  enabledCharKeys?: string[];
-  enabledPropKeys?: string[];
-  name?: string;
-}
-
-/** Build a CloneBuilderInput + RemixConfig. By default every passed character /
- *  prop is config-enabled; override via enabledCharKeys / enabledPropKeys. */
-function build(opts: BuildOpts = {}) {
-  const characters = opts.characters ?? [];
-  const props = opts.props ?? [];
-  const enabledCharKeys = opts.enabledCharKeys ?? characters.map((c) => c.key);
-  const enabledPropKeys = opts.enabledPropKeys ?? props.map((p) => p.key);
-
-  const input: CloneBuilderInput = {
-    snapshotId: 'snap-1',
-    illustration: makeIllustration(),
-    characters,
-    props,
-  };
-  const config: RemixConfig = {
-    narrator: { name: 'Narrator', voice_id: null },
-    characters: characters.map((c) => ({
-      key: c.key,
-      human_id: null,
-      visual: null,
-      voice_id: null,
-      is_enabled: enabledCharKeys.includes(c.key),
-    })),
-    props: props.map((p) => ({
-      key: p.key,
-      prop_id: null,
-      visual: null,
-      is_enabled: enabledPropKeys.includes(p.key),
-    })),
-    languages: ['vi_VN'],
-  } as unknown as RemixConfig;
-
-  return buildRemixClonePayload(input, config, opts.name ?? 'Test Remix');
-}
-
-// ── makeBatchSkeleton ─────────────────────────────────────────────────────────
-
-describe('makeBatchSkeleton', () => {
-  it('builds an empty batch with a uuid id, the given order/name, empty crop_sheets', () => {
-    const b = makeBatchSkeleton(0, 'Batch 1');
-    expect(b.order).toBe(0);
-    expect(b.name).toBe('Batch 1');
-    expect(b.crop_sheets).toEqual([]);
-    expect(typeof b.id).toBe('string');
-    expect(b.id.length).toBeGreaterThan(0);
-    // rev2: no legacy `keys[]` lineup on the batch.
-    expect((b as unknown as { keys?: unknown }).keys).toBeUndefined();
-  });
-
-  it('mints a distinct id per call', () => {
-    expect(makeBatchSkeleton(0, 'a').id).not.toBe(makeBatchSkeleton(0, 'b').id);
-  });
-});
-
-// ── buildRemixClonePayload (rev2 batch model) ─────────────────────────────────
-
-describe('buildRemixClonePayload — rev2 batch model', () => {
-  it('produces exactly one empty batch skeleton (entities carry no crops)', () => {
-    const r = build({
-      characters: [makeChar('c1', 'Miu')],
-      props: [makeProp('p1', 'Sword')],
-    });
-    expect(r.mixes).toHaveLength(1);
-    expect(r.mixes[0].order).toBe(0);
-    expect(r.mixes[0].name).toBe('Batch 1');
-    expect(r.mixes[0].crop_sheets).toEqual([]);
-    expect(typeof r.mixes[0].id).toBe('string');
-  });
-
-  it('clones enabled entities (crops live on the batch, not the entity)', () => {
-    const r = build({
-      characters: [makeChar('c1', 'Miu')],
-      props: [makeProp('p1', 'Sword')],
-    });
-    expect(r.characters).toHaveLength(1);
-    expect(r.characters[0].key).toBe('c1');
-    expect(r.props).toHaveLength(1);
-    expect(r.props[0].key).toBe('p1');
-  });
-
-  it('excludes config-disabled char/prop keys from the payload', () => {
-    const r = build({
-      characters: [makeChar('c1', 'Miu'), makeChar('c2', 'Lulu')],
-      props: [makeProp('p1', 'Sword')],
-      enabledCharKeys: ['c1'],
-      enabledPropKeys: [],
-    });
-    expect(r.characters.map((c) => c.key)).toEqual(['c1']);
-    expect(r.props).toHaveLength(0);
-    // Still exactly one batch even with no crops anywhere.
-    expect(r.mixes).toHaveLength(1);
-  });
-
-  it('passes through snapshot_id + remix_config + cloned illustration', () => {
-    const r = build({ characters: [makeChar('c1', 'Miu')] });
-    expect(r.snapshot_id).toBe('snap-1');
-    expect(r.remix_config).toBeDefined();
-    expect(r.illustration).toBeDefined();
-    expect(r.illustration.spreads).toEqual([]);
-  });
-});
-
-// ── base variant (no visual_swap_url seed) + default name ─────────────────────
-
 /** Character carrying a base variant (type=0). */
-function makeCharWithBaseVariant(key: string, name: string): Character {
+function makeChar(key: string): Character {
   return {
     order: 0,
     key,
-    name,
+    name: key,
     basic_info: {},
     personality: {},
     variants: [
@@ -174,51 +44,233 @@ function makeCharWithBaseVariant(key: string, name: string): Character {
   } as unknown as Character;
 }
 
-function makeReshapedConfig(baseImageUrl: string | null): RemixConfig {
-  return {
-    characters: [
-      {
-        key: 'c1',
-        human_id: 'h1',
-        visual: 'vp1',
-        traits: [],
-        base_image_url: baseImageUrl,
-        is_enabled: true,
-      },
-    ],
-    props: [],
-    voices: [],
-    languages: [],
-  } as unknown as RemixConfig;
+function makeIllustration(spreads: BaseSpread[] = [], sections: unknown[] = []): IllustrationData {
+  return { spreads, sections } as unknown as IllustrationData;
 }
 
-describe('buildRemixClonePayload — base variant (no seed) + default name', () => {
-  it('does NOT seed visual_swap_url onto the base variant (dead column; derived from sprite finals)', () => {
-    const r = buildRemixClonePayload(
-      {
-        snapshotId: 'snap-1',
-        illustration: makeIllustration(),
-        characters: [makeCharWithBaseVariant('c1', 'Miu')],
-        props: [],
-      },
-      makeReshapedConfig('https://swap/c1.png'),
-      'My Remix',
-    );
-    const base = r.characters[0].variants.find((v) => v.type === 0);
-    expect(base?.visual_swap_url).toBeUndefined();
-    expect(r.name).toBe('My Remix');
+/** Single axis: default preset casts a1→c1, alt preset casts a1→c2 (chars). */
+function makeAxis(): CastingAxis {
+  return {
+    id: 'ax1',
+    name: 'Hero',
+    actants: [{ id: 'a1', name: 'Lead' }],
+    presets: [
+      { id: 'p_def', name: 'Default', is_default: true, actants: [{ actant_id: 'a1', actor_id: 'c1', actor_type: 1 }] },
+      { id: 'p_alt', name: 'Alt', is_default: false, actants: [{ actant_id: 'a1', actor_id: 'c2', actor_type: 1 }] },
+    ],
+  };
+}
+
+function makeBookRemix(enabledKeys: string[]): BookRemix {
+  return {
+    story: { preset: { is_enabled: true }, branch: { is_enabled: true } },
+    characters: enabledKeys.map((k) => ({ key: k, name: k, is_enabled: true, traits: [] })),
+    memories: { is_enabled: false, photos: [] },
+    voices: [],
+    languages: [],
+  };
+}
+
+function makeConfig(over: Partial<RemixConfig> = {}): RemixConfig {
+  return {
+    story: { presets: [], branches: [] },
+    characters: [],
+    memories: { is_enabled: false, style: 'styled', photos: [] },
+    voices: [],
+    languages: [{ name: 'VI', code: 'vi_VN', is_enabled: true }],
+    ...over,
+  } as RemixConfig;
+}
+
+interface BuildOverrides {
+  characters?: Character[];
+  illustration?: IllustrationData;
+  castingAxes?: CastingAxis[];
+  bookRemix?: BookRemix;
+  config?: RemixConfig;
+  name?: string;
+}
+
+function build(over: BuildOverrides = {}) {
+  const characters = over.characters ?? [];
+  const input: CloneBuilderInput = {
+    snapshotId: 'snap-1',
+    illustration: over.illustration ?? makeIllustration(),
+    characters,
+    props: [],
+    castingAxes: over.castingAxes ?? [],
+    bookRemix: over.bookRemix ?? makeBookRemix(characters.map((c) => c.key)),
+  };
+  return buildRemixClonePayload(input, over.config ?? makeConfig(), over.name ?? 'Test Remix');
+}
+
+// ── makeBatchSkeleton ─────────────────────────────────────────────────────────
+
+describe('makeBatchSkeleton', () => {
+  it('builds an empty batch with a uuid id, the given order/name, empty crop_sheets', () => {
+    const b = makeBatchSkeleton(0, 'Batch 1');
+    expect(b.order).toBe(0);
+    expect(b.name).toBe('Batch 1');
+    expect(b.crop_sheets).toEqual([]);
+    expect(typeof b.id).toBe('string');
+    expect(b.id.length).toBeGreaterThan(0);
+    expect((b as unknown as { keys?: unknown }).keys).toBeUndefined();
   });
 
-  it("defaults the name to 'New Remix' when none is provided", () => {
-    const r = buildRemixClonePayload(
-      {
-        snapshotId: 'snap-1',
-        illustration: makeIllustration(),
-        characters: [makeCharWithBaseVariant('c1', 'Miu')],
-        props: [],
-      },
-      makeReshapedConfig(null),
-    );
+  it('mints a distinct id per call', () => {
+    expect(makeBatchSkeleton(0, 'a').id).not.toBe(makeBatchSkeleton(0, 'b').id);
+  });
+});
+
+// ── row shape: one batch, props:[], remix_config.props absent ─────────────────
+
+describe('buildRemixClonePayload — row shape', () => {
+  it('produces exactly one empty batch skeleton', () => {
+    const r = build({ characters: [makeChar('c1')] });
+    expect(r.mixes).toHaveLength(1);
+    expect(r.mixes[0].crop_sheets).toEqual([]);
+  });
+
+  it('always emits props: [] and never emits remix_config.props', () => {
+    const cfg = makeConfig({ props: [{ key: 'p1', prop_id: null, visual: null, is_enabled: true }] });
+    const r = build({ characters: [makeChar('c1')], config: cfg });
+    expect(r.props).toEqual([]);
+    expect('props' in r.remix_config).toBe(false);
+  });
+
+  it('passes through snapshot_id + cloned illustration; default name when omitted', () => {
+    const r = build({ characters: [makeChar('c1')], name: '' });
+    expect(r.snapshot_id).toBe('snap-1');
+    expect(r.illustration.spreads).toEqual([]);
     expect(r.name).toBe('New Remix');
+  });
+});
+
+// ── linear clone: sections=[], no branch_setting ──────────────────────────────
+
+function spread(id: string, extra: Partial<BaseSpread> = {}): BaseSpread {
+  return { id, pages: [{ number: 1 }], images: [], textboxes: [], ...extra } as unknown as BaseSpread;
+}
+
+describe('buildRemixClonePayload — linear clone', () => {
+  it('emits sections:[] and strips branch_setting from every spread', () => {
+    const s1 = spread('s1', {
+      branch_setting: { branches: [{ section_id: 'sec1', is_default: true }] },
+    });
+    const s2 = spread('s2');
+    const illustration = makeIllustration(
+      [s1, s2],
+      [{ id: 'sec1', title: 'x', start_spread_id: 's2', end_spread_id: 's2' }],
+    );
+    const r = build({ characters: [makeChar('c1')], illustration });
+
+    expect(r.illustration.sections).toEqual([]);
+    expect(r.illustration.spreads.map((s) => s.id)).toEqual(['s1', 's2']);
+    for (const s of r.illustration.spreads) {
+      expect((s as { branch_setting?: unknown }).branch_setting).toBeUndefined();
+    }
+  });
+});
+
+// ── effective cast (NO layer-content scan) ──────────────────────────────────────
+
+function makeAltStoryConfig(): RemixConfig {
+  return makeConfig({ story: { presets: [{ axis_id: 'ax1', preset_id: 'p_alt' }], branches: [] } });
+}
+
+describe('buildRemixClonePayload — effective cast', () => {
+  it('characters[] = effective cast: displaced default actor (c1) dropped, chosen (c2) + untouched (c3) kept', () => {
+    const r = build({
+      characters: [makeChar('c1'), makeChar('c2'), makeChar('c3')],
+      castingAxes: [makeAxis()],
+      config: makeAltStoryConfig(),
+    });
+    expect(r.characters.map((c) => c.key)).toEqual(['c2', 'c3']);
+  });
+
+  it('drops the displaced default actor EVEN IF a plain layer still tags it (regression: no layer-content scan)', () => {
+    const plainImageTaggingC1: SpreadImage = {
+      id: 'img-plain',
+      geometry: { x: 0, y: 0, w: 10, h: 10 },
+      tags: [{ type: 'character', object_key: 'c1', variant_key: 'c1_v0' }],
+    } as unknown as SpreadImage;
+    const illustration = makeIllustration([spread('s1', { images: [plainImageTaggingC1] })]);
+    const r = build({
+      characters: [makeChar('c1'), makeChar('c2'), makeChar('c3')],
+      castingAxes: [makeAxis()],
+      config: makeAltStoryConfig(),
+      illustration,
+    });
+    // c1 must still be gone despite the plain-layer tag mentioning it.
+    expect(r.characters.map((c) => c.key)).toEqual(['c2', 'c3']);
+    // The plain layer's tags are untouched (no casting_slot → no rewrite).
+    expect(r.illustration.spreads[0].images[0].tags).toEqual([
+      { type: 'character', object_key: 'c1', variant_key: 'c1_v0' },
+    ]);
+  });
+
+  it('purges non-cast voices but always keeps narrator', () => {
+    const cfg = makeConfig({
+      story: { presets: [{ axis_id: 'ax1', preset_id: 'p_alt' }], branches: [] },
+      voices: [
+        { key: 'narrator', name: 'Narrator', voice_id: null, is_enabled: true },
+        { key: 'c1', name: 'C1', voice_id: null, is_enabled: true },
+        { key: 'c2', name: 'C2', voice_id: null, is_enabled: true },
+        { key: 'c3', name: 'C3', voice_id: null, is_enabled: true },
+      ],
+    });
+    const r = build({
+      characters: [makeChar('c1'), makeChar('c2'), makeChar('c3')],
+      castingAxes: [makeAxis()],
+      config: cfg,
+    });
+    expect(r.remix_config.voices.map((v) => v.key).sort()).toEqual(['c2', 'c3', 'narrator']);
+  });
+
+  it('purges remix_config.characters to the effective cast', () => {
+    const cfg = makeConfig({
+      story: { presets: [{ axis_id: 'ax1', preset_id: 'p_alt' }], branches: [] },
+      characters: [
+        { key: 'c1', human_id: null, visual: null, traits: [], base_image_url: null, is_enabled: true },
+        { key: 'c2', human_id: null, visual: null, traits: [], base_image_url: null, is_enabled: true },
+        { key: 'c3', human_id: null, visual: null, traits: [], base_image_url: null, is_enabled: true },
+      ],
+    });
+    const r = build({
+      characters: [makeChar('c1'), makeChar('c2'), makeChar('c3')],
+      castingAxes: [makeAxis()],
+      config: cfg,
+    });
+    expect(r.remix_config.characters.map((c) => c.key)).toEqual(['c2', 'c3']);
+  });
+
+  it('dangling chosen actor → slot skipped (default kept), remix still builds', () => {
+    const axis: CastingAxis = {
+      id: 'ax1',
+      name: 'Hero',
+      actants: [{ id: 'a1', name: 'Lead' }],
+      presets: [
+        { id: 'p_def', name: 'Default', is_default: true, actants: [{ actant_id: 'a1', actor_id: 'c1', actor_type: 1 }] },
+        { id: 'p_alt', name: 'Alt', is_default: false, actants: [{ actant_id: 'a1', actor_id: 'ghost', actor_type: 1 }] },
+      ],
+    };
+    const r = build({
+      characters: [makeChar('c1'), makeChar('c2'), makeChar('c3')],
+      castingAxes: [axis],
+      config: makeAltStoryConfig(),
+    });
+    // ghost is dangling → skipped entirely → default c1 NOT displaced.
+    expect(r.characters.map((c) => c.key)).toEqual(['c1', 'c2', 'c3']);
+  });
+
+  it('respects the book gate: characters not enabled in bookRemix are excluded', () => {
+    const r = build({
+      characters: [makeChar('c1'), makeChar('c2'), makeChar('c3')],
+      bookRemix: makeBookRemix(['c1', 'c3']), // c2 not enabled at book level
+      castingAxes: [makeAxis()],
+      config: makeAltStoryConfig(),
+    });
+    // c1 displaced by c2, but c2 book-disabled → not added back; result = [c3].
+    expect(r.characters.map((c) => c.key)).toEqual(['c3']);
   });
 });

@@ -115,7 +115,7 @@ export function RemixAccordionItem({
   const defaultSwapTarget = useMemo<Omit<SwapCropSheetTarget, 'remixId'> | null>(() => {
     const c = remix.characters[0];
     if (c) return { type: 'character', key: c.key };
-    const p = remix.props[0];
+    const p = remix.props?.[0];
     if (p) return { type: 'prop', key: p.key };
     return null;
   }, [remix.characters, remix.props]);

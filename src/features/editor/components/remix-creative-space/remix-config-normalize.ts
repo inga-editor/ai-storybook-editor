@@ -16,13 +16,23 @@
 //      safety net — persist exactly the displayed checkbox state.
 //
 // This module is the SINGLE SOURCE for the two display predicates (book gate +
-// profile support) — CharacterSwapRow / CharactersTab import them, so display
-// and persistence cannot drift apart.
+// profile support) — CharacterConfigRow / CharactersSection import them, so
+// display and persistence cannot drift apart.
 
 import { TRAIT_TYPES } from '@/constants/trait-constants';
 import type { Human, TraitType } from '@/types/human';
-import type { RemixCharacterEntry } from '@/types/editor';
-import type { RemixConfig, RemixTraitChoice } from '@/types/remix';
+import type { BookRemix, CastingAxis, RemixCharacterEntry } from '@/types/editor';
+import type {
+  BranchSpreadOption,
+  RemixBranchChoice,
+  RemixConfig,
+  RemixPresetChoice,
+  RemixTraitChoice,
+} from '@/types/remix';
+import { resolveDefaultPreset } from '@/features/editor/components/config-creative-space/casting-slot-helpers';
+import { createLogger } from '@/utils/logger';
+
+const log = createLogger('Editor', 'RemixConfigNormalize');
 
 /** Book-level gate per trait — a trait the book disabled cannot be configured.
  *  Missing entry defaults to enabled (mirrors the DB reader rule). */
@@ -84,7 +94,7 @@ export function normalizeRemixConfigTraits(
       const bookChar = bookByKey.get(entry.key);
       const supported = supportedTraitSetFor(humans, entry.human_id, entry.visual);
       const traits: RemixTraitChoice[] = TRAIT_TYPES.map((type) => {
-        // `?? false` mirrors the checkbox render (CharacterSwapRow), NOT the
+        // `?? false` mirrors the checkbox render (CharacterConfigRow), NOT the
         // DB-reader `?? true` — WYSIWYG persists what the user saw.
         const raw = entry.traits.find((t) => t.type === type)?.is_enabled ?? false;
         return {
@@ -97,5 +107,81 @@ export function normalizeRemixConfigTraits(
       });
       return { ...entry, traits };
     }),
+  };
+}
+
+// ── Full config normalization (create-remix save) ────────────────────────────
+
+export interface NormalizeRemixConfigContext {
+  bookRemix: BookRemix;
+  castingAxes: CastingAxis[];
+  branchSpreads: BranchSpreadOption[];
+  humans: Human[];
+}
+
+/** Normalize the full draft before `onSave` (create-remix):
+ *  1. `story.presets`  — one entry per LIVE casting axis (keep the chosen preset
+ *     when it still exists, else the axis default). Axes that vanished while the
+ *     modal was open are dropped naturally (we map over the current axes); axes
+ *     with zero presets contribute nothing.
+ *  2. `story.branches` — same rule over the live branch spreads.
+ *  3. `characters`     — WYSIWYG trait mask (`normalizeRemixConfigTraits`);
+ *     entries OUTSIDE the effective cast are KEPT (createRemix purges later).
+ *  4. `memories` / `voices` / `languages` — passed through untouched.
+ *  5. `props`          — NEVER emitted (reshape 2026-07-31).
+ *  Pure — does not mutate `draft`. */
+export function normalizeRemixConfig(
+  draft: RemixConfig,
+  ctx: NormalizeRemixConfigContext,
+): RemixConfig {
+  const { bookRemix, castingAxes, branchSpreads, humans } = ctx;
+
+  // 1. Story presets — fill/resolve over the current axes (drops vanished axes).
+  const presets: RemixPresetChoice[] = [];
+  for (const axis of castingAxes) {
+    const existing = draft.story.presets.find((p) => p.axis_id === axis.id);
+    const stillValid =
+      existing !== undefined &&
+      axis.presets.some((pr) => pr.id === existing.preset_id);
+    const presetId = stillValid ? existing.preset_id : resolveDefaultPreset(axis)?.id;
+    if (!presetId) continue; // axis with zero presets → no entry
+    presets.push({ axis_id: axis.id, preset_id: presetId });
+  }
+
+  // 2. Story branches — same fill/resolve over the current branch spreads.
+  const branches: RemixBranchChoice[] = [];
+  for (const bs of branchSpreads) {
+    const existing = draft.story.branches.find((b) => b.spread_id === bs.spread_id);
+    const stillValid =
+      existing !== undefined &&
+      bs.branches.some((br) => br.section_id === existing.section_id);
+    const sectionId = stillValid
+      ? existing.section_id
+      : (bs.branches.find((b) => b.is_default)?.section_id ??
+        bs.branches[0]?.section_id);
+    if (!sectionId) continue; // branch spread with zero branches → no entry
+    branches.push({ spread_id: bs.spread_id, section_id: sectionId });
+  }
+
+  // 3. Character traits — WYSIWYG mask; entries preserved (no purge here).
+  const traitsNormalized = normalizeRemixConfigTraits(
+    { ...draft, story: { presets, branches } },
+    bookRemix.characters,
+    humans,
+  );
+
+  log.info('normalizeRemixConfig', 'normalized draft', {
+    presetCount: presets.length,
+    branchCount: branches.length,
+    characterCount: traitsNormalized.characters.length,
+  });
+
+  // 5. props intentionally omitted — build the result explicitly (no spread of props).
+  return {
+    story: { presets, branches },
+    characters: traitsNormalized.characters,
+    memories: traitsNormalized.memories,
+    voices: traitsNormalized.voices,
+    languages: traitsNormalized.languages,
   };
 }
