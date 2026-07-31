@@ -184,11 +184,13 @@ export function computeCropSheets(
     return;
   }
 
-  // groupCropsForBatch reads a Remix-like view (illustration + characters/props).
+  // groupCropsForBatch reads a Remix-like view (illustration + characters/props
+  // + remix_config — the purged config's characters[] is the swappable gate).
   const remixView = {
     illustration: payload.illustration,
     characters: payload.characters,
     props: payload.props,
+    remix_config: payload.remix_config,
   } as Remix;
 
   const { cropInputs, cropMetaById } = groupCropsForBatch(remixView);

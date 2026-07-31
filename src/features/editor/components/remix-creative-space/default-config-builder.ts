@@ -15,7 +15,7 @@ import type {
 } from '@/types/remix';
 import { normalizeRemixTraits, MEMORY_STYLE_DEFAULT } from '@/constants/config-constants';
 import { resolveDefaultPreset } from '@/features/editor/components/config-creative-space/casting-slot-helpers';
-import { effectiveCastKeys } from '@/features/remix/effective-cast';
+import { swappableCastKeys } from '@/features/remix/effective-cast';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('Util', 'RemixDefaultConfig');
@@ -70,9 +70,10 @@ export function defaultConfigFromBookRemix(input: DefaultConfigInput): RemixConf
 
   const story = { presets, branches };
 
-  // 3. characters — effective cast of the default presets, mapped to draft entries.
+  // 3. characters — swappable cast of the default presets, mapped to draft
+  // entries (config entries exist only for the swap surface).
   const bookCharByKey = new Map(bookRemix.characters.map((c) => [c.key, c]));
-  const castKeys = effectiveCastKeys({
+  const castKeys = swappableCastKeys({
     storyPresets: presets,
     castingAxes,
     bookRemix,

@@ -7,6 +7,7 @@ import { createLogger } from '@/utils/logger';
 import type { Human } from '@/types/human';
 import type { BookRemix } from '@/types/editor';
 import { applyTextSwap } from '@/features/remix/text-swap-engine';
+import { buildCastingNameMap } from '@/features/remix/effective-cast';
 import { buildRemixClonePayload } from '../clone-builder';
 import { mapRowToRemix } from '../supabase-mapping';
 import { computeCropSheets } from '../crop-sheet-layout';
@@ -19,7 +20,8 @@ import type { RemixCrudSlice, RemixSliceCreator } from '../types';
 const log = createLogger('Store', 'RemixStore');
 
 /** Fallback gate when a book was never configured for remix — no enabled
- *  characters ⇒ the effective cast resolves to empty (soft, non-blocking). */
+ *  characters ⇒ the swappable set resolves to empty (soft, non-blocking; the
+ *  visual roster still clones — it is not gated). */
 const EMPTY_BOOK_REMIX: BookRemix = {
   story: { preset: { is_enabled: false }, branch: { is_enabled: false } },
   characters: [],
@@ -63,8 +65,8 @@ export const createCrudSlice: RemixSliceCreator<RemixCrudSlice> = (
     );
 
     // ── Phase 1 text swap ────────────────────────────────────────────
-    // Feed the PURGED config (effective cast only) — never the original config,
-    // so a text swap can't target a character dropped from the cast.
+    // Feed the PURGED config (swappable set only) — never the original config,
+    // so a text swap can't target a character outside the swap surface.
     const purgedConfig = payload.remix_config;
     const humansList = useHumansStore.getState().humans;
     const humansMap: Record<string, Human> = Object.fromEntries(
@@ -74,12 +76,21 @@ export const createCrudSlice: RemixSliceCreator<RemixCrudSlice> = (
       .filter((l) => l.is_enabled)
       .map((l) => l.code);
 
+    // actorKey → narrative role name (displaced default). In-memory only —
+    // text swap runs exactly once, at create (amend 2026-07-31).
+    const castingNameMap = buildCastingNameMap(
+      purgedConfig.story.presets,
+      castingAxes,
+      snapshotState.characters,
+    );
+
     const swap = applyTextSwap({
       illustration: payload.illustration,
       remixCharacters: payload.characters,
       configCharacters: purgedConfig.characters,
       enabledLanguages,
       humans: humansMap,
+      castingNameMap,
     });
 
     const finalPayload = { ...payload, illustration: swap.illustration };

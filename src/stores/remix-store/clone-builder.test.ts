@@ -1,12 +1,15 @@
 // clone-builder.test.ts — Unit tests for buildRemixClonePayload pure transform.
-// Reshape 2026-07-31 (linear remix + casting materialization + effective cast):
+// Reshape 2026-07-31 (linear remix + casting materialization + cast sets):
 //   - illustration is walked to a linear path; `sections` emits [], every
 //     `branch_setting` is stripped.
-//   - `characters[]` = effective cast (preset ⊗ book gate ⊗ snapshot keys), NOT
-//     the raw config-enabled set. Appearance-check is REMOVED — a displaced
-//     default actor is dropped even if a plain layer's tags still mention it.
+//   - `characters[]` = VISUAL cast roster (preset ⊗ snapshot keys, NO swap
+//     gate — amend 2026-07-31); the swap surface is the purged
+//     `remix_config.characters[]` (gate ∩ roster). Appearance-check is REMOVED —
+//     a displaced default actor is dropped even if a plain layer's tags still
+//     mention it.
 //   - `props: []` always; `remix_config.props` is never emitted.
-//   - `remix_config.voices` purged to narrator + effective-cast keys.
+//   - `remix_config.voices` carry VERBATIM — never purged by cast (voice ⊥
+//     visual swap ⊥ casting).
 // Crops are still filled by `computeCropSheets` in the INSERT path (one empty
 // batch skeleton here).
 
@@ -172,14 +175,14 @@ describe('buildRemixClonePayload — linear clone', () => {
   });
 });
 
-// ── effective cast (NO layer-content scan) ──────────────────────────────────────
+// ── cast sets (NO layer-content scan) ────────────────────────────────────────
 
 function makeAltStoryConfig(): RemixConfig {
   return makeConfig({ story: { presets: [{ axis_id: 'ax1', preset_id: 'p_alt' }], branches: [] } });
 }
 
-describe('buildRemixClonePayload — effective cast', () => {
-  it('characters[] = effective cast: displaced default actor (c1) dropped, chosen (c2) + untouched (c3) kept', () => {
+describe('buildRemixClonePayload — cast sets', () => {
+  it('characters[] = visual roster: displaced default actor (c1) dropped, chosen (c2) + untouched (c3) kept', () => {
     const r = build({
       characters: [makeChar('c1'), makeChar('c2'), makeChar('c3')],
       castingAxes: [makeAxis()],
@@ -209,12 +212,12 @@ describe('buildRemixClonePayload — effective cast', () => {
     ]);
   });
 
-  it('purges non-cast voices but always keeps narrator', () => {
+  it('voices carry VERBATIM — a visually re-cast role keeps its voice slot (no cast purge)', () => {
     const cfg = makeConfig({
       story: { presets: [{ axis_id: 'ax1', preset_id: 'p_alt' }], branches: [] },
       voices: [
         { key: 'narrator', name: 'Narrator', voice_id: null, is_enabled: true },
-        { key: 'c1', name: 'C1', voice_id: null, is_enabled: true },
+        { key: 'c1', name: 'C1', voice_id: null, is_enabled: true }, // displaced default — still speaks
         { key: 'c2', name: 'C2', voice_id: null, is_enabled: true },
         { key: 'c3', name: 'C3', voice_id: null, is_enabled: true },
       ],
@@ -224,10 +227,31 @@ describe('buildRemixClonePayload — effective cast', () => {
       castingAxes: [makeAxis()],
       config: cfg,
     });
-    expect(r.remix_config.voices.map((v) => v.key).sort()).toEqual(['c2', 'c3', 'narrator']);
+    expect(r.remix_config.voices.map((v) => v.key).sort()).toEqual(['c1', 'c2', 'c3', 'narrator']);
   });
 
-  it('purges remix_config.characters to the effective cast', () => {
+  it('cast-in actor NOT book-enabled: cloned into characters[] but purged from remix_config (F1)', () => {
+    const cfg = makeConfig({
+      story: { presets: [{ axis_id: 'ax1', preset_id: 'p_alt' }], branches: [] },
+      characters: [
+        { key: 'c2', human_id: null, visual: null, traits: [], base_image_url: null, is_enabled: true },
+        { key: 'c3', human_id: null, visual: null, traits: [], base_image_url: null, is_enabled: true },
+      ],
+    });
+    const r = build({
+      characters: [makeChar('c1'), makeChar('c2'), makeChar('c3')],
+      castingAxes: [makeAxis()],
+      config: cfg,
+      // c2 (the chosen actor) is NOT enabled in the book gate.
+      bookRemix: makeBookRemix(['c1', 'c3']),
+    });
+    // Roster is unGated — the materialized actor stays resolvable.
+    expect(r.characters.map((c) => c.key)).toEqual(['c2', 'c3']);
+    // Swap surface excludes it.
+    expect(r.remix_config.characters.map((c) => c.key)).toEqual(['c3']);
+  });
+
+  it('purges remix_config.characters to the swappable set', () => {
     const cfg = makeConfig({
       story: { presets: [{ axis_id: 'ax1', preset_id: 'p_alt' }], branches: [] },
       characters: [
@@ -263,14 +287,16 @@ describe('buildRemixClonePayload — effective cast', () => {
     expect(r.characters.map((c) => c.key)).toEqual(['c1', 'c2', 'c3']);
   });
 
-  it('respects the book gate: characters not enabled in bookRemix are excluded', () => {
+  it('book gate does NOT touch the roster: a book-disabled cast-in actor is still cloned (amend 2026-07-31)', () => {
     const r = build({
       characters: [makeChar('c1'), makeChar('c2'), makeChar('c3')],
       bookRemix: makeBookRemix(['c1', 'c3']), // c2 not enabled at book level
       castingAxes: [makeAxis()],
       config: makeAltStoryConfig(),
     });
-    // c1 displaced by c2, but c2 book-disabled → not added back; result = [c3].
-    expect(r.characters.map((c) => c.key)).toEqual(['c3']);
+    // c1 displaced by c2 → out of the VISUAL roster; c2 stays despite the gate
+    // (its image is materialized into the content — the gate only shapes the
+    // swap surface in remix_config.characters[]).
+    expect(r.characters.map((c) => c.key)).toEqual(['c2', 'c3']);
   });
 });

@@ -21,9 +21,10 @@ function splitToken(token: string): { objectKey: string; variantKey: string } | 
   return { objectKey: token.slice(0, slash), variantKey: token.slice(slash + 1) };
 }
 
-/** True when a lineup token references an ENABLED CHARACTER of the remix (the
- *  variant projection only ever contains enabled entities). Props / unknown
- *  keys → false (they don't gate the swap). */
+/** True when a lineup token references a SWAPPABLE CHARACTER of the remix —
+ *  the variant projection (`useRemixVariants`) only spans the swappable set
+ *  (`remix_config.characters[]` membership; amend 2026-07-31 — the roster
+ *  itself is wider). Props / unknown keys → false (they don't gate the swap). */
 export function isEnabledCharacterToken(
   token: string,
   entities: RemixVariantEntity[],

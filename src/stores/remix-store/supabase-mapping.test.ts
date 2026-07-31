@@ -97,3 +97,45 @@ describe('mapRowToRemix — legacy crops[] shim', () => {
     expect(remix.sprites).toEqual([]);
   });
 });
+
+// ── Legacy remix_config.characters seed (amend 2026-07-31) ────────────────────
+// Pre-amend rows hold the invariant roster == swappable; a config that
+// predates (or lost) `characters[]` reconstructs its swappable set from the
+// cloned roster so crop grouping / sprite scope don't collapse to ∅.
+
+describe('mapRowToRemix — legacy remix_config.characters seed', () => {
+  const roster = [
+    { key: 'c1', name: 'C1', variants: [] },
+    { key: 'c2', name: 'C2', variants: [] },
+  ];
+
+  it('null remix_config → characters seeded from the roster', () => {
+    const remix = mapRowToRemix(makeRawRow({ remix_config: null, characters: roster }));
+    expect(remix.remix_config.characters.map((c) => c.key)).toEqual(['c1', 'c2']);
+    expect(remix.remix_config.characters.every((c) => c.is_enabled)).toBe(true);
+  });
+
+  it('config missing the characters key → seeded from the roster', () => {
+    const remix = mapRowToRemix(
+      makeRawRow({ remix_config: { voices: [], languages: [] }, characters: roster }),
+    );
+    expect(remix.remix_config.characters.map((c) => c.key)).toEqual(['c1', 'c2']);
+  });
+
+  it('explicit [] (post-amend empty swappable set) is NOT reseeded', () => {
+    const remix = mapRowToRemix(
+      makeRawRow({ remix_config: { characters: [] }, characters: roster }),
+    );
+    expect(remix.remix_config.characters).toEqual([]);
+  });
+
+  it('present characters[] passes through untouched', () => {
+    const remix = mapRowToRemix(
+      makeRawRow({
+        remix_config: { characters: [{ key: 'c2', human_id: null, visual: null, traits: [], base_image_url: null, is_enabled: true }] },
+        characters: roster,
+      }),
+    );
+    expect(remix.remix_config.characters.map((c) => c.key)).toEqual(['c2']);
+  });
+});

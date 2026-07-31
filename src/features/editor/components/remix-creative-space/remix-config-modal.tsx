@@ -40,7 +40,7 @@ import type { BookRemix, RemixCharacterEntry } from '@/types/editor';
 import { REMIX_NAME_DEFAULT, type RemixConfig } from '@/types/remix';
 import type { RemixCharacterChoice } from '@/types/remix';
 import type { RemixLookupSources } from './hooks/use-remix-lookup-sources';
-import { effectiveCastKeys } from '@/features/remix/effective-cast';
+import { swappableCastKeys } from '@/features/remix/effective-cast';
 import { normalizeRemixConfig } from './remix-config-normalize';
 import {
   patchMemories,
@@ -117,10 +117,12 @@ export function RemixConfigModal({
     [bookRemix],
   );
 
-  // ── Effective cast (recompute when the chosen presets change) ───────────────
+  // ── Swappable cast — CAST tab rows (recompute when the chosen presets
+  // change). Swap surface only: a cast-in actor locked for swap gets no row but
+  // is still cloned into the remix content (visual roster). ─────────────────
   const castKeys = useMemo(
     () =>
-      effectiveCastKeys({
+      swappableCastKeys({
         storyPresets: draft.story.presets,
         castingAxes: lookups.castingAxes,
         bookRemix,

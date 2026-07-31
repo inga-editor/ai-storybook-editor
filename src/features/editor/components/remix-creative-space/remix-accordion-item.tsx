@@ -113,12 +113,17 @@ export function RemixAccordionItem({
   // not from an inventory row (Validation S1 — mixes[] are swap-config, not
   // inventory entities).
   const defaultSwapTarget = useMemo<Omit<SwapCropSheetTarget, 'remixId'> | null>(() => {
-    const c = remix.characters[0];
+    // ⚠️ Amend 2026-07-31: characters[] is the unGated visual roster — prefer
+    // the first SWAPPABLE character (has a remix_config entry) so the modal
+    // opens on an entity that can actually generate; roster-first fallback.
+    const swappable = new Set(remix.remix_config.characters.map((cc) => cc.key));
+    const c =
+      remix.characters.find((rc) => swappable.has(rc.key)) ?? remix.characters[0];
     if (c) return { type: 'character', key: c.key };
     const p = remix.props?.[0];
     if (p) return { type: 'prop', key: p.key };
     return null;
-  }, [remix.characters, remix.props]);
+  }, [remix.characters, remix.props, remix.remix_config.characters]);
 
   return (
     <div className="border-b">

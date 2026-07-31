@@ -121,6 +121,7 @@ interface BuildInputOpts {
   configCharacters?: RemixCharacterChoice[];
   humans?: Human[];
   enabledLanguages?: string[];
+  castingNameMap?: Record<string, string>;
 }
 
 function makeInput(opts: BuildInputOpts = {}): TextSwapInput {
@@ -130,6 +131,7 @@ function makeInput(opts: BuildInputOpts = {}): TextSwapInput {
     configCharacters: opts.configCharacters ?? [],
     enabledLanguages: opts.enabledLanguages ?? ['vi_VN'],
     humans: Object.fromEntries((opts.humans ?? []).map((h) => [h.id, h])),
+    castingNameMap: opts.castingNameMap ?? {},
   };
 }
 
@@ -212,6 +214,56 @@ describe('applyTextSwap', () => {
         enabledLanguages: ['zh_CN'],
       }));
       expect(result.warnings.some((w) => w.characterKey === 'c1' && w.kind !== 'no_op_swap')).toBe(false);
+    });
+  });
+
+  // ── Casting name map (amend 2026-07-31 — actor rows swap the ROLE name) ──
+
+  describe('castingNameMap source resolution', () => {
+    it('actor row swaps the displaced default NAME, not the actor name', () => {
+      // c3 (actor "Leo") plays the role of "Miu" — text mentions Miu only.
+      const r = applyTextSwap(makeInput({
+        spreads: [makeSpread('s1', [makeTextbox('tb1', { vi_VN: makeContent('Miu chạy đi.') })])],
+        remixCharacters: [makeRemixChar('c3', 'Leo')],
+        configCharacters: [makeConfigChar('c3', 'h1')],
+        humans: [makeHuman('h1', 'Sophie', { vi_VN: 'Sophie' })],
+        castingNameMap: { c3: 'Miu' },
+      }));
+      const tb = r.illustration.spreads[0].textboxes![0] as Record<string, SpreadTextboxContent>;
+      expect(tb.vi_VN.text).toBe('Sophie chạy đi.');
+      expect(r.matchCount).toBe(1);
+    });
+
+    it('emits duplicate_source when two entries resolve the same source (last write wins)', () => {
+      // c1 keeps its own name "Miu"; c3 plays the role of "Miu" via the map →
+      // both target source "Miu" with different humans.
+      const r = applyTextSwap(makeInput({
+        spreads: [makeSpread('s1', [makeTextbox('tb1', { vi_VN: makeContent('Miu chạy đi.') })])],
+        remixCharacters: [makeRemixChar('c1', 'Miu'), makeRemixChar('c3', 'Leo')],
+        configCharacters: [makeConfigChar('c1', 'h1'), makeConfigChar('c3', 'h2')],
+        humans: [
+          makeHuman('h1', 'Sophie', { vi_VN: 'Sophie' }),
+          makeHuman('h2', 'Bob', { vi_VN: 'Bob' }),
+        ],
+        castingNameMap: { c3: 'Miu' },
+      }));
+      expect(r.warnings).toContainEqual(
+        expect.objectContaining({ kind: 'duplicate_source', characterKey: 'c3', source: 'Miu' }),
+      );
+      const tb = r.illustration.spreads[0].textboxes![0] as Record<string, SpreadTextboxContent>;
+      expect(tb.vi_VN.text).toBe('Bob chạy đi.'); // last write (c3) wins
+    });
+
+    it('key absent from the map falls back to the character own name', () => {
+      const r = applyTextSwap(makeInput({
+        spreads: [makeSpread('s1', [makeTextbox('tb1', { vi_VN: makeContent('Miu chạy đi.') })])],
+        remixCharacters: [makeRemixChar('c1', 'Miu')],
+        configCharacters: [makeConfigChar('c1', 'h1')],
+        humans: [makeHuman('h1', 'Sophie', { vi_VN: 'Sophie' })],
+        castingNameMap: {},
+      }));
+      const tb = r.illustration.spreads[0].textboxes![0] as Record<string, SpreadTextboxContent>;
+      expect(tb.vi_VN.text).toBe('Sophie chạy đi.');
     });
   });
 

@@ -84,7 +84,8 @@ export function resolveEffectiveUrl(layer: TaggedLayer): string {
  * `objectKey = enabledTags[0].object_key` (primary subject) drives sheet
  * affinity in the layout engine. `tags[]` is the full enabled-subject list.
  *
- * @param remix  Remix row — `characters`/`props` define the enabled set + order;
+ * @param remix  Remix row — `remix_config.characters[]` (swappable set) gates
+ *               character membership, `characters`/`props` define the order;
  *               `illustration` is the frozen source of truth.
  */
 export function groupCropsForBatch(remix: Remix): GroupCropsResult {
@@ -94,9 +95,29 @@ export function groupCropsForBatch(remix: Remix): GroupCropsResult {
     spreadCount: remix.illustration.spreads.length,
   });
 
-  // Enabled keys + entity order (characters then props). The remix row only
-  // carries enabled entities, so membership = enabled.
-  const charKeys = remix.characters.map((c) => c.key);
+  // Enabled keys + entity order (characters then props).
+  // ⚠️ Amend 2026-07-31 (remixable ⊥ casting_slot): `characters[]` is the
+  // unGated VISUAL roster, so swap membership comes from the purged
+  // `remix_config.characters[]` (swappable set, key membership — the remixer's
+  // per-entry `is_enabled` gates swap execution, not grouping). Roster order is
+  // kept; a roster character without a config entry gets no crops. Props are
+  // legacy (row membership = enabled, new rows carry `[]`).
+  // Tolerance: a partial Remix view without `remix_config` falls back to the
+  // roster (legacy behavior — pre-amend rows had roster == swappable). Store-
+  // mapped rows never hit this (`readRemixConfig` seeds legacy configs from
+  // the roster at ingress).
+  const configChars = remix.remix_config?.characters;
+  if (!configChars) {
+    log.warn('groupCropsForBatch', 'remix view lacks remix_config — roster fallback', {
+      charCount: remix.characters.length,
+    });
+  }
+  const swappableCharKeys = new Set(
+    (configChars ?? remix.characters).map((c) => c.key),
+  );
+  const charKeys = remix.characters
+    .map((c) => c.key)
+    .filter((k) => swappableCharKeys.has(k));
   const propKeys = remix.props.map((p) => p.key);
   const enabledKeys = new Set<string>([...charKeys, ...propKeys]);
   const entityOrder = new Map<string, number>(

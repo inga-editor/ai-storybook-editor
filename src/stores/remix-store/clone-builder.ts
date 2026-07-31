@@ -15,7 +15,13 @@
 // is stale on createRemix). Reshape 2026-07-31: remix is LINEAR — branch
 // resolve-at-create walks the chosen path, emits `sections: []`, strips every
 // `branch_setting`; casted layers materialize the chosen actor media + rewrite
-// their subject tags; `characters[]` = effective cast; `props[]` = [].
+// their subject tags; `props[]` = [].
+//
+// ⚠️ Cast sets (amend 2026-07-31 — remixable ⊥ casting_slot):
+//   `characters[]` = VISUAL CAST ROSTER (no swap gate) so rewritten tags,
+//   filters and labels always resolve; the swap surface lives ONLY in the
+//   purged `remix_config.characters[]` (swappableKeys). Voices are NEVER purged
+//   by cast — casting is visual-only, a re-cast role still speaks.
 
 import type {
   BaseSpread,
@@ -41,7 +47,7 @@ import type {
 } from '@/types/remix';
 import { createLogger } from '@/utils/logger';
 import { newUuid } from '@/utils/uuid';
-import { effectiveCastKeys } from '@/features/remix/effective-cast';
+import { resolveRemixCastSets } from '@/features/remix/effective-cast';
 import { resolveRemixSpreadPath } from './clone/resolve-remix-spread-path';
 import {
   materializeCastedLayer,
@@ -235,23 +241,26 @@ export function buildRemixClonePayload(
 
   const illustration: RemixIllustration = { spreads, sections: [] };
 
-  // ── 3. Effective cast — preset ⊗ book gate ⊗ snapshot keys (NO tag scan) ───
+  // ── 3. Cast sets — preset ⊗ snapshot keys (⊗ book gate for swappable only) ─
   // ⚠️ Independent of layer content (the old layer-content check was removed
-  // 2026-07-31). Modal preview + this clone share the SAME `effectiveCastKeys`,
-  // so they can't drift.
+  // 2026-07-31). Modal preview + this clone share the SAME resolver, so they
+  // can't drift.
   const snapshotCharacterKeys = input.characters.map((c) => c.key);
-  const castKeys = new Set(
-    effectiveCastKeys({
-      storyPresets: config.story.presets,
-      castingAxes: input.castingAxes,
-      bookRemix: input.bookRemix,
-      snapshotCharacterKeys,
-    }),
-  );
+  const { visualCastKeys, swappableKeys } = resolveRemixCastSets({
+    storyPresets: config.story.presets,
+    castingAxes: input.castingAxes,
+    bookRemix: input.bookRemix,
+    snapshotCharacterKeys,
+  });
+  const rosterKeys = new Set(visualCastKeys);
+  const swappable = new Set(swappableKeys);
 
-  // ── 4. Clone characters to the effective cast + purge config ───────────────
+  // ── 4. Clone characters to the VISUAL roster + purge config to swappable ───
+  // Roster is unGated so rewritten tags / filters / labels always resolve —
+  // an actor cast in but locked for swap is cloned here yet gets no config
+  // entry (and therefore no crops/sprites/swap rows).
   const characters: RemixCharacter[] = input.characters
-    .filter((c) => castKeys.has(c.key))
+    .filter((c) => rosterKeys.has(c.key))
     // rev2: crops live on the batch (mixes[]), not on the entity. No
     // `visual_swap_url` base seed — the column is dead; the base variant's swap
     // reference is DERIVED from sprite finals client-side (`useRemixVariants`).
@@ -259,11 +268,11 @@ export function buildRemixClonePayload(
 
   const purgedConfig: RemixConfig = {
     ...config,
-    characters: config.characters.filter((c) => castKeys.has(c.key)),
-    // Keep the narrator voice slot always; drop voices for dropped characters.
-    voices: config.voices.filter(
-      (v) => v.key === 'narrator' || castKeys.has(v.key),
-    ),
+    characters: config.characters.filter((c) => swappable.has(c.key)),
+    // ⚠️ Voices carry verbatim — NEVER purged by cast (voice ⊥ visual swap ⊥
+    // casting): a visually re-cast role still speaks in the unchanged text, so
+    // its voice slot must survive. Seeding already applied the book voice gate.
+    voices: config.voices,
   };
   // Legacy — writer never emits `props` (props no longer remix-swappable).
   delete purgedConfig.props;
@@ -280,9 +289,10 @@ export function buildRemixClonePayload(
     truncatedByCap: path.truncatedByCap,
     castedLayerCount,
     materializedCount,
-    castKeyCount: castKeys.size,
+    visualCastCount: rosterKeys.size,
+    swappableCount: swappable.size,
     purgedCharacterCount: purgedConfig.characters.length,
-    purgedVoiceCount: purgedConfig.voices.length,
+    voiceCount: purgedConfig.voices.length,
     batchCount: mixes.length,
   });
 

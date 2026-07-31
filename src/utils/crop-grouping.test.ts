@@ -68,12 +68,21 @@ interface RemixOpts {
   charKeys?: string[];
   propKeys?: string[];
   spreads?: ReturnType<typeof spread>[];
+  /** Swappable set (remix_config.characters[] keys) — defaults to charKeys
+   *  (roster == swappable, the common case). Pass a subset to test the
+   *  roster ⊃ swappable split (amend 2026-07-31). */
+  swappableCharKeys?: string[];
 }
 function makeRemix(o: RemixOpts = {}): Remix {
   return {
     id: 'remix-1',
     characters: (o.charKeys ?? []).map((k) => ({ key: k, name: k, variants: [] })),
     props: (o.propKeys ?? []).map((k) => ({ key: k, name: k, variants: [] })),
+    remix_config: {
+      characters: (o.swappableCharKeys ?? o.charKeys ?? []).map((k) => ({
+        key: k, human_id: null, visual: null, traits: [], base_image_url: null, is_enabled: true,
+      })),
+    },
     illustration: { spreads: o.spreads ?? [], sections: [] },
   } as unknown as Remix;
 }
@@ -115,6 +124,23 @@ describe('groupCropsForBatch — image-only crop selection', () => {
       spreads: [spread({ id: 's1', pageNumber: 1, images: [img({ id: 'i1', tags: [tag('character', 'c1')], w: 0, h: 50 })] })],
     });
     expect(groupCropsForBatch(r).cropInputs).toEqual([]);
+  });
+
+  it('roster char WITHOUT a remix_config entry gets no crops (roster ⊃ swappable — amend 2026-07-31)', () => {
+    const r = makeRemix({
+      charKeys: ['c1', 'c2'], // c2 = cast-in actor locked for swap
+      swappableCharKeys: ['c1'],
+      spreads: [spread({
+        id: 's1',
+        pageNumber: 1,
+        images: [
+          img({ id: 'i1', tags: [tag('character', 'c1')] }),
+          img({ id: 'i2', tags: [tag('character', 'c2')] }),
+        ],
+      })],
+    });
+    const { cropInputs } = groupCropsForBatch(r);
+    expect(cropInputs.map((c) => c.id)).toEqual(['i1']);
   });
 });
 

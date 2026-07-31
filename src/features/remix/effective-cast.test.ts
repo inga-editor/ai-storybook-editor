@@ -1,11 +1,17 @@
-// effective-cast.test.ts — 1-export contract (no appearance-check / no tag scan).
-// Covers: default preset, preset change replacing the default actor
-// (UNCONDITIONAL drop), a newly-cast actor, an axis with no preset, a dangling
-// preset entry (→ default), a dangling ACTOR key (→ skip + still cast the rest),
-// and snapshot-order preservation.
+// effective-cast.test.ts — cast-sets contract (no appearance-check / no tag
+// scan). ⚠️ Amend 2026-07-31 (remixable ⊥ casting_slot): resolver returns TWO
+// sets — visualCastKeys (no gate) + swappableKeys (gate ∩ visual). Covers:
+// default preset, preset change replacing the default actor (UNCONDITIONAL
+// drop), a newly-cast actor, an axis with no preset, a dangling preset entry
+// (→ default), a dangling ACTOR key (→ skip + still cast the rest),
+// snapshot-order preservation, gate orthogonality, and the casting name map.
 
 import { describe, it, expect } from 'vitest';
-import { effectiveCastKeys } from './effective-cast';
+import {
+  resolveRemixCastSets,
+  swappableCastKeys,
+  buildCastingNameMap,
+} from './effective-cast';
 import type { CastingAxis } from '@/types/editor';
 import type { BookRemix } from '@/types/editor';
 import type { RemixPresetChoice } from '@/types/remix';
@@ -34,16 +40,20 @@ const axis: CastingAxis = {
 
 const base = { castingAxes: [axis], bookRemix, snapshotCharacterKeys };
 
-describe('effectiveCastKeys', () => {
-  it('default preset → all enabled snapshot chars, snapshot order', () => {
+describe('resolveRemixCastSets', () => {
+  it('default preset → all snapshot chars in both sets, snapshot order', () => {
     const presets: RemixPresetChoice[] = [{ axis_id: 'ax', preset_id: 'def' }];
-    expect(effectiveCastKeys({ ...base, storyPresets: presets })).toEqual(['c1', 'c2', 'c3']);
+    const sets = resolveRemixCastSets({ ...base, storyPresets: presets });
+    expect(sets.visualCastKeys).toEqual(['c1', 'c2', 'c3']);
+    expect(sets.swappableKeys).toEqual(['c1', 'c2', 'c3']);
   });
 
   it('alt preset replaces the default actor UNCONDITIONALLY (c1 dropped, c3 stays)', () => {
     const presets: RemixPresetChoice[] = [{ axis_id: 'ax', preset_id: 'alt' }];
     // c1 was the default actor for a1, now replaced by c3 → c1 removed; c3 already present.
-    expect(effectiveCastKeys({ ...base, storyPresets: presets })).toEqual(['c2', 'c3']);
+    const sets = resolveRemixCastSets({ ...base, storyPresets: presets });
+    expect(sets.visualCastKeys).toEqual(['c2', 'c3']);
+    expect(sets.swappableKeys).toEqual(['c2', 'c3']);
   });
 
   it('newly-cast actor (not a default anywhere) is added', () => {
@@ -58,22 +68,25 @@ describe('effectiveCastKeys', () => {
       ],
     };
     const presets: RemixPresetChoice[] = [{ axis_id: 'ax2', preset_id: 'a2' }];
-    expect(
-      effectiveCastKeys({ castingAxes: [axis2], bookRemix, snapshotCharacterKeys, storyPresets: presets }),
-    ).toEqual(['c1', 'c2', 'c3']);
+    const sets = resolveRemixCastSets({
+      castingAxes: [axis2], bookRemix, snapshotCharacterKeys, storyPresets: presets,
+    });
+    expect(sets.visualCastKeys).toEqual(['c1', 'c2', 'c3']);
   });
 
   it('axis with zero presets contributes nothing (no crash)', () => {
     const empty: CastingAxis = { id: 'e', name: 'E', actants: [], presets: [] };
-    expect(
-      effectiveCastKeys({ castingAxes: [empty], bookRemix, snapshotCharacterKeys, storyPresets: [] }),
-    ).toEqual(['c1', 'c2', 'c3']);
+    const sets = resolveRemixCastSets({
+      castingAxes: [empty], bookRemix, snapshotCharacterKeys, storyPresets: [],
+    });
+    expect(sets.visualCastKeys).toEqual(['c1', 'c2', 'c3']);
   });
 
   it('dangling preset entry (unknown preset_id) falls back to default', () => {
     const presets: RemixPresetChoice[] = [{ axis_id: 'ax', preset_id: 'ghost' }];
     // Falls back to default (casts c1) → same as default preset.
-    expect(effectiveCastKeys({ ...base, storyPresets: presets })).toEqual(['c1', 'c2', 'c3']);
+    expect(resolveRemixCastSets({ ...base, storyPresets: presets }).visualCastKeys)
+      .toEqual(['c1', 'c2', 'c3']);
   });
 
   it('dangling ACTOR key is skipped; remaining actors still cast', () => {
@@ -97,13 +110,15 @@ describe('effectiveCastKeys', () => {
       ],
     };
     const presets: RemixPresetChoice[] = [{ axis_id: 'axd', preset_id: 'pd' }];
-    // No crash; 'ghost' never enters the cast; enabled snapshot chars remain.
+    // No crash; 'ghost' never enters the cast; snapshot chars remain.
     expect(
-      effectiveCastKeys({ castingAxes: [axisDangling], bookRemix, snapshotCharacterKeys, storyPresets: presets }),
+      resolveRemixCastSets({
+        castingAxes: [axisDangling], bookRemix, snapshotCharacterKeys, storyPresets: presets,
+      }).visualCastKeys,
     ).toEqual(['c1', 'c2', 'c3']);
   });
 
-  it('only book-enabled characters survive (gate filter)', () => {
+  it('gate is ORTHOGONAL: disabled char leaves swappable but stays in the visual roster', () => {
     const gatedBook = {
       characters: [
         { key: 'c1', name: 'C1', is_enabled: true, traits: [] },
@@ -112,8 +127,59 @@ describe('effectiveCastKeys', () => {
       ],
     } as unknown as BookRemix;
     const presets: RemixPresetChoice[] = [{ axis_id: 'ax', preset_id: 'def' }];
-    expect(
-      effectiveCastKeys({ castingAxes: [axis], bookRemix: gatedBook, snapshotCharacterKeys, storyPresets: presets }),
-    ).toEqual(['c1', 'c3']);
+    const sets = resolveRemixCastSets({
+      castingAxes: [axis], bookRemix: gatedBook, snapshotCharacterKeys, storyPresets: presets,
+    });
+    expect(sets.visualCastKeys).toEqual(['c1', 'c2', 'c3']); // NO gate on the roster
+    expect(sets.swappableKeys).toEqual(['c1', 'c3']);
+  });
+
+  it('cast-in actor NOT book-enabled: in the roster, not swappable (F1 fix)', () => {
+    const gatedBook = {
+      characters: [
+        { key: 'c1', name: 'C1', is_enabled: true, traits: [] },
+        { key: 'c2', name: 'C2', is_enabled: true, traits: [] },
+        // c3 (the alt actor) has no enabled entry → not swappable.
+        { key: 'c3', name: 'C3', is_enabled: false, traits: [] },
+      ],
+    } as unknown as BookRemix;
+    const presets: RemixPresetChoice[] = [{ axis_id: 'ax', preset_id: 'alt' }];
+    const sets = resolveRemixCastSets({
+      castingAxes: [axis], bookRemix: gatedBook, snapshotCharacterKeys, storyPresets: presets,
+    });
+    expect(sets.visualCastKeys).toEqual(['c2', 'c3']); // c3 materialized into content
+    expect(sets.swappableKeys).toEqual(['c2']); // …but locked for swap
+  });
+});
+
+describe('swappableCastKeys', () => {
+  it('mirrors resolveRemixCastSets().swappableKeys', () => {
+    const presets: RemixPresetChoice[] = [{ axis_id: 'ax', preset_id: 'alt' }];
+    expect(swappableCastKeys({ ...base, storyPresets: presets })).toEqual(
+      resolveRemixCastSets({ ...base, storyPresets: presets }).swappableKeys,
+    );
+  });
+});
+
+describe('buildCastingNameMap', () => {
+  const snapshotCharacters = [
+    { key: 'c1', name: 'Miu' },
+    { key: 'c2', name: 'Didi' },
+    { key: 'c3', name: 'Leo' },
+  ];
+
+  it('maps the chosen actor to the displaced default actor NAME', () => {
+    const presets: RemixPresetChoice[] = [{ axis_id: 'ax', preset_id: 'alt' }];
+    expect(buildCastingNameMap(presets, [axis], snapshotCharacters)).toEqual({ c3: 'Miu' });
+  });
+
+  it('actant keeping its default produces no entry', () => {
+    const presets: RemixPresetChoice[] = [{ axis_id: 'ax', preset_id: 'def' }];
+    expect(buildCastingNameMap(presets, [axis], snapshotCharacters)).toEqual({});
+  });
+
+  it('displaced default missing from the snapshot is skipped (soft-fail)', () => {
+    const presets: RemixPresetChoice[] = [{ axis_id: 'ax', preset_id: 'alt' }];
+    expect(buildCastingNameMap(presets, [axis], [{ key: 'c3', name: 'Leo' }])).toEqual({});
   });
 });

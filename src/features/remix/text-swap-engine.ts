@@ -63,7 +63,10 @@ function buildSwapMap(
     const remixChar = remixByKey.get(cfg.key);
     if (!remixChar) continue; // orphan cfg — silent skip per spec §10.2
 
-    const source = (remixChar.name ?? '').trim();
+    // ⚠️ Amend 2026-07-31: a chosen actor plays a ROLE — the text uses the
+    // displaced default's name, so the map (actorKey → narrative name) wins;
+    // plain characters / kept defaults have no entry → their own name.
+    const source = (input.castingNameMap[cfg.key] ?? remixChar.name ?? '').trim();
     if (source === '') {
       warnings.push({ kind: 'empty_source_name', characterKey: cfg.key });
       continue;
@@ -98,7 +101,19 @@ function buildSwapMap(
         });
       }
 
-      (map[lang] ??= {})[source] = target;
+      const langMap = (map[lang] ??= {});
+      if (langMap[source] !== undefined && langMap[source] !== target) {
+        // Two config entries resolved the SAME source name (likelier since the
+        // casting name map re-keys role names) — last write wins, surfaced.
+        warnings.push({
+          kind: 'duplicate_source',
+          characterKey: cfg.key,
+          language: lang,
+          source,
+          target,
+        });
+      }
+      langMap[source] = target;
     }
   }
 

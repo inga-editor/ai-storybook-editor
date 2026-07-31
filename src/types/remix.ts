@@ -925,14 +925,17 @@ export interface StartStageJobParams {
 // remix illustration textbox text + audio chunk scripts. Pure function, no I/O.
 // Spec: ai-storybook-design/component/stores/remix-store.md §10.
 
-/** Warning kinds emitted during swap-map build / apply. 5 kinds —
- *  `short_source_name` dropped per Validation Session 1 (CJK 2-char names valid). */
+/** Warning kinds emitted during swap-map build / apply. 6 kinds —
+ *  `short_source_name` dropped per Validation Session 1 (CJK 2-char names valid);
+ *  `duplicate_source` added 2026-07-31 (castingNameMap can re-key a role name
+ *  onto an actor, colliding with another entry's source — last write wins). */
 export type TextSwapWarningKind =
   | 'no_human_picked'
   | 'stale_human_fk'
   | 'missing_display_name'
   | 'no_op_swap'
-  | 'empty_source_name';
+  | 'empty_source_name'
+  | 'duplicate_source';
 
 export interface TextSwapWarning {
   kind: TextSwapWarningKind;
@@ -948,6 +951,11 @@ export interface TextSwapInput {
   configCharacters: RemixCharacterChoice[];
   enabledLanguages: string[];
   humans: Record<string, Human>;
+  /** actorKey → NARRATIVE name of the role it plays (the displaced default
+   *  actor's name). Casting only changes visuals — the text still uses the
+   *  role's original name, so an actor row's swap source comes from here.
+   *  Keys absent from the map fall back to the character's own name. */
+  castingNameMap: Record<string, string>;
 }
 
 export interface TextSwapResult {

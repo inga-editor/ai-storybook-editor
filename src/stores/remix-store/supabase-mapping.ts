@@ -4,6 +4,7 @@
 import type {
   Remix,
   RemixCharacter,
+  RemixCharacterChoice,
   RemixConfig,
   RemixIllustration,
   RemixMemoriesConfig,
@@ -51,6 +52,24 @@ const EMPTY_CONFIG: RemixConfig = {
   languages: [],
 };
 
+/** Legacy seed — pre-amend rows hold the invariant roster == swappable, so a
+ *  config that predates (or lost) `characters[]` reconstructs its swappable
+ *  set from the cloned roster. Keeps `remix_config.characters[]` the single
+ *  swap-surface authority (crop grouping, sprite scope) without starving
+ *  legacy rows of every character crop. */
+function seedLegacyCharacterChoices(
+  roster: RemixCharacter[],
+): RemixCharacterChoice[] {
+  return roster.map((c) => ({
+    key: c.key,
+    human_id: null,
+    visual: null,
+    traits: [], // readers tolerate missing entries → enabled
+    base_image_url: null,
+    is_enabled: true,
+  }));
+}
+
 /**
  * Read-time tolerance for pre-2026-07-31 `remix_config` rows. The 4-tab reshape
  * (RemixConfigModal) ADDED required `story` + `memories`; legacy rows omit both.
@@ -58,24 +77,42 @@ const EMPTY_CONFIG: RemixConfig = {
  * full `RemixConfig` shape and never has to `?? default` its own reads.
  * `props` is intentionally NOT coerced — it stays optional/deprecated (new rows
  * never emit it; consumers read via `?? []`).
+ * `rosterCharacters` (amend 2026-07-31): when `characters` is ABSENT (legacy /
+ * invalid config) it is seeded from the row's roster — see
+ * `seedLegacyCharacterChoices`. An explicit `[]` is a legitimate post-amend
+ * value (empty swappable set) and is NOT reseeded.
  */
-export function readRemixConfig(raw: unknown): RemixConfig {
+export function readRemixConfig(
+  raw: unknown,
+  rosterCharacters: RemixCharacter[] = [],
+): RemixConfig {
   if (!raw || typeof raw !== 'object') {
-    log.warn('readRemixConfig', 'missing/invalid remix_config, using EMPTY', {});
-    return EMPTY_CONFIG;
+    log.warn('readRemixConfig', 'missing/invalid remix_config, using EMPTY + roster-seeded characters', {
+      rosterCount: rosterCharacters.length,
+    });
+    return {
+      ...EMPTY_CONFIG,
+      characters: seedLegacyCharacterChoices(rosterCharacters),
+    };
   }
   const cfg = raw as Partial<RemixConfig>;
   const coercedStory = !cfg.story;
   const coercedMemories = !cfg.memories;
+  const coercedCharacters = cfg.characters === undefined;
   if (coercedStory || coercedMemories) {
     log.debug('readRemixConfig', 'coerced legacy config field(s)', {
       coercedStory,
       coercedMemories,
     });
   }
+  if (coercedCharacters) {
+    log.warn('readRemixConfig', 'legacy config without characters — seeded from roster', {
+      rosterCount: rosterCharacters.length,
+    });
+  }
   return {
     story: cfg.story ?? EMPTY_STORY,
-    characters: cfg.characters ?? [],
+    characters: cfg.characters ?? seedLegacyCharacterChoices(rosterCharacters),
     memories: cfg.memories ?? EMPTY_MEMORIES,
     voices: cfg.voices ?? [],
     languages: cfg.languages ?? [],
@@ -115,13 +152,14 @@ function normalizeLegacyCropSheets<T>(rows: unknown, column: string): T[] {
 }
 
 export function mapRowToRemix(row: RawRemixRow): Remix {
+  const characters = (row.characters as RemixCharacter[] | null) ?? [];
   return {
     id: row.id,
     snapshot_id: row.snapshot_id,
     name: row.name ?? 'New Remix',
-    remix_config: readRemixConfig(row.remix_config),
+    remix_config: readRemixConfig(row.remix_config, characters),
     illustration: (row.illustration as RemixIllustration | null) ?? EMPTY_ILLUSTRATION,
-    characters: (row.characters as RemixCharacter[] | null) ?? [],
+    characters,
     props: (row.props as RemixProp[] | null) ?? [],
     mixes: normalizeLegacyCropSheets<RemixMix>(row.mixes, 'mixes'),
     // Stage 2/3 pipeline columns (⚡2026-06-12) — additive JSONB; legacy rows

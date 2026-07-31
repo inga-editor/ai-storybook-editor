@@ -1,7 +1,15 @@
-// effective-cast.ts — Pure computation of a remix's EFFECTIVE character cast
-// given the chosen casting presets. SHARED by the RemixConfigModal (CAST tab
-// rows) and the createRemix clone pipeline — ONE export (`effectiveCastKeys`),
-// so modal preview and clone can never drift.
+// effective-cast.ts — Pure computation of a remix's cast sets given the chosen
+// casting presets. SHARED by the RemixConfigModal (CAST tab rows) and the
+// createRemix clone pipeline — ONE resolver (`resolveRemixCastSets`), so modal
+// preview and clone can never drift.
+//
+// ⚠️ Remixable ⊥ casting_slot (amend 2026-07-31): the swap gate
+// (`book.remix.characters[].is_enabled`) and casting are ORTHOGONAL axes, so
+// the resolver returns TWO sets:
+//   - visualCastKeys: who is visually present after casting (NO gate) — clones
+//     `remixes.characters[]` (the content roster; tags/filters always resolve).
+//   - swappableKeys:  enabledKeys ∩ visualCastKeys — the swap surface (CAST tab
+//     rows, `remix_config.characters[]` purge, crop grouping, sprite seed).
 //
 // ⚠️ NO appearance-check (chốt 2026-07-31). The design's old "scan plain-layer
 // tags before dropping a replaced default actor" mechanism is REMOVED: an item's
@@ -92,7 +100,7 @@ export function collectCastActors(
   return { chosenActors, replacedDefaults };
 }
 
-export interface EffectiveCastInput {
+export interface RemixCastSetsInput {
   storyPresets: RemixPresetChoice[];
   castingAxes: CastingAxis[];
   bookRemix: BookRemix;
@@ -100,14 +108,23 @@ export interface EffectiveCastInput {
   snapshotCharacterKeys: string[];
 }
 
+export interface RemixCastSets {
+  /** Visual content roster — who is depicted after casting, NO swap gate.
+   *  Clones `remixes.characters[]`. Snapshot order, deduped. */
+  visualCastKeys: string[];
+  /** `enabledKeys ∩ visualCastKeys` — the swap surface (CAST tab rows,
+   *  `remix_config.characters[]` purge, crop grouping, sprite seed). */
+  swappableKeys: string[];
+}
+
 /**
- * The effective character cast for a remix: the book-enabled characters that
- * survive the chosen presets, in `snapshot.characters[]` order (dedupe natural).
+ * Resolve both cast sets for a remix, in `snapshot.characters[]` order
+ * (dedupe natural).
  *
- * candidate = (snapshotKeys − replacedDefaults) ∪ chosenActors
- * result    = snapshotKeys.filter(k => enabled(k) ∧ candidate(k))
+ * visual    = (snapshotKeys − replacedDefaults) ∪ chosenActors
+ * swappable = visual.filter(enabled)
  */
-export function effectiveCastKeys(input: EffectiveCastInput): string[] {
+export function resolveRemixCastSets(input: RemixCastSetsInput): RemixCastSets {
   const { storyPresets, castingAxes, bookRemix, snapshotCharacterKeys } = input;
   const enabled = new Set(
     bookRemix.characters.filter((c) => c.is_enabled).map((c) => c.key),
@@ -120,15 +137,71 @@ export function effectiveCastKeys(input: EffectiveCastInput): string[] {
   const replaced = new Set(replacedDefaults);
   const chosen = new Set(chosenActors);
   // Iterate snapshot order → preserves order + dedupes (each key appears once).
-  const keys = snapshotCharacterKeys.filter(
-    (k) => enabled.has(k) && (!replaced.has(k) || chosen.has(k)),
+  const visualCastKeys = snapshotCharacterKeys.filter(
+    (k) => !replaced.has(k) || chosen.has(k),
   );
-  log.debug('effectiveCastKeys', 'computed', {
+  const swappableKeys = visualCastKeys.filter((k) => enabled.has(k));
+  log.debug('resolveRemixCastSets', 'computed', {
     axisCount: castingAxes.length,
     enabledCount: enabled.size,
     chosenCount: chosen.size,
     replacedCount: replaced.size,
-    resultCount: keys.length,
+    visualCount: visualCastKeys.length,
+    swappableCount: swappableKeys.length,
   });
-  return keys;
+  return { visualCastKeys, swappableKeys };
+}
+
+/** Convenience for the modal (CAST tab rows) — swap surface only. */
+export function swappableCastKeys(input: RemixCastSetsInput): string[] {
+  return resolveRemixCastSets(input).swappableKeys;
+}
+
+/**
+ * Map each chosen actor key to the NARRATIVE name of the role it plays — the
+ * name of the default actor it displaced. Casting only changes visuals, so the
+ * story text still uses the displaced default's name; the text-swap engine uses
+ * this map to pick the correct swap source for an actor row. Actants that keep
+ * their default actor produce no entry (source = the character's own name).
+ * Computed in-memory at create time — never persisted (text swap runs once).
+ */
+export function buildCastingNameMap(
+  storyPresets: RemixPresetChoice[],
+  castingAxes: CastingAxis[],
+  snapshotCharacters: ReadonlyArray<{ key: string; name: string }>,
+): Record<string, string> {
+  const nameByKey = new Map(snapshotCharacters.map((c) => [c.key, c.name]));
+  const map: Record<string, string> = {};
+  for (const axis of castingAxes) {
+    const chosenPreset = resolvePresetForAxis(axis, storyPresets);
+    if (!chosenPreset) continue;
+    const def = resolveDefaultPreset(axis);
+    for (const cast of chosenPreset.actants) {
+      if (cast.actor_type !== ACTOR_TYPE_CHARACTER) continue;
+      const defCast = def?.actants.find((a) => a.actant_id === cast.actant_id);
+      if (!defCast || defCast.actor_id === cast.actor_id) continue;
+      const narrativeName = nameByKey.get(defCast.actor_id);
+      if (!narrativeName) {
+        log.warn('buildCastingNameMap', 'displaced default has no snapshot entry — skipped', {
+          axisId: axis.id,
+          actantId: cast.actant_id,
+          defaultActorId: defCast.actor_id,
+        });
+        continue;
+      }
+      if (map[cast.actor_id] && map[cast.actor_id] !== narrativeName) {
+        log.warn('buildCastingNameMap', 'actor cast into multiple roles — last write wins', {
+          actorId: cast.actor_id,
+          kept: narrativeName,
+          dropped: map[cast.actor_id],
+        });
+      }
+      map[cast.actor_id] = narrativeName;
+    }
+  }
+  log.debug('buildCastingNameMap', 'built', {
+    axisCount: castingAxes.length,
+    entryCount: Object.keys(map).length,
+  });
+  return map;
 }

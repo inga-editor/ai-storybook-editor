@@ -218,7 +218,16 @@ export const useRemixVariants = (
       finalsMap.set(`${f.type}/${f.object_key}/${f.variant_key}`, f.media_url);
     }
     const out: RemixVariantEntity[] = [];
+    // ⚠️ Amend 2026-07-31 (remixable ⊥ casting_slot): `characters[]` is the
+    // unGated VISUAL roster — the swap projection only spans the swappable set
+    // (`remix_config.characters[]` KEY membership; the remixer's `is_enabled`
+    // is intentionally ignored, parity with crop grouping, so batch gating
+    // still sees remixer-disabled entries referenced by lineup tokens).
+    const swappableKeys = new Set(
+      remix.remix_config.characters.map((c) => c.key),
+    );
     for (const c of remix.characters) {
+      if (!swappableKeys.has(c.key)) continue;
       out.push({
         type: 'character',
         key: c.key,
