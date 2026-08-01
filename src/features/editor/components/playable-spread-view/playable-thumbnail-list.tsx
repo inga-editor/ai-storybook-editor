@@ -13,7 +13,8 @@ import {
   EditableAutoAudio,
 } from "../shared-components";
 import { getTextboxContentForLanguage } from "../../utils/textbox-helpers";
-import { useNarrationLanguage } from "@/stores/animation-playback-store";
+import { useNarrationLanguage, usePlayEdition } from "@/stores/animation-playback-store";
+import { resolveAutoPicDisplaySource } from "./resolve-auto-pic-display-source";
 import { useCanvasWidth, useCanvasAspectRatio } from "@/stores/editor-settings-store";
 import { LAYER_CONFIG, Z_INDEX } from "@/constants/spread-constants";
 import type { PlayableSpread } from "@/types/playable-types";
@@ -56,6 +57,7 @@ const PlayableThumbnail = React.memo(function PlayableThumbnail({
   onClick,
 }: PlayableThumbnailProps) {
   const narrationLangCode = useNarrationLanguage();
+  const playEdition = usePlayEdition();
   const canvasWidth = useCanvasWidth();
   const canvasAspectRatio = useCanvasAspectRatio();
   const canvasHeight = canvasWidth / canvasAspectRatio;
@@ -197,9 +199,13 @@ const PlayableThumbnail = React.memo(function PlayableThumbnail({
             );
           })}
 
-          {/* Auto Pics (thumbnail - auto-loop) */}
+          {/* Auto Pics (thumbnail - auto-loop). Thumbnails are ALWAYS author
+              context ⇒ classic missing-static shows a mini placeholder (never
+              skipped). Empty (dynamic, no media_url) → skip, as before. */}
           {spread.auto_pics?.map((autoPic, idx) => {
             if (autoPic.player_visible === false) return null;
+            const source = resolveAutoPicDisplaySource(autoPic, playEdition);
+            if (source.mode === "empty") return null;
             return (
               <EditableAutoPic
                 key={autoPic.id || idx}
@@ -209,6 +215,7 @@ const PlayableThumbnail = React.memo(function PlayableThumbnail({
                 isSelected={false}
                 isEditable={false}
                 isThumbnail={true}
+                displaySource={source}
                 onSelect={() => {}}
               />
             );

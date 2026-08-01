@@ -546,13 +546,14 @@ export const PlayerCanvas = forwardRef<PlayerCanvasHandle, PlayerCanvasProps>(fu
           onSelect={() => {}}
         />
       ),
-      autoPic: (autoPic, index, zIndex) => (
+      autoPic: (autoPic, index, zIndex, source) => (
         <EditableAutoPic
           autoPic={autoPic}
           index={index}
           zIndex={zIndex}
           isSelected={false}
           isEditable={false}
+          displaySource={source}
           onSelect={() => {}}
         />
       ),
@@ -601,6 +602,9 @@ export const PlayerCanvas = forwardRef<PlayerCanvasHandle, PlayerCanvasProps>(fu
         />
       ),
     }),
+    // No playEdition dep: the autoPic leaf is edition-aware purely via the
+    // `source` argument the stage computes (the stage re-renders on edition
+    // change and passes a fresh source), so the renderer closure never reads it.
     [spread]
   );
 
@@ -695,6 +699,7 @@ export const PlayerCanvas = forwardRef<PlayerCanvasHandle, PlayerCanvasProps>(fu
               renderers={liveRenderers}
               getItemInteractivity={getItemInteractivity}
               pageNumbering={pageNumbering}
+              showAuthoringHints={!isSharePreview}
             />
           </div>
         </div>

@@ -47,7 +47,7 @@ function stubRenderers(tag: string): StageItemRenderers {
     image: (i, _x, z) => leaf("image", i.geometry, z),
     shape: (s, _x, z) => leaf("shape", s.geometry, z),
     video: (v, _x, z) => leaf("video", v.geometry, z),
-    autoPic: (a, _x, z) => leaf("autoPic", a.geometry, z),
+    autoPic: (a, _x, z, _source) => leaf("autoPic", a.geometry, z),
     audio: () => null,
     quiz: () => null,
     autoAudio: () => null,
@@ -145,5 +145,99 @@ describe("PlayerSpreadStage parity gate", () => {
     const withIx = normalize(renderStage("A", liveInteractivity));
     const without = normalize(renderStage("A", undefined));
     expect(withIx).toBe(without);
+  });
+});
+
+// ── classic auto_pic display-source gating (Phase 02) ───────────────────────
+// showAuthoringHints controls whether a classic auto_pic with no static_image
+// renders a placeholder (authoring/live) or is skipped entirely (share/print
+// parity artifact). A classic auto_pic WITH static_image always renders and the
+// leaf renderer must receive `source.mode === 'static'`.
+describe("PlayerSpreadStage — classic auto_pic display-source gating", () => {
+  function buildClassicFixture(autoPicOverride: Record<string, unknown>): PlayableSpread {
+    const ra = createReadAlongSpread();
+    return {
+      id: "classic-fixture",
+      pages: ra.pages,
+      images: [],
+      shapes: [],
+      videos: [],
+      auto_pics: [
+        {
+          id: "pic-classic",
+          geometry: { x: 10, y: 10, w: 10, h: 10 },
+          player_visible: true,
+          "z-index": 100,
+          ...autoPicOverride,
+        },
+      ],
+      audios: [],
+      quizzes: [],
+      textboxes: [],
+      composites: [],
+      auto_audios: [],
+      animations: [],
+      manuscript: "classic-fixture",
+    } as unknown as PlayableSpread;
+  }
+
+  function renderClassic(
+    spread: PlayableSpread,
+    showAuthoringHints: boolean,
+    onAutoPic: (source: unknown) => void
+  ) {
+    const renderers: StageItemRenderers = {
+      page: () => null,
+      image: () => null,
+      shape: () => null,
+      video: () => null,
+      autoPic: (_a, _x, _z, source) => {
+        onAutoPic(source);
+        return <div data-leaf="autoPic" />;
+      },
+      audio: () => null,
+      quiz: () => null,
+      autoAudio: () => null,
+      textbox: () => null,
+    };
+    return renderToStaticMarkup(
+      <PlayerSpreadStage
+        spread={spread}
+        narrationLangCode="en_US"
+        playEdition="classic"
+        registerRef={noopRegister}
+        renderers={renderers}
+        showAuthoringHints={showAuthoringHints}
+      />
+    );
+  }
+
+  it("classic + missing static + showAuthoringHints=false ⇒ item absent", () => {
+    const spread = buildClassicFixture({ media_url: "http://x/animated.webp" }); // no static_image
+    const calls: unknown[] = [];
+    const html = renderClassic(spread, false, (s) => calls.push(s));
+    expect(html).not.toContain('data-item-id="pic-classic"');
+    expect(calls).toHaveLength(0);
+  });
+
+  it("classic + missing static + showAuthoringHints=true ⇒ item present (placeholder fallthrough)", () => {
+    const spread = buildClassicFixture({ media_url: "http://x/animated.webp" }); // no static_image
+    const calls: unknown[] = [];
+    const html = renderClassic(spread, true, (s) => calls.push(s));
+    expect(html).toContain('data-item-id="pic-classic"');
+    expect(calls).toEqual([{ mode: "missing-static" }]);
+  });
+
+  it("classic + has static_image ⇒ item present, renderer receives source.mode==='static'", () => {
+    const spread = buildClassicFixture({
+      media_url: "http://x/animated.webp",
+      static_image: {
+        illustrations: [{ media_url: "http://x/static.png", is_selected: true, created_time: "t" }],
+      },
+    });
+    const calls: Array<{ mode: string }> = [];
+    const html = renderClassic(spread, false, (s) => calls.push(s as { mode: string }));
+    expect(html).toContain('data-item-id="pic-classic"');
+    expect(calls).toEqual([{ mode: "static", url: "http://x/static.png" }]);
   });
 });

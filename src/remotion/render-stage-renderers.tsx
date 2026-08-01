@@ -197,21 +197,34 @@ export function createRenderStageRenderers(
       );
     },
 
-    autoPic: (autoPic, _index, zIndex) => {
-      const url = autoPic.media_url?.toLowerCase().split("?")[0] ?? "";
+    autoPic: (autoPic, _index, zIndex, source) => {
+      // 'static' (classic) → deterministic <Img pauseWhenLoading>, no animated
+      //   runtime. 'animated' → lottie / <Img> as before, driven by source.url.
+      //   'missing-static' | 'empty' → null (stage already skips; safety net).
+      if (source.mode === "static") {
+        return (
+          <div data-base-opacity={1} style={{ ...geoStyle(autoPic.geometry), zIndex: zIndex ?? 210 }}>
+            <Img
+              src={source.url}
+              pauseWhenLoading
+              style={{ width: "100%", height: "100%", objectFit: "contain" }}
+            />
+          </div>
+        );
+      }
+      if (source.mode !== "animated") return null;
+      const url = source.url.toLowerCase().split("?")[0];
       const isLottie = url.endsWith(".lottie");
       return (
         <div data-base-opacity={1} style={{ ...geoStyle(autoPic.geometry), zIndex: zIndex ?? 210 }}>
-          {autoPic.media_url ? (
-            isLottie ? (
-              <DotLottiePlayer src={autoPic.media_url} options={autoPic.lottie} />
-            ) : (
-              <Img
-                src={autoPic.media_url}
-                style={{ width: "100%", height: "100%", objectFit: "contain" }}
-              />
-            )
-          ) : null}
+          {isLottie ? (
+            <DotLottiePlayer src={source.url} options={autoPic.lottie} />
+          ) : (
+            <Img
+              src={source.url}
+              style={{ width: "100%", height: "100%", objectFit: "contain" }}
+            />
+          )}
         </div>
       );
     },

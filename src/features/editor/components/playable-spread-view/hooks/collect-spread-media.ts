@@ -6,9 +6,10 @@
 // Auto-pic kind classification by URL extension:
 //   .webp → image, .webm → video metadata, .lottie/.riv → binary fetch.
 
-import type { PlayableSpread } from '@/types/playable-types';
+import type { PlayableSpread, PlayEdition } from '@/types/playable-types';
 import type { SpreadTextboxContent } from '@/types/spread-types';
 import { EFFECT_TYPE } from '@/constants/playable-constants';
+import { resolveEffectiveStaticUrl } from '@/features/editor/components/playable-spread-view/resolve-auto-pic-display-source';
 import { getTextboxContentForLanguage } from '@/features/editor/utils/textbox-helpers';
 import { createLogger } from '@/utils/logger';
 import type { AudioChannel } from '@/features/editor/components/playable-spread-view/audio/audio-mixer-types';
@@ -63,6 +64,7 @@ export function collectSpreadMedia(
   spread: PlayableSpread | undefined,
   narrationLangCode: string,
   quizLangCode: string,
+  playEdition: PlayEdition,
 ): MediaItem[] {
   if (!spread) return [];
   const items: MediaItem[] = [];
@@ -81,8 +83,17 @@ export function collectSpreadMedia(
     pushIfUrl(img.media_url, 'image');
   }
 
-  // Auto-pics: classify by extension
+  // Auto-pics: edition-aware.
+  //   classic → preload the effective STATIC url only (never the animated
+  //             media_url — classic never renders it, saves bandwidth).
+  //   dynamic/interactive → classify the animated media_url by extension.
   for (const ap of spread.auto_pics ?? []) {
+    if (playEdition === 'classic') {
+      const staticUrl = resolveEffectiveStaticUrl(ap.static_image);
+      if (staticUrl) pushIfUrl(staticUrl, 'auto_pic_img');
+      // classic never preloads the animated file — always continue.
+      continue;
+    }
     if (!ap.media_url) continue;
     const kind = classifyAutoPicExt(ap.media_url);
     if (kind) {

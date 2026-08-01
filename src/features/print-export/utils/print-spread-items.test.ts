@@ -1,7 +1,9 @@
 // print-spread-items.test.ts — Unit tests for the static print item-filter rules.
 import { describe, it, expect } from "vitest";
 import {
+  autoPicAsStaticImage,
   resolvePrintTextboxes,
+  shouldRenderPrintAutoPic,
   shouldRenderPrintImage,
   shouldRenderPrintShape,
 } from "./print-spread-items";
@@ -24,6 +26,23 @@ function img(over: Record<string, unknown> = {}) {
 
 function shape(over: Record<string, unknown> = {}) {
   return { id: "shp-1", geometry: inStaging, ...over } as never;
+}
+
+function autoPic(over: Record<string, unknown> = {}) {
+  return {
+    id: "ap-1",
+    geometry: inStaging,
+    "z-index": 10,
+    player_visible: true,
+    editor_visible: true,
+    // Animated file present but MUST never leak into the print item — only
+    // static_image drives the print URL resolve chain.
+    media_url: "https://example.test/animated.webp",
+    static_image: {
+      illustrations: [{ media_url: "https://example.test/static.png", is_selected: true, created_time: "t" }],
+    },
+    ...over,
+  } as never;
 }
 
 describe("shouldRenderPrintImage", () => {
@@ -96,6 +115,62 @@ describe("shouldRenderPrintShape", () => {
 
   it("skips shapes outside staging", () => {
     expect(shouldRenderPrintShape(shape({ geometry: offStaging }))).toBe(false);
+  });
+});
+
+describe("shouldRenderPrintAutoPic", () => {
+  it("renders when static_image resolves an effective URL", () => {
+    expect(shouldRenderPrintAutoPic(autoPic(), undefined, emptyCtx)).toBe(true);
+  });
+
+  it("skips when static_image is missing (no fallback to animated media_url)", () => {
+    expect(
+      shouldRenderPrintAutoPic(autoPic({ static_image: undefined }), undefined, emptyCtx)
+    ).toBe(false);
+  });
+
+  it("skips when static_image.illustrations is empty", () => {
+    expect(
+      shouldRenderPrintAutoPic(
+        autoPic({ static_image: { illustrations: [] } }),
+        undefined,
+        emptyCtx
+      )
+    ).toBe(false);
+  });
+
+  it("skips player_visible === false (hidden)", () => {
+    expect(shouldRenderPrintAutoPic(autoPic({ player_visible: false }), undefined, emptyCtx)).toBe(false);
+  });
+
+  it("skips fully outside staging", () => {
+    expect(shouldRenderPrintAutoPic(autoPic({ geometry: offStaging }), undefined, emptyCtx)).toBe(false);
+  });
+
+  it("skips an off-edition composite variant (in a composite but absent from ctx map)", () => {
+    const composites = [{ id: "c1", variants: [{ id: "ap-1" }] }] as never;
+    expect(shouldRenderPrintAutoPic(autoPic(), composites, emptyCtx)).toBe(false);
+  });
+});
+
+describe("autoPicAsStaticImage", () => {
+  it("wraps the effective static illustrations/final_hires and clears media_url", () => {
+    const illustrations = [{ media_url: "https://example.test/static.png", is_selected: true, created_time: "t" }];
+    const ap = autoPic({
+      static_image: { illustrations, final_hires_media_url: "https://example.test/hires.png" },
+    });
+    const wrapped = autoPicAsStaticImage(ap);
+    expect(wrapped.media_url).toBeUndefined();
+    expect(wrapped.illustrations).toEqual(illustrations);
+    expect(wrapped.final_hires_media_url).toBe("https://example.test/hires.png");
+    expect(wrapped.id).toBe("ap-1");
+  });
+
+  it("defaults to an empty illustrations array when static_image is absent", () => {
+    const wrapped = autoPicAsStaticImage(autoPic({ static_image: undefined }));
+    expect(wrapped.media_url).toBeUndefined();
+    expect(wrapped.illustrations).toEqual([]);
+    expect(wrapped.final_hires_media_url).toBeUndefined();
   });
 });
 

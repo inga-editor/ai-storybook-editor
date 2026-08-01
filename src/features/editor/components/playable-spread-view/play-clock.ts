@@ -16,6 +16,7 @@ import type {
   SpreadTextboxContent,
   WordTiming,
 } from "@/types/spread-types";
+import type { AutoPicDisplaySource } from "./resolve-auto-pic-display-source";
 
 // LinearStep / LinearTimeline are owned by linearize-spread-timeline.ts (the
 // analytic model); re-exported here so consumers import the whole seam from one
@@ -81,7 +82,15 @@ export interface StageItemRenderers {
   image: (image: ImageItem, index: number, zIndex: number) => React.ReactNode;
   shape: (shape: ShapeItem, index: number, zIndex: number | undefined) => React.ReactNode;
   video: (video: VideoItem, index: number, zIndex: number | undefined) => React.ReactNode;
-  autoPic: (autoPic: AutoPicItem, index: number, zIndex: number) => React.ReactNode;
+  /** `source` (⚡2026-08-01) = edition-resolved display mode. Stage computes it
+   *  (already used it to decide skip) and passes it down so the leaf renderer
+   *  need not re-resolve edition: 'static' → <img>/<Img>, 'animated' → runtime. */
+  autoPic: (
+    autoPic: AutoPicItem,
+    index: number,
+    zIndex: number,
+    source: AutoPicDisplaySource
+  ) => React.ReactNode;
   audio: (audio: AudioItem, index: number, zIndex: number | undefined) => React.ReactNode;
   quiz: (quiz: QuizItem, index: number, zIndex: number | undefined) => React.ReactNode;
   textbox: (

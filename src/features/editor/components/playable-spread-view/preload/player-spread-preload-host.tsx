@@ -13,6 +13,7 @@ import type { PlayableSpread } from '@/types/playable-types';
 import {
   useNarrationLanguage,
   useQuizLanguage,
+  usePlayEdition,
 } from '@/stores/animation-playback-store';
 import { usePlayerAudioStore } from '@/stores/player-audio-store';
 import { usePlayerSpreadPreload } from '../hooks/use-player-spread-preload';
@@ -34,6 +35,7 @@ export function PlayerSpreadPreloadHost({
 }: PlayerSpreadPreloadHostProps): null {
   const narrationLangCode = useNarrationLanguage();
   const quizLangCode = useQuizLanguage();
+  const playEdition = usePlayEdition();
 
   // On language OR source switch, all pooled audio URLs are stale (different
   // localized tracks / different remix's audio set). Evict everything; preload
@@ -51,6 +53,7 @@ export function PlayerSpreadPreloadHost({
     activeSpreadId,
     narrationLangCode,
     quizLangCode,
+    playEdition,
     sourceKey,
   });
   return null;

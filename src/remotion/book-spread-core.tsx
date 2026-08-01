@@ -232,6 +232,9 @@ export function BookSpreadCore({
           playEdition={edition}
           registerRef={registerRef}
           renderers={renderers}
+          // Video render = final artifact — never embed authoring hints (parity
+          // with print: classic auto_pic missing static is skipped, not placeholdered).
+          showAuthoringHints={false}
         />
       </AbsoluteFill>
     </AbsoluteFill>

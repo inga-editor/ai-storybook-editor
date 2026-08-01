@@ -164,6 +164,18 @@ export interface SpreadAutoPic {
     state_machine?: string; // mutually exclusive with animation; wins if both present
     fit?: 'contain' | 'cover' | 'fill' | 'fitWidth' | 'fitHeight' | 'none' | 'scaleDown'; // default: 'contain'
   };
+  /** **Static image per-edition** (additive, optional → non-breaking).
+   *  Reuses the Illustration Entry shape. Consumed by: player at edition `classic`,
+   *  print/PDF export, and video-render at edition classic — they resolve the
+   *  **effective static URL** via `resolveEffectiveStaticUrl`
+   *  (`final_hires_media_url → is_selected → [0]`; **NEVER** fallback to `media_url`,
+   *  which is the ANIMATED file). Editor canvas (Objects/Remix/Actors) ALWAYS renders
+   *  `media_url` regardless of edition — static is player/print/video-render only.
+   *  See snapshot/illustration-structure.md#auto_pics */
+  static_image?: {
+    illustrations: Illustration[];
+    final_hires_media_url?: string;
+  };
 }
 
 // === Spread Audio ===

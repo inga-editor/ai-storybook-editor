@@ -8,7 +8,7 @@
 'use client';
 
 import { useEffect } from 'react';
-import type { PlayableSpread } from '@/types/playable-types';
+import type { PlayableSpread, PlayEdition } from '@/types/playable-types';
 import { createLogger } from '@/utils/logger';
 import { usePlayerAudioStore } from '@/stores/player-audio-store';
 import { collectSpreadMedia, type MediaItem, type MediaKind } from './collect-spread-media';
@@ -29,6 +29,8 @@ interface UsePlayerSpreadPreloadParams {
   activeSpreadId: string;
   narrationLangCode: string;
   quizLangCode: string;
+  /** Active edition — drives auto_pic preload (classic → static url only). */
+  playEdition: PlayEdition;
   /**
    * Stable identifier for the spread source (e.g. `original:<bookId>` or
    * `remix:<remixId>`). Changing this key re-fires the preload window so a
@@ -136,6 +138,7 @@ export function usePlayerSpreadPreload(params: UsePlayerSpreadPreloadParams): vo
     activeSpreadId,
     narrationLangCode,
     quizLangCode,
+    playEdition,
     sourceKey,
     enabled = true,
   } = params;
@@ -154,15 +157,15 @@ export function usePlayerSpreadPreload(params: UsePlayerSpreadPreloadParams): vo
     const n2 = spreads[activeIdx + 2];
 
     const activeUrls = new Set(
-      collectSpreadMedia(active, narrationLangCode, quizLangCode).map((i) => i.url),
+      collectSpreadMedia(active, narrationLangCode, quizLangCode, playEdition).map((i) => i.url),
     );
 
-    const n1Items = collectSpreadMedia(n1, narrationLangCode, quizLangCode).filter(
+    const n1Items = collectSpreadMedia(n1, narrationLangCode, quizLangCode, playEdition).filter(
       (i) => !activeUrls.has(i.url),
     );
     const n1Map = new Map<string, MediaItem>(n1Items.map((i) => [i.url, i]));
 
-    const n2Items = collectSpreadMedia(n2, narrationLangCode, quizLangCode).filter(
+    const n2Items = collectSpreadMedia(n2, narrationLangCode, quizLangCode, playEdition).filter(
       (i) => !activeUrls.has(i.url) && !n1Map.has(i.url),
     );
     const n2Map = new Map<string, MediaItem>(n2Items.map((i) => [i.url, i]));
@@ -208,7 +211,7 @@ export function usePlayerSpreadPreload(params: UsePlayerSpreadPreloadParams): vo
     // identity even when content is unchanged. Source switches are signaled by
     // `sourceKey` instead (Original ↔ Remix toggles the spread set).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeSpreadId, narrationLangCode, quizLangCode, sourceKey, enabled]);
+  }, [activeSpreadId, narrationLangCode, quizLangCode, playEdition, sourceKey, enabled]);
 }
 
 export type { MediaKind };

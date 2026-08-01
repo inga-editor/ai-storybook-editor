@@ -8,7 +8,7 @@ export { EditableShape } from './editable-shape';
 export { EditableVideo } from './editable-video';
 export { EditableAudio } from './editable-audio';
 export { EditableAutoAudio } from './editable-auto-audio';
-export { EditableAutoPic } from './editable-auto-pic';
+export { EditableAutoPic, AutoPicPlaceholder } from './editable-auto-pic';
 export { EditableQuiz } from './editable-quiz';
 export { GenerateImageModal } from './generate-image-modal';
 export { ExtractImageModal } from './extract-image-modal';

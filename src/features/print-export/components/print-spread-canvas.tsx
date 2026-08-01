@@ -1,8 +1,10 @@
 // print-spread-canvas.tsx — STATIC print/PDF render path for exactly one spread.
 //
 // Zero coupling to GSAP / playback / audio. Mirrors PlayerCanvas's static render
-// blocks (pages, page-number, images, shapes, textboxes) but drops every dynamic
-// concern: no refs, no click handlers, no videos/auto_pics/audios/quizzes/divider.
+// blocks (pages, page-number, images, auto_pics-as-static, shapes, textboxes) but
+// drops every dynamic concern: no refs, no click handlers, no videos/audios/
+// quizzes/divider. auto_pics print ONLY via their `static_image` (the animated
+// media file never enters the PDF); missing static → skipped + warn.
 //
 // Font/border scale ×4 (@300 DPI) is achieved purely by setting the global zoom
 // to PRINT_RENDER_ZOOM (Editable* read useZoomLevel() internally) — no per-item
@@ -28,6 +30,8 @@ import {
   resolvePrintTextboxes,
   shouldRenderPrintImage,
   shouldRenderPrintShape,
+  autoPicAsStaticImage,
+  decidePrintAutoPic,
 } from "../utils/print-spread-items";
 import {
   useCanvasSize,
@@ -102,6 +106,7 @@ export function PrintSpreadCanvas({
     spreadId: spread.id,
     pageCount: spread.pages?.length ?? 0,
     imageCount: spread.images?.length ?? 0,
+    autoPicCount: spread.auto_pics?.length ?? 0,
     shapeCount: spread.shapes?.length ?? 0,
     textboxCount: textboxesWithLang.length,
   });
@@ -160,6 +165,47 @@ export function PrintSpreadCanvas({
             index={index}
             zIndex={resolveEffectiveZIndex(
               { id: image.id, "z-index": image["z-index"] },
+              compositeCtxMap
+            )}
+            isSelected={false}
+            isSelectable={false}
+            isEditable={false}
+            onSelect={() => {}}
+          />
+        );
+      })}
+
+      {/* Auto Pics (block 3b) — printed via static_image only; animated media
+          never enters the PDF. DOM order after images / before shapes; the real
+          layering is decided by resolveEffectiveZIndex (composite override). */}
+      {spread.auto_pics?.map((autoPic, index) => {
+        const decision = decidePrintAutoPic(
+          autoPic,
+          spread.composites,
+          compositeCtxMap
+        );
+        if (decision !== "render") {
+          if (decision === "skip-missing-static") {
+            // Visible + in-staging + on-edition but no static → should have shown.
+            log.warn("renderAutoPic", "skip: no static image", {
+              spreadId: spread.id,
+              autoPicId: autoPic.id,
+            });
+          } else {
+            log.debug("renderAutoPic", "skip: hidden/culled/off-edition", {
+              spreadId: spread.id,
+              autoPicId: autoPic.id,
+            });
+          }
+          return null;
+        }
+        return (
+          <EditableImage
+            key={autoPic.id}
+            image={autoPicAsStaticImage(autoPic)}
+            index={index}
+            zIndex={resolveEffectiveZIndex(
+              { id: autoPic.id, "z-index": autoPic["z-index"] },
               compositeCtxMap
             )}
             isSelected={false}

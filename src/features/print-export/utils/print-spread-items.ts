@@ -7,6 +7,7 @@
 import type { PlayableSpread } from "@/types/playable-types";
 import type { SpreadTextboxContent } from "@/types/spread-types";
 import { isInStaging } from "@/features/editor/components/playable-spread-view/player-utils";
+import { resolveEffectiveStaticUrl } from "@/features/editor/components/playable-spread-view/resolve-auto-pic-display-source";
 import {
   isVariantInAnyComposite,
   type CompositeContext,
@@ -16,6 +17,7 @@ import { getTextboxContentForLanguage } from "@/features/editor/utils/textbox-he
 type SpreadImage = NonNullable<PlayableSpread["images"]>[number];
 type SpreadShape = NonNullable<PlayableSpread["shapes"]>[number];
 type SpreadTextbox = NonNullable<PlayableSpread["textboxes"]>[number];
+type SpreadAutoPic = NonNullable<PlayableSpread["auto_pics"]>[number];
 
 /** True when an image should be rendered for print. */
 export function shouldRenderPrintImage(
@@ -35,6 +37,57 @@ export function shouldRenderPrintImage(
     image.illustrations?.some((i) => i.media_url) ||
     image.media_url;
   return Boolean(hasUrl);
+}
+
+/** Wrap an auto_pic into a SpreadImage shape so it can reuse EditableImage's
+ *  URL-resolve chain (final_hires → is_selected → [0]) at print time.
+ *  ⚠ `media_url` MUST be undefined — the animated file (webp/webm/lottie/riv)
+ *  must NEVER be embedded into the PDF; if left set, EditableImage's resolve
+ *  chain would fall back to it. */
+export function autoPicAsStaticImage(ap: SpreadAutoPic): SpreadImage {
+  return {
+    id: ap.id,
+    geometry: ap.geometry,
+    "z-index": ap["z-index"],
+    player_visible: ap.player_visible,
+    editor_visible: ap.editor_visible,
+    title: ap.title,
+    illustrations: ap.static_image?.illustrations ?? [],
+    final_hires_media_url: ap.static_image?.final_hires_media_url,
+    media_url: undefined, // ⚠ animated file never prints
+  };
+}
+
+/** Print decision for an auto_pic — lets the caller distinguish the skip reason
+ *  (warn on 'skip-missing-static' — an item that SHOULD show but has no static;
+ *  debug on 'skip-hidden' — hidden/culled/off-edition, expected). */
+export type PrintAutoPicDecision = "render" | "skip-missing-static" | "skip-hidden";
+
+export function decidePrintAutoPic(
+  autoPic: SpreadAutoPic,
+  composites: PlayableSpread["composites"],
+  compositeCtxMap: Map<string, CompositeContext>
+): PrintAutoPicDecision {
+  if (autoPic.player_visible === false) return "skip-hidden";
+  if (!isInStaging(autoPic.geometry)) return "skip-hidden";
+  const compositeCtx = compositeCtxMap.get(autoPic.id);
+  if (!compositeCtx && isVariantInAnyComposite({ composites }, autoPic.id)) {
+    return "skip-hidden";
+  }
+  // On-edition + visible + in-staging: the only remaining gate is static URL.
+  if (!resolveEffectiveStaticUrl(autoPic.static_image)) return "skip-missing-static";
+  return "render";
+}
+
+/** True when an auto_pic should be rendered for print. Same rule-set as
+ *  shouldRenderPrintImage, but the URL comes from `static_image` (never the
+ *  animated media_url). */
+export function shouldRenderPrintAutoPic(
+  autoPic: SpreadAutoPic,
+  composites: PlayableSpread["composites"],
+  compositeCtxMap: Map<string, CompositeContext>
+): boolean {
+  return decidePrintAutoPic(autoPic, composites, compositeCtxMap) === "render";
 }
 
 /** True when a shape should be rendered for print. */

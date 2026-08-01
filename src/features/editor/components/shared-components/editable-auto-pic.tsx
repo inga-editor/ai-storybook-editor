@@ -8,6 +8,7 @@ import type { SpreadAutoPic } from "@/types/spread-types";
 import { COLORS, DIMMED_BY_OVERLAP_OPACITY } from "@/constants/spread-constants";
 import { createLogger } from "@/utils/logger";
 import { useZoomLevel } from "@/stores/editor-settings-store";
+import type { AutoPicDisplaySource } from "@/features/editor/components/playable-spread-view/resolve-auto-pic-display-source";
 
 const log = createLogger("Editor", "EditableAutoPic");
 
@@ -39,9 +40,15 @@ function detectMediaKind(url: string | undefined): MediaKind {
 interface AutoPicPlaceholderProps {
   name: string;
   type: string;
+  /** Extra instruction line (e.g. classic missing-static hint). */
+  hint?: string;
+  /** Thumbnail mode — icon only, no text/badge (too small to read). */
+  iconOnly?: boolean;
 }
 
-function AutoPicPlaceholder({ name, type }: AutoPicPlaceholderProps) {
+/** Dashed placeholder for an auto_pic with no renderable media. Exported so the
+ *  player can reuse it for the classic "missing static image" author overlay. */
+export function AutoPicPlaceholder({ name, type, hint, iconOnly = false }: AutoPicPlaceholderProps) {
   const zoomFactor = useZoomLevel() / 100;
   return (
     <div
@@ -52,23 +59,35 @@ function AutoPicPlaceholder({ name, type }: AutoPicPlaceholderProps) {
       }}
     >
       <Sparkles className="h-6 w-6 text-muted-foreground" />
-      <p
-        className={cn("text-center line-clamp-2", !name && "italic")}
-        style={{ color: COLORS.PLACEHOLDER_TEXT, fontSize: `${12 * zoomFactor}px` }}
-      >
-        {name || "No animated pic"}
-      </p>
-      <span
-        className="rounded"
-        style={{
-          backgroundColor: COLORS.PLACEHOLDER_BORDER,
-          color: COLORS.PLACEHOLDER_TEXT,
-          fontSize: `${10 * zoomFactor}px`,
-          padding: `0 ${4 * zoomFactor}px`,
-        }}
-      >
-        {type}
-      </span>
+      {!iconOnly && (
+        <>
+          <p
+            className={cn("text-center line-clamp-2", !name && "italic")}
+            style={{ color: COLORS.PLACEHOLDER_TEXT, fontSize: `${12 * zoomFactor}px` }}
+          >
+            {name || "No animated pic"}
+          </p>
+          {hint && (
+            <p
+              className="text-center line-clamp-2"
+              style={{ color: COLORS.PLACEHOLDER_TEXT, fontSize: `${10 * zoomFactor}px` }}
+            >
+              {hint}
+            </p>
+          )}
+          <span
+            className="rounded"
+            style={{
+              backgroundColor: COLORS.PLACEHOLDER_BORDER,
+              color: COLORS.PLACEHOLDER_TEXT,
+              fontSize: `${10 * zoomFactor}px`,
+              padding: `0 ${4 * zoomFactor}px`,
+            }}
+          >
+            {type}
+          </span>
+        </>
+      )}
     </div>
   );
 }
@@ -86,6 +105,10 @@ interface EditableAutoPicProps {
   isHoveredByCanvas?: boolean;
   /** ADR-029 dim — set true when this auto_pic fully covers a selected item with lower z. */
   dimmedByOverlap?: boolean;
+  /** ⚡ Edition-aware display (player/thumbnail only). Absent = legacy animated
+   *  behavior (editor canvas — Objects/Remix/Actors — always renders media_url).
+   *  'static' → render the static <img>; 'missing-static' → author placeholder. */
+  displaySource?: AutoPicDisplaySource;
   onSelect: () => void;
 }
 
@@ -99,6 +122,7 @@ export function EditableAutoPic({
   showItemBorder,
   isHoveredByCanvas,
   dimmedByOverlap = false,
+  displaySource,
   onSelect,
 }: EditableAutoPicProps) {
   const [isHoveredLocal, setIsHoveredLocal] = useState(false);
@@ -168,7 +192,24 @@ export function EditableAutoPic({
           : undefined,
       }}
     >
-      {showMedia ? (
+      {displaySource?.mode === "static" ? (
+        // Edition classic — render the resolved static image only. No animated
+        // runtime (lottie/riv/video) is mounted regardless of media_url.
+        <img
+          src={displaySource.url}
+          alt={autoPic.title || ""}
+          className="w-full h-full object-contain"
+        />
+      ) : displaySource?.mode === "missing-static" ? (
+        // Edition classic, no static image — author placeholder (public/render
+        // contexts never reach here; the stage skips them).
+        <AutoPicPlaceholder
+          name={autoPic.title || "Auto pic"}
+          type="static missing"
+          hint={isThumbnail ? undefined : "Cần upload ảnh tĩnh cho edition Classic"}
+          iconOnly={isThumbnail}
+        />
+      ) : showMedia ? (
         <>
           {isLoading && (
             <div className="absolute inset-0 flex items-center justify-center bg-muted">

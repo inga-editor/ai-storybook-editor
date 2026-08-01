@@ -17,6 +17,7 @@ import { PageNumberingOverlay } from "../canvas-spread-view/page-numbering-overl
 import { getTextboxContentForLanguage } from "../../utils/textbox-helpers";
 import { isInStaging } from "./player-utils";
 import { isItemPlayerHidden } from "./visibility-utils";
+import { resolveAutoPicDisplaySource } from "./resolve-auto-pic-display-source";
 import {
   buildPlayerCompositeContextMap,
   isVariantInAnyComposite,
@@ -43,6 +44,10 @@ export interface PlayerSpreadStageProps {
   /** Live-only interactivity (pointer/highlight/onClick). Render passes none. */
   getItemInteractivity?: (ctx: ItemInteractivityContext) => ItemInteractivity;
   pageNumbering?: PageNumberingSettings | null;
+  /** Author context? true → classic auto_pic missing static shows a placeholder;
+   *  false → the item is skipped entirely. Live: `!isSharePreview`. Remotion
+   *  render: always false (artifact, no authoring hints). Default true. */
+  showAuthoringHints?: boolean;
 }
 
 const EMPTY_INTERACTIVITY: ItemInteractivity = {};
@@ -55,6 +60,7 @@ export function PlayerSpreadStage({
   renderers,
   getItemInteractivity,
   pageNumbering,
+  showAuthoringHints = true,
 }: PlayerSpreadStageProps) {
   // Phase 6 — composite resolve map: on-edition variants get a z-index override;
   // off-edition variants are absent (consumer skips via isVariantInAnyComposite).
@@ -197,9 +203,27 @@ export function PlayerSpreadStage({
       {spread.auto_pics?.map((autoPic, index) => {
         if (autoPic.player_visible === false) return null;
         if (!isInStaging(autoPic.geometry)) return null;
-        if (!autoPic.media_url) return null;
+        const source = resolveAutoPicDisplaySource(autoPic, playEdition);
+        if (source.mode === "empty") {
+          // dynamic/interactive without media_url — original !media_url skip.
+          log.debug("autoPic", "skip: empty", { autoPicId: autoPic.id, edition: playEdition });
+          return null;
+        }
+        if (source.mode === "missing-static" && !showAuthoringHints) {
+          // classic missing static, public/render context → hide entirely.
+          log.debug("autoPic", "skip: missing-static (no authoring hints)", {
+            autoPicId: autoPic.id,
+            edition: playEdition,
+          });
+          return null;
+        }
+        // (missing-static + authoring → fall through; renderer draws placeholder)
         const compositeCtx = playerCompositeCtxMap.get(autoPic.id);
         if (!compositeCtx && isVariantInAnyComposite({ composites: spread.composites }, autoPic.id)) {
+          log.debug("autoPic", "skip: off-edition composite variant", {
+            autoPicId: autoPic.id,
+            edition: playEdition,
+          });
           return null;
         }
         const effectiveZ = resolveEffectiveZIndex(
@@ -215,7 +239,7 @@ export function PlayerSpreadStage({
             className={it.className}
             onClickCapture={it.onClick}
           >
-            {renderers.autoPic(autoPic, index, effectiveZ)}
+            {renderers.autoPic(autoPic, index, effectiveZ, source)}
           </div>
         );
       })}
