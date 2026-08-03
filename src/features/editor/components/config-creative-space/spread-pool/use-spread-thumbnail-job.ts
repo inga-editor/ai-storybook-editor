@@ -26,6 +26,7 @@ import {
 } from '@/apis/jobs-api';
 import { resolveBleedCanvasSize } from '@/utils/canvas-math-utils';
 import { useAuthStore } from '@/stores/auth-store';
+import { useSnapshotStore } from '@/stores/snapshot-store';
 import { useSnapshotActions } from '@/stores/snapshot-store/selectors';
 import { createLogger } from '@/utils/logger';
 
@@ -60,12 +61,18 @@ export function useSpreadThumbnailJob({
   dimension,
   spreadCount,
 }: UseSpreadThumbnailJobArgs): UseSpreadThumbnailJob {
-  const { fetchSnapshot } = useSnapshotActions();
+  const { fetchSnapshot, flushSnapshot } = useSnapshotActions();
 
   // Active job for this book (types-filtered so actor/remix/export jobs never match).
   const job = useActiveJob({ types: [...SPREAD_THUMBNAIL_TYPES], bookId });
 
-  const isRunning = job != null; // useActiveJob only returns queued|running rows.
+  // Local pending flag so the button flips to "Generating…" the INSTANT the user
+  // clicks — the store-backed job only appears after flush + enqueue + seed (~1-3s).
+  // Cleared in the enqueue finally; the optimistic seed() lands BEFORE that, so
+  // isRunning has no gap between the two sources.
+  const [isStarting, setIsStarting] = React.useState(false);
+
+  const isRunning = job != null || isStarting; // useActiveJob only returns queued|running rows.
   const progress = React.useMemo<SpreadThumbnailProgress | null>(
     () => (job ? { done: job.currentStep, total: job.totalSteps } : null),
     [job],
@@ -109,7 +116,9 @@ export function useSpreadThumbnailJob({
         // GLOBAL use-job-notifications allowlist (decision #3) so it fires even after
         // navigating away — no config-local toast here to avoid a duplicate. This
         // effect only owns the genuine local side-effect: refetch the snapshot.
-        void fetchSnapshot(bookId);
+        // SILENT: a loading-gated refetch would swap EditorPage to the full-page
+        // loader, unmounting the config space and resetting it to the General tab.
+        void fetchSnapshot(bookId, { silent: true });
       },
     );
     return unsubscribe;
@@ -133,8 +142,20 @@ export function useSpreadThumbnailJob({
       canvasH: canvas.height,
       spreadCount,
     });
+    setIsStarting(true); // immediate button feedback — before the flush/enqueue round-trips
     void (async () => {
       try {
+        // The user committed to generating — flush pending BATCHED pool/title edits
+        // FIRST (the job renders from the DB snapshot, and this also drains every dirty
+        // source before the job's server-side `thumbnail_url` leaf-writes start, so no
+        // stale whole-snapshot flush can clobber them mid-job). Still-dirty after the
+        // flush = upsert failed → abort the enqueue rather than render stale data.
+        await flushSnapshot();
+        if (useSnapshotStore.getState().sync.isDirty) {
+          log.error('startGenerate', 'pre-enqueue flush failed — abort', { bookId });
+          toast.error('Chưa lưu được thay đổi — vui lòng thử lại.');
+          return;
+        }
         const data = await enqueueSpreadThumbnails({ snapshot_id: snapshotId, canvas });
         if (isSpreadThumbnailsSkipped(data)) {
           log.info('startGenerate', 'skipped', { reason: data.reason });
@@ -185,9 +206,13 @@ export function useSpreadThumbnailJob({
           });
           toast.error('Failed to start thumbnail generation.');
         }
+      } finally {
+        // Success path: seed() already ran → useActiveJob keeps isRunning true.
+        // Skip/dedup/error paths: button returns to "Generate".
+        setIsStarting(false);
       }
     })();
-  }, [snapshotId, spreadCount, dimension, bookId]);
+  }, [snapshotId, spreadCount, dimension, bookId, flushSnapshot]);
 
   return { isRunning, progress, thumbnailOverrides, startGenerate };
 }

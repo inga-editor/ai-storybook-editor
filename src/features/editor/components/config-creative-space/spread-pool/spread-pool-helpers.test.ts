@@ -3,10 +3,6 @@
 
 import { describe, it, expect } from 'vitest';
 import {
-  SPREAD_POOL_LOCK_STEP,
-  SPREAD_POOL_RESOURCE_TYPE,
-  SPREAD_POOL_ACTION_TYPE,
-  buildSpreadPoolLockTarget,
   isPoolToggleLocked,
   mergePool,
   shouldSkipPoolWrite,
@@ -20,23 +16,6 @@ function section(over: Partial<Section>): Section {
   return { id: 's', title: '', start_spread_id: '', end_spread_id: '', ...over };
 }
 const BRANCH = {} as BranchSetting;
-
-describe('buildSpreadPoolLockTarget', () => {
-  it('pins step 2 + resource_type 6 (owned-key merge, NOT whole-node step 1)', () => {
-    const target = buildSpreadPoolLockTarget('sp-1');
-    // Trap #3: step MUST be 2 — step 1 would drop sibling spread keys.
-    expect(target.step).toBe(2);
-    expect(SPREAD_POOL_LOCK_STEP).toBe(2);
-    expect(target.resource_type).toBe(6);
-    expect(SPREAD_POOL_RESOURCE_TYPE).toBe(6);
-    expect(target.resource_id).toBe('sp-1');
-    expect(target.locale).toBeNull();
-  });
-
-  it('edit action_type is 3', () => {
-    expect(SPREAD_POOL_ACTION_TYPE).toBe(3);
-  });
-});
 
 describe('mergePool', () => {
   it('seeds an all-false object when current pool is absent', () => {

@@ -174,13 +174,19 @@ export const useSnapshotStore = create<SnapshotStore>()(
         fetchLoading: false,
         fetchError: null,
 
-        fetchSnapshot: async (bookId: string) => {
+        fetchSnapshot: async (bookId: string, opts?: { silent?: boolean }) => {
           const [set] = args;
-          log.info('fetchSnapshot', 'start', { bookId });
-          set((state) => {
-            state.fetchLoading = true;
-            state.fetchError = null;
-          });
+          // silent = background refetch (e.g. thumbnail-job terminal): do NOT flip
+          // fetchLoading — EditorPage swaps to a full-page loader on it, unmounting the
+          // active creative space and resetting its local UI state (config tab jump bug).
+          const silent = opts?.silent === true;
+          log.info('fetchSnapshot', 'start', { bookId, silent });
+          if (!silent) {
+            set((state) => {
+              state.fetchLoading = true;
+              state.fetchError = null;
+            });
+          }
 
           // Step 1: Get current_version from books table
           const { data: bookData, error: bookError } = await supabase
@@ -221,11 +227,15 @@ export const useSnapshotStore = create<SnapshotStore>()(
           }
 
           if (fetchError) {
-            log.error('fetchSnapshot', 'failed', { bookId, error: fetchError });
-            set((state) => {
-              state.fetchLoading = false;
-              state.fetchError = 'Không thể tải snapshot';
-            });
+            log.error('fetchSnapshot', 'failed', { bookId, silent, error: fetchError });
+            // Silent refetch failure must not flip the page-level error state either —
+            // keep the current in-memory snapshot; the next open/refetch reconciles.
+            if (!silent) {
+              set((state) => {
+                state.fetchLoading = false;
+                state.fetchError = 'Không thể tải snapshot';
+              });
+            }
             return;
           }
 

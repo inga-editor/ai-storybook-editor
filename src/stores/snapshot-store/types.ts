@@ -408,7 +408,9 @@ export interface MetaSlice {
 export interface FetchSlice {
   fetchLoading: boolean;
   fetchError: string | null;
-  fetchSnapshot: (bookId: string) => Promise<void>;
+  /** `silent`: background refetch — never flips `fetchLoading`/`fetchError` (the
+   *  EditorPage full-page loader would unmount the active creative space). */
+  fetchSnapshot: (bookId: string, opts?: { silent?: boolean }) => Promise<void>;
   saveSnapshot: () => Promise<void>;
   autoSaveSnapshot: () => Promise<void>;
   /** Clears the snapshot-global dirty flag WITHOUT writing. Used on collab-space exit

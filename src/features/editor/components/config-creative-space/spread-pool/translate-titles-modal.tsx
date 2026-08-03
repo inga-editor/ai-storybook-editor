@@ -3,9 +3,10 @@
 //
 // Tabs = book languages MINUS the original. A modal-wide draft (Record<spreadId,
 // SpreadTitle>) persists across tabs and is seeded from the current spread titles at
-// open. Save diffs the draft against the store and commits ONLY changed spreads (parent
-// runs them sequentially, per-spread error toast). Close/backdrop discards everything
-// (no confirm — modal unmounts, draft is lost by design §3.2).
+// open. Save diffs the draft against the store and hands ONLY changed spreads to the
+// parent, which applies them + persists in ONE flushSnapshot (awaited here — the Save
+// button shows "Saving…" until it lands). Close/backdrop discards everything (no
+// confirm — modal unmounts, draft is lost by design §3.2).
 //
 // [Translate] (client job, §3.2): loops the non-original languages SEQUENTIALLY, one
 // `POST /api/text/translate-content` per language, and OVERWRITES the whole translating
@@ -42,12 +43,15 @@ const log = createLogger('Editor', 'TranslateTitlesModal');
 const TRANSLATE_BATCH_SIZE = 100;
 
 interface TranslateTitlesModalProps {
-  spreads: SpreadPoolRowData[]; // all spreads (any row is translatable)
+  /** Pool-ENABLED spreads with a non-empty original title (caller pre-filters —
+   *  chốt 2026-08-03 tối: disabled/untitled spreads never enter the modal). */
+  spreads: SpreadPoolRowData[];
   originalLanguage: string;
   languages: Language[]; // book languages MINUS original
   /** Attribution-only snapshot version id → ai_service_logs.snapshot_id (book cost). */
   snapshotId: string | null;
-  onSave: (changes: Record<string, SpreadTitle>) => void; // spreadId → merged title
+  /** spreadId → merged title. Awaited — the Save button shows "Saving…" until it lands. */
+  onSave: (changes: Record<string, SpreadTitle>) => void | Promise<void>;
   onClose: () => void;
 }
 
@@ -80,6 +84,7 @@ export function TranslateTitlesModal({
   const [activeCode, setActiveCode] = React.useState(languages[0]?.code ?? '');
 
   const [isTranslating, setIsTranslating] = React.useState(false);
+  const [isSaving, setIsSaving] = React.useState(false);
   const [translateProgress, setTranslateProgress] = React.useState({ done: 0, total: 0 });
   const abortRef = React.useRef<AbortController | null>(null);
 
@@ -103,7 +108,8 @@ export function TranslateTitlesModal({
     [],
   );
 
-  const handleSave = React.useCallback(() => {
+  const handleSave = React.useCallback(async () => {
+    if (isSaving) return;
     const changes: Record<string, SpreadTitle> = {};
     for (const s of spreads) {
       const before = normalizeTitle(s.title);
@@ -111,8 +117,15 @@ export function TranslateTitlesModal({
       if (before !== after) changes[s.spreadId] = draft[s.spreadId];
     }
     log.info('handleSave', 'diff computed', { changed: Object.keys(changes).length });
-    onSave(changes);
-  }, [spreads, draft, onSave]);
+    // Await the parent flush so the button holds "Saving…" until the write lands
+    // (parent closes the modal itself afterwards — an unmounted setState is a no-op).
+    setIsSaving(true);
+    try {
+      await onSave(changes);
+    } finally {
+      setIsSaving(false);
+    }
+  }, [isSaving, spreads, draft, onSave]);
 
   const onTranslate = React.useCallback(async () => {
     if (isTranslating) return;
@@ -214,7 +227,7 @@ export function TranslateTitlesModal({
             <button
               key={lang.code}
               type="button"
-              disabled={isTranslating}
+              disabled={isTranslating || isSaving}
               onClick={() => setActiveCode(lang.code)}
               className={cn(
                 'rounded px-3 py-1 text-xs font-medium transition-colors disabled:opacity-50',
@@ -253,7 +266,7 @@ export function TranslateTitlesModal({
                 </span>
                 <Input
                   value={value}
-                  disabled={isTranslating}
+                  disabled={isTranslating || isSaving}
                   onChange={(e) => setDraftText(s.spreadId, activeCode, e.target.value)}
                   placeholder="Translation"
                   aria-label={`Translation of spread ${s.index} into ${activeCode}`}
@@ -265,7 +278,12 @@ export function TranslateTitlesModal({
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={onTranslate} disabled={isTranslating} className="gap-1.5">
+          <Button
+            variant="outline"
+            onClick={onTranslate}
+            disabled={isTranslating || isSaving}
+            className="gap-1.5"
+          >
             {isTranslating ? (
               <>
                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -278,8 +296,15 @@ export function TranslateTitlesModal({
               </>
             )}
           </Button>
-          <Button onClick={handleSave} disabled={isTranslating}>
-            Save
+          <Button onClick={() => void handleSave()} disabled={isTranslating || isSaving} className="gap-1.5">
+            {isSaving ? (
+              <>
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Saving…
+              </>
+            ) : (
+              'Save'
+            )}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -1,8 +1,10 @@
 // config-spread-pool-settings.test.tsx — interaction tests for the Spread Pool panel.
 //
-// runLockedResourceSave is mocked (no network). Store selectors are mocked so the panel
-// renders off a fixed spreads array; because a `blocked` save never applies locally, the
-// derived controls stay pinned to the mocked DB value.
+// Persistence is OWNER-DIRECT + BATCHED (chốt tối 2026-08-03): toggle/DEFAULT/title
+// edits only mutate the store (dirty → 60s autosave / flush-on-hidden / unmount flush);
+// flushSnapshot fires immediately ONLY on section unmount here (translate-save flush is
+// covered via the modal callback path; generate flush lives in the job hook). Store
+// selectors are mocked so the panel renders off a fixed spreads array.
 // vitest only — NO node builtins (tsc -b type-checks with vite/client types).
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -10,25 +12,25 @@ import { render, screen, fireEvent, cleanup } from '@testing-library/react';
 import type { BaseSpread } from '@/types/spread-types';
 import type { Section } from '@/types/illustration-types';
 import type { Book } from '@/types/editor';
-import type { LockTarget, SavePayload } from '@/stores/resource-lock-store/types';
 import type { UseSpreadThumbnailJob } from './use-spread-thumbnail-job';
 
 // ── Mocks ────────────────────────────────────────────────────────────────────
-const runLockedResourceSaveMock = vi.fn();
-
-vi.mock('@/features/editor/utils/structural-lock-resource-save', () => ({
-  runLockedResourceSave: (...args: unknown[]) => runLockedResourceSaveMock(...args),
-}));
-
 const updateIllustrationSpread = vi.fn();
+const flushSnapshotMock = vi.fn();
+// Imperative post-flush outcome read (sync.isDirty false ⇒ saved).
+let mockSyncState = { isDirty: false, error: null as string | null };
 let mockSpreads: BaseSpread[] = [];
 let mockSections: Section[] = [];
 let mockBook: Book | null = null;
 
+vi.mock('@/stores/snapshot-store', () => ({
+  useSnapshotStore: { getState: () => ({ sync: mockSyncState }) },
+}));
+
 vi.mock('@/stores/snapshot-store/selectors', () => ({
   useIllustrationSpreads: () => mockSpreads,
   useSections: () => mockSections,
-  useSnapshotActions: () => ({ updateIllustrationSpread }),
+  useSnapshotActions: () => ({ updateIllustrationSpread, flushSnapshot: flushSnapshotMock }),
   useSnapshotId: () => 'snap-1',
 }));
 
@@ -73,23 +75,19 @@ const BOOK: Book = {
 
 beforeEach(() => {
   cleanup();
-  runLockedResourceSaveMock.mockReset();
   updateIllustrationSpread.mockReset();
+  flushSnapshotMock.mockReset();
   startGenerateMock.mockReset();
   mockSections = [];
+  mockSyncState = { isDirty: false, error: null };
   mockJobState = {
     isRunning: false,
     progress: null,
     thumbnailOverrides: {},
     startGenerate: startGenerateMock,
   };
-  // Default: apply optimistically + report saved.
-  runLockedResourceSaveMock.mockImplementation(
-    async (_t: LockTarget, _s: SavePayload, applyLocal: () => void) => {
-      applyLocal();
-      return 'saved';
-    },
-  );
+  // Default: flush lands (isDirty stays false ⇒ saved).
+  flushSnapshotMock.mockResolvedValue(undefined);
   mockBook = BOOK;
   mockSpreads = [
     spread('sp1', { pool: { is_true: true, is_default: false }, title: { en_US: { text: 'Hello' } } }),
@@ -112,52 +110,49 @@ describe('ConfigSpreadPoolSettings', () => {
     expect(checkbox).toHaveAttribute('aria-checked', 'true'); // is_default true kept
   });
 
-  it('commits the title only on blur, not on each keystroke', () => {
+  it('commits the title only on blur, not on each keystroke — BATCHED (no immediate flush)', () => {
     render(<ConfigSpreadPoolSettings />);
     const input = screen.getByLabelText('Title for spread 1 (en_US)');
     fireEvent.focus(input);
     fireEvent.change(input, { target: { value: 'Hello World' } });
-    expect(runLockedResourceSaveMock).not.toHaveBeenCalled(); // no per-keystroke save
+    expect(updateIllustrationSpread).not.toHaveBeenCalled(); // no per-keystroke write
     fireEvent.blur(input);
-    expect(runLockedResourceSaveMock).toHaveBeenCalledTimes(1);
-    const save = runLockedResourceSaveMock.mock.calls[0][1] as SavePayload;
-    expect(save.patch).toEqual({ title: { en_US: { text: 'Hello World' } } });
+    expect(updateIllustrationSpread).toHaveBeenCalledWith('sp1', {
+      title: { en_US: { text: 'Hello World' } },
+    });
+    expect(flushSnapshotMock).not.toHaveBeenCalled(); // batched — autosave/unmount persists
   });
 
-  it('passes a lock target with step === 2 and resource_type === 6 (owned-key merge)', () => {
-    render(<ConfigSpreadPoolSettings />);
-    const toggle = screen.getByLabelText('Include Hello in the spread pool');
-    fireEvent.click(toggle); // sp1 toggle off → save
-    expect(runLockedResourceSaveMock).toHaveBeenCalledTimes(1);
-    const target = runLockedResourceSaveMock.mock.calls[0][0] as LockTarget;
-    expect(target.step).toBe(2);
-    expect(target.resource_type).toBe(6);
-    expect(target.resource_id).toBe('sp1');
-  });
-
-  it('toggling ON a never-pooled spread writes a seeded pool object (skip-write covered in helpers)', () => {
+  it('toggling ON a never-pooled spread writes a seeded pool object — BATCHED (no immediate flush)', () => {
     render(<ConfigSpreadPoolSettings />);
     const toggle = screen.getByLabelText('Include Spread 3 in the spread pool');
     expect(toggle).toHaveAttribute('aria-checked', 'false'); // sp3 starts OFF
     fireEvent.click(toggle); // OFF → ON
-    expect(runLockedResourceSaveMock).toHaveBeenCalledTimes(1);
-    const save = runLockedResourceSaveMock.mock.calls[0][1] as SavePayload;
-    expect(save.patch).toEqual({ pool: { is_true: true, is_default: false } });
+    expect(updateIllustrationSpread).toHaveBeenCalledWith('sp3', {
+      pool: { is_true: true, is_default: false },
+    });
+    expect(flushSnapshotMock).not.toHaveBeenCalled();
   });
 
-  it('blocked save leaves the displayed value unchanged (no optimistic apply)', () => {
-    runLockedResourceSaveMock.mockImplementation(async () => 'blocked'); // applyLocal NOT called
+  it('unmounting the section flushes pending batched edits', () => {
+    const { unmount } = render(<ConfigSpreadPoolSettings />);
+    fireEvent.click(screen.getByLabelText('Include Spread 3 in the spread pool'));
+    expect(flushSnapshotMock).not.toHaveBeenCalled();
+    unmount();
+    expect(flushSnapshotMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('locks every edit while the thumbnail job runs (stale flush would clobber BE-written thumbnails)', () => {
+    mockJobState = {
+      isRunning: true,
+      progress: { done: 0, total: 3 },
+      thumbnailOverrides: {},
+      startGenerate: startGenerateMock,
+    };
     render(<ConfigSpreadPoolSettings />);
-    const toggle = screen.getByLabelText('Include Hello in the spread pool');
-    expect(toggle).toHaveAttribute('aria-checked', 'true');
-    fireEvent.click(toggle);
-    // Store never updated (applyLocal skipped + updateIllustrationSpread not called) →
-    // derived control still reflects DB (checked).
-    expect(updateIllustrationSpread).not.toHaveBeenCalled();
-    expect(screen.getByLabelText('Include Hello in the spread pool')).toHaveAttribute(
-      'aria-checked',
-      'true',
-    );
+    expect(screen.getByLabelText('Include Hello in the spread pool')).toBeDisabled();
+    expect(screen.getByLabelText('Title for spread 1 (en_US)')).toBeDisabled();
+    expect(screen.getByLabelText('Mark Hello as the default pool spread')).toBeDisabled();
   });
 
   it('renders an empty state when there are no spreads', () => {
@@ -196,6 +191,16 @@ describe('ConfigSpreadPoolSettings', () => {
     render(<ConfigSpreadPoolSettings />);
     fireEvent.click(screen.getByRole('button', { name: /^Generate$/ }));
     expect(startGenerateMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('translate modal receives ONLY pool-enabled spreads with a source title', () => {
+    // sp1 = pooled + titled ('Hello') → in. sp2 = titled ('World') but pool OFF → out.
+    // sp3 = never pooled, no title → out.
+    render(<ConfigSpreadPoolSettings />);
+    fireEvent.click(screen.getByRole('button', { name: /Translate/ }));
+    // Modal renders original titles as text spans (panel titles live in input values).
+    expect(screen.getByText('Hello')).toBeInTheDocument();
+    expect(screen.queryByText('World')).not.toBeInTheDocument();
   });
 
   it('disables the pool toggle for a branch spread (P3 lock)', () => {

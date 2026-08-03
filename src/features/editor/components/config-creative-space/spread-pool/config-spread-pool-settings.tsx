@@ -1,11 +1,23 @@
 // config-spread-pool-settings.tsx — root panel for the Spread Pool config section.
 //
 // FIRST config section that writes the SNAPSHOT (`illustration.spreads[]`) instead of the
-// `books` table: every change persists per-spread through the save-by-resource gateway
-// (rtype-6, STEP 2 owned-key merge) via `runLockedResourceSave` — NEVER `updateBook`
-// (plan trap #1). Each edit is a one-shot acquire→save→release; no held session /
-// content-sync in v1 (validation S1). Controls are DERIVED from the store so a `blocked`
-// save (no optimistic apply) keeps the UI consistent with the DB.
+// `books` table — persistence is OWNER-DIRECT, NO lock/collab gateway (chốt 2026-08-03:
+// config space never mounts a collab session, so a gateway acquire always failed with a
+// bogus "another editor" toast). Write policy (chốt tối 2026-08-03, per-intent):
+//
+// - Toggle / DEFAULT / title edits are BATCHED: mutate the store only (marks dirty) and
+//   ride the existing owner-direct persistence — 60s `useAutoSave`, `useFlushOnHidden`,
+//   or the flush-on-unmount below when the user leaves this section. One ~325KB
+//   whole-snapshot write per burst instead of one per click.
+// - Translate modal SAVE flushes IMMEDIATELY in ONE request (user explicitly committed).
+// - Generate thumbnails flushes BEFORE enqueue (job reads the snapshot server-side and
+//   must see the latest pool/title) — see use-spread-thumbnail-job.
+//
+// Trade-offs accepted: last-writer-wins whole-snapshot, no per-edit audit row, ≤60s
+// durability window on abrupt kill (parity with every legacy editor surface). Edits are
+// disabled while the thumbnail job runs (BE leaf-writes `thumbnail_url` server-side; a
+// stale whole-snapshot flush mid-job would clobber it — with flush-before-enqueue there
+// is no dirty source left during a job).
 //
 // Design ref: config-creative-space/14-config-spread-pool-settings.md.
 
@@ -20,6 +32,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 import { useCurrentBook } from '@/stores/book-store';
+import { useSnapshotStore } from '@/stores/snapshot-store';
 import {
   useIllustrationSpreads,
   useSections,
@@ -29,18 +42,16 @@ import {
 import { getBookLanguages } from '../../collaborators-creative-space/get-book-languages';
 import { getLanguageName } from '@/constants/config-constants';
 import {
-  buildSpreadPoolLockTarget,
   isPoolToggleLocked,
   mergePool,
   shouldSkipPoolWrite,
   mergeTitle,
-  SPREAD_POOL_ACTION_TYPE,
+  originalTitleText,
   type SpreadPoolPatch,
 } from './spread-pool-helpers';
 import { SpreadPoolRow, type SpreadPoolRowData } from './spread-pool-row';
 import { useSpreadThumbnailJob } from './use-spread-thumbnail-job';
 import { TranslateTitlesModal } from './translate-titles-modal';
-import { runLockedResourceSave } from '@/features/editor/utils/structural-lock-resource-save';
 import type { SpreadTitle } from '@/types/spread-types';
 import { createLogger } from '@/utils/logger';
 
@@ -51,7 +62,7 @@ export function ConfigSpreadPoolSettings() {
   const spreads = useIllustrationSpreads();
   const sections = useSections();
   const snapshotId = useSnapshotId();
-  const { updateIllustrationSpread } = useSnapshotActions();
+  const { updateIllustrationSpread, flushSnapshot } = useSnapshotActions();
 
   const { isRunning, progress, thumbnailOverrides, startGenerate } = useSpreadThumbnailJob({
     bookId: book?.id ?? null,
@@ -61,7 +72,16 @@ export function ConfigSpreadPoolSettings() {
   });
 
   const [isTranslateModalOpen, setTranslateModalOpen] = React.useState(false);
-  const [savingSpreadIds, setSavingSpreadIds] = React.useState<Set<string>>(new Set());
+
+  // Leaving the section (config-tab switch / space switch) flushes pending batched
+  // edits right away instead of waiting out the 60s timer. Fire-and-forget —
+  // flushSnapshot self-guards when already clean.
+  React.useEffect(
+    () => () => {
+      void flushSnapshot();
+    },
+    [flushSnapshot],
+  );
 
   const originalLanguage = book?.original_language ?? '';
   const bookLanguages = React.useMemo(() => getBookLanguages(book), [book]);
@@ -69,9 +89,6 @@ export function ConfigSpreadPoolSettings() {
     () => bookLanguages.filter((l) => l.code !== originalLanguage),
     [bookLanguages, originalLanguage],
   );
-
-  // Stable spread-id list for 1-based audit ordering.
-  const spreadIds = React.useMemo(() => spreads.map((s) => s.id), [spreads]);
 
   const rows = React.useMemo<SpreadPoolRowData[]>(
     () =>
@@ -86,54 +103,20 @@ export function ConfigSpreadPoolSettings() {
     [spreads, sections],
   );
 
-  const setSaving = React.useCallback((spreadId: string, on: boolean) => {
-    setSavingSpreadIds((prev) => {
-      const next = new Set(prev);
-      if (on) next.add(spreadId);
-      else next.delete(spreadId);
-      return next;
-    });
-  }, []);
-
   /**
-   * Persist a sub-object patch ({pool?|title?|thumbnail_url?}) for one spread through the
-   * gateway. Returns the outcome so callers (e.g. the translate modal) can react per-spread.
+   * BATCHED write for toggle/DEFAULT/title edits: mutate the store only (marks the
+   * snapshot dirty). Persistence rides the existing owner-direct flushes — 60s
+   * `useAutoSave`, `useFlushOnHidden`, or the section-unmount flush above.
    */
-  const saveSpreadPoolFields = React.useCallback(
-    async (spreadId: string, patch: SpreadPoolPatch): Promise<'saved' | 'blocked' | 'failed'> => {
-      const patchKeys = Object.keys(patch);
-      log.info('saveSpreadPoolFields', 'save entry', { spreadId, patchKeys });
-      setSaving(spreadId, true);
-      try {
-        const idx = spreadIds.indexOf(spreadId);
-        const spreadNumber = idx >= 0 ? idx + 1 : 1;
-        const target = buildSpreadPoolLockTarget(spreadId);
-        const outcome = await runLockedResourceSave(
-          target,
-          {
-            action_type: SPREAD_POOL_ACTION_TYPE,
-            patch,
-            target_ref: { spread_number: spreadNumber },
-          },
-          () => updateIllustrationSpread(spreadId, patch),
-        );
-        if (outcome === 'blocked') {
-          log.debug('saveSpreadPoolFields', 'blocked — not applied, control reverts to DB', {
-            spreadId,
-          });
-          // holder-named toast already shown by runLockedResourceSave.
-        } else if (outcome === 'failed') {
-          log.error('saveSpreadPoolFields', 'save failed', { spreadId, patchKeys });
-          toast.error('Chưa lưu được — vui lòng thử lại.');
-        } else {
-          log.info('saveSpreadPoolFields', 'save exit — saved', { spreadId, patchKeys });
-        }
-        return outcome;
-      } finally {
-        setSaving(spreadId, false);
-      }
+  const applySpreadPoolPatch = React.useCallback(
+    (spreadId: string, patch: SpreadPoolPatch) => {
+      log.info('applySpreadPoolPatch', 'apply (batched — persisted by autosave/flush)', {
+        spreadId,
+        patchKeys: Object.keys(patch),
+      });
+      updateIllustrationSpread(spreadId, patch);
     },
-    [spreadIds, updateIllustrationSpread, setSaving],
+    [updateIllustrationSpread],
   );
 
   const handleToggle = React.useCallback(
@@ -144,49 +127,69 @@ export function ConfigSpreadPoolSettings() {
         log.debug('handleToggle', 'skip write — never-pooled spread toggled off', { spreadId });
         return;
       }
-      void saveSpreadPoolFields(spreadId, { pool: mergePool(current, { is_true: next }) });
+      applySpreadPoolPatch(spreadId, { pool: mergePool(current, { is_true: next }) });
     },
-    [spreads, saveSpreadPoolFields],
+    [spreads, applySpreadPoolPatch],
   );
 
   const handleDefaultChange = React.useCallback(
     (spreadId: string, next: boolean) => {
       const spread = spreads.find((s) => s.id === spreadId);
       const current = spread?.pool ?? null;
-      void saveSpreadPoolFields(spreadId, { pool: mergePool(current, { is_default: next }) });
+      applySpreadPoolPatch(spreadId, { pool: mergePool(current, { is_default: next }) });
     },
-    [spreads, saveSpreadPoolFields],
+    [spreads, applySpreadPoolPatch],
   );
 
   const handleTitleCommit = React.useCallback(
     (spreadId: string, text: string) => {
       const spread = spreads.find((s) => s.id === spreadId);
       const current = spread?.title ?? null;
-      void saveSpreadPoolFields(spreadId, {
+      applySpreadPoolPatch(spreadId, {
         title: mergeTitle(current, originalLanguage, text),
       });
     },
-    [spreads, originalLanguage, saveSpreadPoolFields],
+    [spreads, originalLanguage, applySpreadPoolPatch],
   );
 
-  // Translate modal Save — persist only changed spreads sequentially.
+  // Translate modal Save — the user explicitly committed, so persist IMMEDIATELY and in
+  // ONE request: apply every changed title to the store, then a single flushSnapshot()
+  // (one whole-snapshot upsert covers all spreads + any pending batched edits).
   const handleTranslateSave = React.useCallback(
     async (changes: Record<string, SpreadTitle>) => {
       const entries = Object.entries(changes);
-      log.info('handleTranslateSave', 'commit translations', { count: entries.length });
+      log.info('handleTranslateSave', 'commit translations — single flush', {
+        count: entries.length,
+      });
       for (const [spreadId, mergedTitle] of entries) {
-        const outcome = await saveSpreadPoolFields(spreadId, { title: mergedTitle });
-        if (outcome !== 'saved') {
-          log.debug('handleTranslateSave', 'per-spread not saved', { spreadId, outcome });
-          toast.error(`Không lưu được bản dịch của spread.`);
-        }
+        updateIllustrationSpread(spreadId, { title: mergedTitle });
+      }
+      await flushSnapshot();
+      // Landed save clears isDirty; still-dirty = upsert failed (local kept — save-lost,
+      // a refetch reconciles) or a concurrent save starved the retry.
+      if (useSnapshotStore.getState().sync.isDirty) {
+        log.error('handleTranslateSave', 'flush failed — translations kept locally', {
+          count: entries.length,
+          error: useSnapshotStore.getState().sync.error,
+        });
+        toast.error('Chưa lưu được bản dịch — vui lòng thử lại.');
       }
       setTranslateModalOpen(false);
     },
-    [saveSpreadPoolFields],
+    [updateIllustrationSpread, flushSnapshot],
   );
 
-  const canTranslate = translateLanguages.length > 0;
+  // Only pool-ENABLED spreads with a non-empty original title enter the translate modal
+  // (no wasted rows/API items for disabled or untitled spreads — chốt 2026-08-03 tối).
+  const translatableRows = React.useMemo(
+    () =>
+      rows.filter(
+        (r) => r.pool?.is_true && originalTitleText(r.title, originalLanguage).trim() !== '',
+      ),
+    [rows, originalLanguage],
+  );
+
+  const canTranslate = translateLanguages.length > 0 && translatableRows.length > 0;
 
   if (!book) {
     log.debug('render', 'no book — rendering null');
@@ -211,8 +214,10 @@ export function ConfigSpreadPoolSettings() {
             className="gap-1.5"
           >
             <Sparkles className="h-3.5 w-3.5" />
-            {isRunning && progress
-              ? `Generating… ${progress.done}/${progress.total}`
+            {isRunning
+              ? progress
+                ? `Generating… ${progress.done}/${progress.total}`
+                : 'Generating…'
               : 'Generate'}
           </Button>
         </div>
@@ -225,7 +230,7 @@ export function ConfigSpreadPoolSettings() {
                   <Button
                     variant="outline"
                     size="sm"
-                    disabled={!canTranslate}
+                    disabled={!canTranslate || isRunning}
                     onClick={() => setTranslateModalOpen(true)}
                     className="gap-1.5"
                   >
@@ -234,7 +239,13 @@ export function ConfigSpreadPoolSettings() {
                   </Button>
                 </span>
               </TooltipTrigger>
-              {!canTranslate && <TooltipContent>Add languages to translate</TooltipContent>}
+              {!canTranslate && (
+                <TooltipContent>
+                  {translateLanguages.length === 0
+                    ? 'Add languages to translate'
+                    : 'No pooled spreads with a title to translate'}
+                </TooltipContent>
+              )}
             </Tooltip>
           </TooltipProvider>
         </div>
@@ -261,7 +272,7 @@ export function ConfigSpreadPoolSettings() {
               key={row.spreadId}
               data={row}
               originalLanguage={originalLanguage}
-              saving={savingSpreadIds.has(row.spreadId)}
+              editsLocked={isRunning}
               thumbnailOverride={thumbnailOverrides[row.spreadId]}
               onToggle={(next) => handleToggle(row.spreadId, next)}
               onDefaultChange={(next) => handleDefaultChange(row.spreadId, next)}
@@ -273,7 +284,7 @@ export function ConfigSpreadPoolSettings() {
 
       {isTranslateModalOpen && (
         <TranslateTitlesModal
-          spreads={rows}
+          spreads={translatableRows}
           originalLanguage={originalLanguage}
           languages={translateLanguages}
           snapshotId={snapshotId}

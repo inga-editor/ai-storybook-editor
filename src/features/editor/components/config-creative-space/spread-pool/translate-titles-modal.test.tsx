@@ -133,4 +133,21 @@ describe('TranslateTitlesModal — [Translate] client job', () => {
     expect(toastSuccess).not.toHaveBeenCalled();
     expect(toastError).not.toHaveBeenCalled();
   });
+
+  it('Save flips to "Saving…" (disabled) while the awaited onSave is pending', async () => {
+    let resolveSave: () => void = () => {};
+    onSave.mockImplementation(() => new Promise<void>((res) => { resolveSave = res; }));
+
+    renderModal([row('sp1', 1, 'Hello')]);
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    const savingBtn = await screen.findByRole('button', { name: /Saving…/ });
+    expect(savingBtn).toBeDisabled();
+    expect(onSave).toHaveBeenCalledTimes(1);
+
+    resolveSave();
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled(),
+    );
+  });
 });

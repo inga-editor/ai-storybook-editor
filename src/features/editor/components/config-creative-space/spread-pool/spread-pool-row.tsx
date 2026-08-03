@@ -4,13 +4,12 @@
 // checkbox (is_default). Toggle OFF → title input + checkbox are disabled + greyed but
 // KEEP their real DB value (never hidden — [feedback: never hide disabled UI]).
 //
-// Title input is a controlled DRAFT: it syncs from the store while unfocused (a peer's
-// edit shows immediately) and commits on blur/Enter only (no per-keystroke save).
-// All other controls are DERIVED from the store so a `blocked` save (no optimistic apply)
-// leaves the UI consistent with the DB.
+// Title input is a controlled DRAFT: it syncs from the store while unfocused and commits
+// on blur/Enter only (no per-keystroke write). All other controls are DERIVED from the
+// store — commits are BATCHED store mutations persisted by autosave/flush (see panel).
 
 import * as React from 'react';
-import { AlertTriangle, Image as ImageIcon, Loader2 } from 'lucide-react';
+import { AlertTriangle, Image as ImageIcon } from 'lucide-react';
 import { Switch } from '@/components/ui/switch';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
@@ -38,7 +37,9 @@ export interface SpreadPoolRowData {
 interface SpreadPoolRowProps {
   data: SpreadPoolRowData;
   originalLanguage: string;
-  saving: boolean;
+  /** Thumbnail job running — greys ALL edits: a whole-snapshot flush mid-job would
+   *  clobber the `thumbnail_url`s the BE job already wrote. */
+  editsLocked?: boolean;
   /** Optimistic thumbnail from a running `spread_thumbnail` job's step_details. */
   thumbnailOverride?: string;
   onToggle: (next: boolean) => void;
@@ -49,7 +50,7 @@ interface SpreadPoolRowProps {
 export function SpreadPoolRow({
   data,
   originalLanguage,
-  saving,
+  editsLocked = false,
   thumbnailOverride,
   onToggle,
   onDefaultChange,
@@ -83,8 +84,8 @@ export function SpreadPoolRow({
   };
 
   // P3: branch/section spreads may never join the pool (greyed + tooltip, never hidden).
-  const controlsDisabled = saving || poolLockedReason != null;
-  const metaDisabled = !isPooled || saving; // title + DEFAULT greyed when not pooled
+  const controlsDisabled = editsLocked || poolLockedReason != null;
+  const metaDisabled = !isPooled || editsLocked; // title + DEFAULT greyed when not pooled
   // Data already in violation (pool ON on a branch/section spread) — warn, don't hide.
   const showViolationBadge = poolLockedReason != null && isPooled;
   const displayThumbnail = thumbnailOverride ?? thumbnailUrl;
@@ -101,9 +102,8 @@ export function SpreadPoolRow({
   return (
     <div className="flex flex-col gap-1 border-b py-2.5">
       <div className="flex items-center gap-3">
-        {/* index + saving spinner */}
+        {/* index */}
         <div className="flex w-8 shrink-0 items-center justify-end gap-1 text-xs text-muted-foreground">
-          {saving && <Loader2 className="h-3 w-3 animate-spin" aria-label="Saving" />}
           <span>{index}</span>
         </div>
 

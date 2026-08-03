@@ -1,41 +1,19 @@
 // spread-pool-helpers.ts — pure logic for the Spread Pool config section.
 //
-// Writes go to the SNAPSHOT (`illustration.spreads[]`) through the save-by-resource
-// gateway (rtype-6, STEP 2 — scene owned-key MERGE), NOT the `books` table. The lock
-// target constant lives here so the mandatory `step: 2` (owned-key merge, keeps other
-// spread keys) can be pinned + asserted in one place — `step: 1` would take the
-// whole-node path and DROP sibling keys (design §4.1 / plan trap #3).
+// Writes go to the SNAPSHOT (`illustration.spreads[]`) OWNER-DIRECT (store mutation +
+// whole-snapshot flush — chốt 2026-08-03), NOT the `books` table and NOT the lock/collab
+// gateway: config space never mounts a collab session, so the former rtype-6 one-shot
+// lock always failed ("another editor" toast). Merge helpers below still build the
+// per-spread sub-object patches so a store update never drops sibling pool/title keys.
 
-import type { LockTarget } from '@/stores/resource-lock-store/types';
 import type { BaseSpread, SpreadPool, SpreadTitle } from '@/types/spread-types';
 import type { Section } from '@/types/illustration-types';
 
 /** Why a spread's pool toggle is locked (invariant P3: pool ⊥ branch/section). */
 export type PoolToggleLockReason = 'branch' | 'section';
 
-/** Owned-key sub-object persisted per spread — NEVER the whole node (plan trap #4). */
+/** Sub-object patch persisted per spread — NEVER the whole node (plan trap #4). */
 export type SpreadPoolPatch = Partial<Pick<BaseSpread, 'pool' | 'title' | 'thumbnail_url'>>;
-
-/** Illustration step — spread pool metadata is scene-side data (step 2). */
-export const SPREAD_POOL_LOCK_STEP = 2 as const;
-/** Spread resource type in the lock/save gateway vocab. */
-export const SPREAD_POOL_RESOURCE_TYPE = 6 as const;
-/** Gateway crud audit enum for an EDIT (design §4.1, sketch-spread art-direction precedent). */
-export const SPREAD_POOL_ACTION_TYPE = 3 as const;
-
-/**
- * Lock target for one spread's pool metadata. `step: 2` + `resource_type: 6` route the
- * gateway down the scene OWNED-KEY merge (pool/title/thumbnail_url only), so a concurrent
- * retouch edit on the same spread never clobbers these keys and vice-versa.
- */
-export function buildSpreadPoolLockTarget(spreadId: string): LockTarget {
-  return {
-    step: SPREAD_POOL_LOCK_STEP,
-    resource_type: SPREAD_POOL_RESOURCE_TYPE,
-    resource_id: spreadId,
-    locale: null,
-  };
-}
 
 /**
  * Merge a partial pool flag change onto the current pool object. Absent current pool
