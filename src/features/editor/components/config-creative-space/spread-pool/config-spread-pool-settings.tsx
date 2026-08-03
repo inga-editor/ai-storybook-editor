@@ -20,11 +20,17 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 import { useCurrentBook } from '@/stores/book-store';
-import { useIllustrationSpreads, useSnapshotActions } from '@/stores/snapshot-store/selectors';
+import {
+  useIllustrationSpreads,
+  useSections,
+  useSnapshotActions,
+  useSnapshotId,
+} from '@/stores/snapshot-store/selectors';
 import { getBookLanguages } from '../../collaborators-creative-space/get-book-languages';
 import { getLanguageName } from '@/constants/config-constants';
 import {
   buildSpreadPoolLockTarget,
+  isPoolToggleLocked,
   mergePool,
   shouldSkipPoolWrite,
   mergeTitle,
@@ -32,6 +38,7 @@ import {
   type SpreadPoolPatch,
 } from './spread-pool-helpers';
 import { SpreadPoolRow, type SpreadPoolRowData } from './spread-pool-row';
+import { useSpreadThumbnailJob } from './use-spread-thumbnail-job';
 import { TranslateTitlesModal } from './translate-titles-modal';
 import { runLockedResourceSave } from '@/features/editor/utils/structural-lock-resource-save';
 import type { SpreadTitle } from '@/types/spread-types';
@@ -42,7 +49,16 @@ const log = createLogger('Editor', 'ConfigSpreadPoolSettings');
 export function ConfigSpreadPoolSettings() {
   const book = useCurrentBook();
   const spreads = useIllustrationSpreads();
+  const sections = useSections();
+  const snapshotId = useSnapshotId();
   const { updateIllustrationSpread } = useSnapshotActions();
+
+  const { isRunning, progress, thumbnailOverrides, startGenerate } = useSpreadThumbnailJob({
+    bookId: book?.id ?? null,
+    snapshotId,
+    dimension: book?.dimension ?? null,
+    spreadCount: spreads.length,
+  });
 
   const [isTranslateModalOpen, setTranslateModalOpen] = React.useState(false);
   const [savingSpreadIds, setSavingSpreadIds] = React.useState<Set<string>>(new Set());
@@ -65,8 +81,9 @@ export function ConfigSpreadPoolSettings() {
         pool: s.pool ?? null,
         title: s.title ?? null,
         thumbnailUrl: s.thumbnail_url ?? null,
+        poolLockedReason: isPoolToggleLocked(s, sections),
       })),
-    [spreads],
+    [spreads, sections],
   );
 
   const setSaving = React.useCallback((spreadId: string, on: boolean) => {
@@ -186,19 +203,18 @@ export function ConfigSpreadPoolSettings() {
       <div className="flex flex-col gap-2 border-b px-4 py-3">
         <div className="flex items-center justify-between">
           <span className="text-xs font-medium text-muted-foreground">Thumbnail</span>
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span>
-                  <Button variant="outline" size="sm" disabled className="gap-1.5">
-                    <Sparkles className="h-3.5 w-3.5" />
-                    Generate
-                  </Button>
-                </span>
-              </TooltipTrigger>
-              <TooltipContent>Coming soon</TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={isRunning || spreads.length === 0 || !snapshotId}
+            onClick={startGenerate}
+            className="gap-1.5"
+          >
+            <Sparkles className="h-3.5 w-3.5" />
+            {isRunning && progress
+              ? `Generating… ${progress.done}/${progress.total}`
+              : 'Generate'}
+          </Button>
         </div>
         <div className="flex items-center justify-between">
           <span className="text-xs font-medium text-muted-foreground">Title</span>
@@ -246,6 +262,7 @@ export function ConfigSpreadPoolSettings() {
               data={row}
               originalLanguage={originalLanguage}
               saving={savingSpreadIds.has(row.spreadId)}
+              thumbnailOverride={thumbnailOverrides[row.spreadId]}
               onToggle={(next) => handleToggle(row.spreadId, next)}
               onDefaultChange={(next) => handleDefaultChange(row.spreadId, next)}
               onTitleCommit={(text) => handleTitleCommit(row.spreadId, text)}
@@ -259,6 +276,7 @@ export function ConfigSpreadPoolSettings() {
           spreads={rows}
           originalLanguage={originalLanguage}
           languages={translateLanguages}
+          snapshotId={snapshotId}
           onSave={handleTranslateSave}
           onClose={() => setTranslateModalOpen(false)}
         />

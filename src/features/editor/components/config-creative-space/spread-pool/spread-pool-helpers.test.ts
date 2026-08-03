@@ -7,12 +7,19 @@ import {
   SPREAD_POOL_RESOURCE_TYPE,
   SPREAD_POOL_ACTION_TYPE,
   buildSpreadPoolLockTarget,
+  isPoolToggleLocked,
   mergePool,
   shouldSkipPoolWrite,
   mergeTitle,
   resolveTitleText,
   originalTitleText,
 } from './spread-pool-helpers';
+import type { BranchSetting, Section } from '@/types/illustration-types';
+
+function section(over: Partial<Section>): Section {
+  return { id: 's', title: '', start_spread_id: '', end_spread_id: '', ...over };
+}
+const BRANCH = {} as BranchSetting;
 
 describe('buildSpreadPoolLockTarget', () => {
   it('pins step 2 + resource_type 6 (owned-key merge, NOT whole-node step 1)', () => {
@@ -106,5 +113,30 @@ describe('originalTitleText', () => {
     expect(originalTitleText({ en_US: { text: 'Hi' } }, 'en_US')).toBe('Hi');
     expect(originalTitleText(null, 'en_US')).toBe('');
     expect(originalTitleText({ vi_VN: { text: 'Chào' } }, 'en_US')).toBe('');
+  });
+});
+
+describe('isPoolToggleLocked', () => {
+  it('returns null for a plain spread with no branch/section link', () => {
+    expect(isPoolToggleLocked({ id: 'sp1' }, [])).toBeNull();
+  });
+
+  it("returns 'branch' when the spread carries branch_setting", () => {
+    expect(isPoolToggleLocked({ id: 'sp1', branch_setting: BRANCH }, [])).toBe('branch');
+  });
+
+  it("returns 'section' when the spread id is a start/end/next anchor", () => {
+    const sections = [
+      section({ start_spread_id: 'sp2', end_spread_id: 'sp3', next_spread_id: 'sp4' }),
+    ];
+    expect(isPoolToggleLocked({ id: 'sp2' }, sections)).toBe('section'); // start
+    expect(isPoolToggleLocked({ id: 'sp3' }, sections)).toBe('section'); // end
+    expect(isPoolToggleLocked({ id: 'sp4' }, sections)).toBe('section'); // next
+    expect(isPoolToggleLocked({ id: 'sp9' }, sections)).toBeNull(); // unrelated
+  });
+
+  it("prefers 'branch' over 'section' when both apply", () => {
+    const sections = [section({ start_spread_id: 'sp1', end_spread_id: 'sp1' })];
+    expect(isPoolToggleLocked({ id: 'sp1', branch_setting: BRANCH }, sections)).toBe('branch');
   });
 });

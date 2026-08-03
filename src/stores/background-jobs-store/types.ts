@@ -111,6 +111,10 @@ export const ACTOR_SWAP_TYPES = [
   'actor_upscale',
 ] as const;
 
+/** Spread-pool thumbnail render job (api/jobs/17) — the config Spread Pool watcher
+ *  AND the global notification hook subscribe to this single-entry allowlist. */
+export const SPREAD_THUMBNAIL_TYPES = ['spread_thumbnail'] as const;
+
 /** Distribution export job types — export watcher subscribes to these. Includes
  *  `transcode_video` (auto-chained after `render_book_video`, ADR-037). */
 export const EXPORT_TYPES = [

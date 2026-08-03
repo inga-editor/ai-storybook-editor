@@ -6,8 +6,14 @@
 // open. Save diffs the draft against the store and commits ONLY changed spreads (parent
 // runs them sequentially, per-spread error toast). Close/backdrop discards everything
 // (no confirm — modal unmounts, draft is lost by design §3.2).
+//
+// [Translate] (client job, §3.2): loops the non-original languages SEQUENTIALLY, one
+// `POST /api/text/translate-content` per language, and OVERWRITES the whole translating
+// column in `draft` (incl. user edits / existing DB translations — no fill-empty). Nothing
+// persists until [Save]. Fail-soft per-language; close mid-run aborts + discards silently.
 
 import * as React from 'react';
+import { toast } from 'sonner';
 import {
   Dialog,
   DialogContent,
@@ -17,19 +23,30 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Languages, Loader2 } from 'lucide-react';
 import { cn } from '@/utils/utils';
 import { mergeTitle, originalTitleText } from './spread-pool-helpers';
 import type { SpreadPoolRowData } from './spread-pool-row';
 import type { Language } from '@/types/editor';
 import type { SpreadTitle } from '@/types/spread-types';
+import {
+  callTranslateContent,
+  type TranslateContentErrorCode,
+} from '@/apis/text-api';
+import { getLanguageName } from '@/constants/config-constants';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('Editor', 'TranslateTitlesModal');
+
+/** API cap: content ≤ 100 items per call (books ≤ ~20 spreads, so chunking is an edge). */
+const TRANSLATE_BATCH_SIZE = 100;
 
 interface TranslateTitlesModalProps {
   spreads: SpreadPoolRowData[]; // all spreads (any row is translatable)
   originalLanguage: string;
   languages: Language[]; // book languages MINUS original
+  /** Attribution-only snapshot version id → ai_service_logs.snapshot_id (book cost). */
+  snapshotId: string | null;
   onSave: (changes: Record<string, SpreadTitle>) => void; // spreadId → merged title
   onClose: () => void;
 }
@@ -42,10 +59,15 @@ function normalizeTitle(title: SpreadTitle | null | undefined): string {
   return JSON.stringify(sorted);
 }
 
+type LangTranslateResult =
+  | { ok: true; translations: string[] }
+  | { ok: false; errorCode: TranslateContentErrorCode };
+
 export function TranslateTitlesModal({
   spreads,
   originalLanguage,
   languages,
+  snapshotId,
   onSave,
   onClose,
 }: TranslateTitlesModalProps) {
@@ -56,6 +78,20 @@ export function TranslateTitlesModal({
     return seed;
   });
   const [activeCode, setActiveCode] = React.useState(languages[0]?.code ?? '');
+
+  const [isTranslating, setIsTranslating] = React.useState(false);
+  const [translateProgress, setTranslateProgress] = React.useState({ done: 0, total: 0 });
+  const abortRef = React.useRef<AbortController | null>(null);
+
+  // Cleanup: cancel any in-flight client job on unmount (close discards the draft).
+  React.useEffect(() => () => abortRef.current?.abort(), []);
+
+  // Spreads whose ORIGINAL-language title is non-empty, in array order. Frozen from props
+  // at click time (index ↔ spreadId mapping — API is index-based, carries no id).
+  const eligible = React.useMemo(
+    () => spreads.filter((s) => originalTitleText(s.title, originalLanguage).trim() !== ''),
+    [spreads, originalLanguage],
+  );
 
   const setDraftText = React.useCallback(
     (spreadId: string, code: string, text: string) => {
@@ -78,8 +114,95 @@ export function TranslateTitlesModal({
     onSave(changes);
   }, [spreads, draft, onSave]);
 
+  const onTranslate = React.useCallback(async () => {
+    if (isTranslating) return;
+    if (eligible.length === 0) {
+      log.info('onTranslate', 'no eligible source titles');
+      toast.info('No source titles to translate');
+      return;
+    }
+
+    const content = eligible.map((s) => originalTitleText(s.title, originalLanguage));
+    const src = getLanguageName(originalLanguage);
+    const total = languages.length;
+
+    abortRef.current?.abort();
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+    setIsTranslating(true);
+    setTranslateProgress({ done: 0, total });
+    log.info('onTranslate', 'start', { langs: total, eligible: eligible.length });
+
+    // One language → chunked calls (≤100/call), concatenated in order. Any chunk failure
+    // fails the whole language (partial column would break index ↔ spreadId mapping).
+    const translateLang = async (tgtName: string): Promise<LangTranslateResult> => {
+      const out: string[] = [];
+      for (let start = 0; start < content.length; start += TRANSLATE_BATCH_SIZE) {
+        const res = await callTranslateContent(
+          {
+            content: content.slice(start, start + TRANSLATE_BATCH_SIZE),
+            sourceLanguage: src,
+            targetLanguage: tgtName,
+            snapshotId: snapshotId ?? undefined,
+          },
+          { signal: ctrl.signal },
+        );
+        if (!res.success) return { ok: false, errorCode: res.errorCode };
+        out.push(...res.data.translations);
+      }
+      return { ok: true, translations: out };
+    };
+
+    const failedLangs: string[] = [];
+    try {
+      for (const lang of languages) {
+        const res = await translateLang(getLanguageName(lang.code));
+        if (ctrl.signal.aborted) {
+          log.info('onTranslate', 'aborted mid-run');
+          return;
+        }
+        if (!res.ok) {
+          if (res.errorCode === 'ABORT') {
+            log.info('onTranslate', 'aborted');
+            return;
+          }
+          log.warn('onTranslate', 'language failed', { lang: lang.code, errorCode: res.errorCode });
+          failedLangs.push(lang.code);
+        } else {
+          const { translations } = res;
+          // Overwrite the ENTIRE column for this language (eligible spreads only).
+          setDraft((prev) => {
+            const next = { ...prev };
+            eligible.forEach((s, i) => {
+              next[s.spreadId] = mergeTitle(next[s.spreadId], lang.code, translations[i] ?? '');
+            });
+            return next;
+          });
+        }
+        setTranslateProgress((p) => ({ ...p, done: p.done + 1 }));
+      }
+
+      const ok = total - failedLangs.length;
+      log.info('onTranslate', 'done', { ok, total, failed: failedLangs.length });
+      if (failedLangs.length > 0) toast.error(`Translated ${ok}/${total} languages`);
+      else toast.success(`Translated ${ok}/${total} languages`);
+    } finally {
+      if (abortRef.current === ctrl) abortRef.current = null;
+      if (!ctrl.signal.aborted) setIsTranslating(false);
+    }
+  }, [isTranslating, eligible, languages, originalLanguage, snapshotId]);
+
+  const handleOpenChange = React.useCallback(
+    (open: boolean) => {
+      if (open) return;
+      abortRef.current?.abort();
+      onClose();
+    },
+    [onClose],
+  );
+
   return (
-    <Dialog open onOpenChange={(open) => !open && onClose()}>
+    <Dialog open onOpenChange={handleOpenChange}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
           <DialogTitle>Translate Titles</DialogTitle>
@@ -91,9 +214,10 @@ export function TranslateTitlesModal({
             <button
               key={lang.code}
               type="button"
+              disabled={isTranslating}
               onClick={() => setActiveCode(lang.code)}
               className={cn(
-                'rounded px-3 py-1 text-xs font-medium transition-colors',
+                'rounded px-3 py-1 text-xs font-medium transition-colors disabled:opacity-50',
                 activeCode === lang.code
                   ? 'bg-primary text-primary-foreground'
                   : 'text-muted-foreground hover:bg-muted',
@@ -129,6 +253,7 @@ export function TranslateTitlesModal({
                 </span>
                 <Input
                   value={value}
+                  disabled={isTranslating}
                   onChange={(e) => setDraftText(s.spreadId, activeCode, e.target.value)}
                   placeholder="Translation"
                   aria-label={`Translation of spread ${s.index} into ${activeCode}`}
@@ -140,7 +265,22 @@ export function TranslateTitlesModal({
         </div>
 
         <DialogFooter>
-          <Button onClick={handleSave}>Save</Button>
+          <Button variant="outline" onClick={onTranslate} disabled={isTranslating} className="gap-1.5">
+            {isTranslating ? (
+              <>
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Translating… {translateProgress.done}/{translateProgress.total}
+              </>
+            ) : (
+              <>
+                <Languages className="h-4 w-4" />
+                Translate
+              </>
+            )}
+          </Button>
+          <Button onClick={handleSave} disabled={isTranslating}>
+            Save
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

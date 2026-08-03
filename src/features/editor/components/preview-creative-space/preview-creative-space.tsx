@@ -41,6 +41,7 @@ import {
   useBookCastingSlot,
 } from "@/stores/book-store";
 import { createLogger } from "@/utils/logger";
+import { filterDefaultStorySpreads } from "@/utils/spread-pool";
 import type { BaseSpread } from "@/types/spread-types";
 import type { Section } from "@/types/illustration-types";
 import type { PlayEdition } from "@/types/playable-types";
@@ -116,8 +117,22 @@ export function PreviewCreativeSpace() {
   // Source-aware derivation. RemixSpread = Omit<BaseSpread, ...> where the omitted
   // fields are all optional in BaseSpread, so the assignment is structurally safe.
   const spreads: BaseSpread[] = useMemo(() => {
+    // Remix branch returns as-is — pool is never cloned into a remix, so every
+    // remix spread is in the default story (predicate would always be true).
     if (activeRemix) return activeRemix.illustration.spreads as BaseSpread[];
-    return retouchSpreads;
+    // Original branch: drop hidden pool alternates (P4) at the SOURCE memo — NOT at
+    // `playableSpreads` (phase insight #3). `spreads` seeds spreadIds → effectiveSpreadId
+    // → currentSpread; filtering only `playableSpreads` would leave effectiveSpreadId
+    // pointing at a dropped spread ⇒ player lookup miss. Filtering here is semantically
+    // equivalent and safe (divergence-vs-doc: doc named `playableSpreads`).
+    const filtered = filterDefaultStorySpreads(retouchSpreads);
+    if (filtered.length !== retouchSpreads.length) {
+      log.debug("spreads", "pool spreads filtered", {
+        total: retouchSpreads.length,
+        kept: filtered.length,
+      });
+    }
+    return filtered;
   }, [activeRemix, retouchSpreads]);
 
   const sections: Section[] = useMemo(() => {

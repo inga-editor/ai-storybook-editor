@@ -34,6 +34,15 @@ export function PrintSpreadList({
   const wrapperRef = useRef<HTMLDivElement>(null);
 
   // Cast BaseSpread → PlayableSpread (default animations[]) — mirrors share-preview.
+  //
+  // Spread Pool (phase 04): intentionally NO `filterDefaultStorySpreads` here. This
+  // path always renders EXACTLY the one spread the server chose (`renderConfig.spread_id`,
+  // via share/01 render-preview — the single source of truth, same authority the
+  // share-preview client defers to). Default PDF scope is already pool-filtered
+  // server-side (phase 01 `collect_spreads_in_scope`), so a hidden alternate never
+  // reaches this component in default mode; when the user picks an explicit
+  // `spread_ids=[<pool spread>]`, explicit wins (matches jobs/06) and the server passes
+  // it verbatim — a client filter here would wrongly drop it. So: don't filter.
   const spread = useMemo<PlayableSpread | null>(() => {
     const raw = illustration.spreads?.[0];
     if (!raw) return null;

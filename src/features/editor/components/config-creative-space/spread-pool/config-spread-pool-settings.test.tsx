@@ -8,8 +8,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, cleanup } from '@testing-library/react';
 import type { BaseSpread } from '@/types/spread-types';
+import type { Section } from '@/types/illustration-types';
 import type { Book } from '@/types/editor';
 import type { LockTarget, SavePayload } from '@/stores/resource-lock-store/types';
+import type { UseSpreadThumbnailJob } from './use-spread-thumbnail-job';
 
 // ── Mocks ────────────────────────────────────────────────────────────────────
 const runLockedResourceSaveMock = vi.fn();
@@ -20,15 +22,31 @@ vi.mock('@/features/editor/utils/structural-lock-resource-save', () => ({
 
 const updateIllustrationSpread = vi.fn();
 let mockSpreads: BaseSpread[] = [];
+let mockSections: Section[] = [];
 let mockBook: Book | null = null;
 
 vi.mock('@/stores/snapshot-store/selectors', () => ({
   useIllustrationSpreads: () => mockSpreads,
+  useSections: () => mockSections,
   useSnapshotActions: () => ({ updateIllustrationSpread }),
+  useSnapshotId: () => 'snap-1',
 }));
 
 vi.mock('@/stores/book-store', () => ({
   useCurrentBook: () => mockBook,
+}));
+
+// The thumbnail job hook is exercised in isolation elsewhere — here we drive its
+// return so the panel's Generate button + optimistic row overrides are testable.
+const startGenerateMock = vi.fn();
+let mockJobState: UseSpreadThumbnailJob = {
+  isRunning: false,
+  progress: null,
+  thumbnailOverrides: {},
+  startGenerate: startGenerateMock,
+};
+vi.mock('./use-spread-thumbnail-job', () => ({
+  useSpreadThumbnailJob: () => mockJobState,
 }));
 
 import { ConfigSpreadPoolSettings } from './config-spread-pool-settings';
@@ -57,6 +75,14 @@ beforeEach(() => {
   cleanup();
   runLockedResourceSaveMock.mockReset();
   updateIllustrationSpread.mockReset();
+  startGenerateMock.mockReset();
+  mockSections = [];
+  mockJobState = {
+    isRunning: false,
+    progress: null,
+    thumbnailOverrides: {},
+    startGenerate: startGenerateMock,
+  };
   // Default: apply optimistically + report saved.
   runLockedResourceSaveMock.mockImplementation(
     async (_t: LockTarget, _s: SavePayload, applyLocal: () => void) => {
@@ -138,5 +164,49 @@ describe('ConfigSpreadPoolSettings', () => {
     mockSpreads = [];
     render(<ConfigSpreadPoolSettings />);
     expect(screen.getByText(/finish illustration phase first/i)).toBeInTheDocument();
+  });
+
+  it('shows "Generating… 1/3" on the button while the thumbnail job runs', () => {
+    mockJobState = {
+      isRunning: true,
+      progress: { done: 1, total: 3 },
+      thumbnailOverrides: {},
+      startGenerate: startGenerateMock,
+    };
+    render(<ConfigSpreadPoolSettings />);
+    const btn = screen.getByRole('button', { name: /Generating… 1\/3/ });
+    expect(btn).toBeInTheDocument();
+    expect(btn).toBeDisabled();
+  });
+
+  it('renders a step_details thumbnail override on the matching row', () => {
+    mockJobState = {
+      isRunning: true,
+      progress: { done: 1, total: 3 },
+      thumbnailOverrides: { sp1: 'https://cdn.test/sp1-thumb.webp' },
+      startGenerate: startGenerateMock,
+    };
+    render(<ConfigSpreadPoolSettings />);
+    // sp1 label resolves to its title 'Hello'.
+    const img = screen.getByAltText('Hello') as HTMLImageElement;
+    expect(img.src).toContain('sp1-thumb.webp');
+  });
+
+  it('clicking Generate delegates to the job hook', () => {
+    render(<ConfigSpreadPoolSettings />);
+    fireEvent.click(screen.getByRole('button', { name: /^Generate$/ }));
+    expect(startGenerateMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('disables the pool toggle for a branch spread (P3 lock)', () => {
+    mockSpreads = [
+      spread('spb', {
+        branch_setting: {} as never,
+        pool: { is_true: true, is_default: false },
+      }),
+    ];
+    render(<ConfigSpreadPoolSettings />);
+    const toggle = screen.getByLabelText(/Include .* in the spread pool/);
+    expect(toggle).toBeDisabled();
   });
 });

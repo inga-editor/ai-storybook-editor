@@ -12,6 +12,7 @@ import { toast } from 'sonner';
 import {
   EXPORT_TYPES,
   REMIX_SWAP_TYPES,
+  SPREAD_THUMBNAIL_TYPES,
   useBackgroundJobsStore,
   type BackgroundJob,
   type JobEvent,
@@ -22,8 +23,9 @@ import { createLogger } from '@/utils/logger';
 const log = createLogger('App', 'JobNotifications');
 
 const AUTO_DISMISS_MS = 30_000;
-const TOAST_TYPES = [...REMIX_SWAP_TYPES, ...EXPORT_TYPES];
+const TOAST_TYPES = [...REMIX_SWAP_TYPES, ...EXPORT_TYPES, ...SPREAD_THUMBNAIL_TYPES];
 const REMIX_TYPE_SET = new Set<string>(REMIX_SWAP_TYPES);
+const SPREAD_THUMBNAIL_TYPE_SET = new Set<string>(SPREAD_THUMBNAIL_TYPES);
 
 type Tone = 'success' | 'error' | 'info' | 'warning';
 interface ToastCopy {
@@ -159,8 +161,31 @@ function exportCopy(job: BackgroundJob): ToastCopy {
   }
 }
 
+/** Spread-pool thumbnail batch (api/jobs/17). Config panel handles the optimistic
+ *  row updates + snapshot refetch; this GLOBAL toast covers the "user navigated
+ *  away" case (ADR-037 — one toast hook for all jobs). */
+function spreadThumbnailCopy(job: BackgroundJob): ToastCopy {
+  const result = (job.result ?? {}) as { errors?: unknown[] };
+  const errs = Array.isArray(result.errors) ? result.errors.length : 0;
+  switch (job.status) {
+    case 'completed':
+      if (errs > 0) {
+        return { tone: 'warning', message: `Thumbnails finished with ${errs} warnings.` };
+      }
+      return { tone: 'success', message: 'Thumbnails generated.', autoDismiss: true };
+    case 'failed':
+      return { tone: 'error', message: 'Thumbnail generation failed.' };
+    case 'cancelled':
+      return { tone: 'info', message: 'Thumbnail generation cancelled.' };
+    default:
+      return { tone: 'info', message: 'Thumbnail update' };
+  }
+}
+
 function buildCopy(job: BackgroundJob): ToastCopy {
-  return REMIX_TYPE_SET.has(job.type) ? remixCopy(job) : exportCopy(job);
+  if (REMIX_TYPE_SET.has(job.type)) return remixCopy(job);
+  if (SPREAD_THUMBNAIL_TYPE_SET.has(job.type)) return spreadThumbnailCopy(job);
+  return exportCopy(job);
 }
 
 /** Mount once at the app root. Side-effect only — no render. */

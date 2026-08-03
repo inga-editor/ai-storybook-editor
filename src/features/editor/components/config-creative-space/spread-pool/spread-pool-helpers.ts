@@ -8,6 +8,10 @@
 
 import type { LockTarget } from '@/stores/resource-lock-store/types';
 import type { BaseSpread, SpreadPool, SpreadTitle } from '@/types/spread-types';
+import type { Section } from '@/types/illustration-types';
+
+/** Why a spread's pool toggle is locked (invariant P3: pool ⊥ branch/section). */
+export type PoolToggleLockReason = 'branch' | 'section';
 
 /** Owned-key sub-object persisted per spread — NEVER the whole node (plan trap #4). */
 export type SpreadPoolPatch = Partial<Pick<BaseSpread, 'pool' | 'title' | 'thumbnail_url'>>;
@@ -101,6 +105,32 @@ export function resolveTitleText(
     firstAvailableLanguageText(title) ||
     `Spread ${index}`
   );
+}
+
+/**
+ * Whether a spread's pool toggle must be LOCKED (disabled) to enforce invariant P3
+ * — "pool ⊥ branch/section" (design §1.3, chốt 2026-08-03). A branch spread or a
+ * section anchor may NOT join the pool, else the original-consumer array filter
+ * (`isSpreadInDefaultStory`) would drop it BEFORE the branch walk and dangle its
+ * `next_spread_id` navigation. Returns `'branch'` (takes precedence) when the spread
+ * carries `branch_setting`; `'section'` when its id is a section `start/end/next`
+ * anchor; else `null`. Pure — unit-tested independently.
+ */
+export function isPoolToggleLocked(
+  spread: Pick<BaseSpread, 'id' | 'branch_setting'>,
+  sections: readonly Section[],
+): PoolToggleLockReason | null {
+  if (spread.branch_setting) return 'branch';
+  for (const sec of sections) {
+    if (
+      sec.start_spread_id === spread.id ||
+      sec.end_spread_id === spread.id ||
+      sec.next_spread_id === spread.id
+    ) {
+      return 'section';
+    }
+  }
+  return null;
 }
 
 /** Original-language raw text for a controlled input (empty string when absent). */

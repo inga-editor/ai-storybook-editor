@@ -688,6 +688,100 @@ export async function enqueueRemixRenderVideo(
   );
 }
 
+// ── Spread thumbnails (api/jobs/17 — batch render spread pool thumbnails) ─────
+// Config Spread Pool "Generate" button. Body `{snapshot_id, canvas}` — canvas is
+// FE-resolved from `book.dimension` (single-source TS, NOT re-derived server-side).
+// BE loops every spread, renders + persists `spreads[i].thumbnail_url` leaf-write
+// service-role (NO rtype-6 lock — peers refetch). `step_details[spreadId]` carries
+// per-spread status + thumbnail_url the watcher merges optimistically.
+// Spec: ai-storybook-design/api/jobs/17-enqueue-spread-thumbnails.md
+
+export interface EnqueueSpreadThumbnailsParams {
+  snapshot_id: string;
+  canvas: { width: number; height: number };
+  spread_ids?: string[];
+  max_side?: number;
+}
+
+/** Per-spread progress detail in `background_jobs.step_details[spreadId]`. */
+export interface SpreadThumbnailStepDetail {
+  status: 'pending' | 'done' | 'failed' | 'skipped';
+  thumbnail_url?: string;
+  error_code?: string;
+}
+
+export interface EnqueueSpreadThumbnailsEnqueuedData {
+  job_id: string;
+  status: 'queued';
+  type: 'spread_thumbnail';
+  total_steps: number;
+  skipped?: false;
+  deduped?: false;
+}
+
+export interface EnqueueSpreadThumbnailsDedupedData {
+  deduped: true;
+  job_id: string;
+  status: 'queued' | 'running';
+}
+
+export interface EnqueueSpreadThumbnailsSkippedData {
+  skipped: true;
+  reason: 'no_spreads';
+}
+
+export type EnqueueSpreadThumbnailsData =
+  | EnqueueSpreadThumbnailsEnqueuedData
+  | EnqueueSpreadThumbnailsDedupedData
+  | EnqueueSpreadThumbnailsSkippedData;
+
+/** Narrowing guards — 3-way union (enqueued | deduped | skipped). */
+export function isSpreadThumbnailsDeduped(
+  d: EnqueueSpreadThumbnailsData,
+): d is EnqueueSpreadThumbnailsDedupedData {
+  return (d as EnqueueSpreadThumbnailsDedupedData).deduped === true;
+}
+
+export function isSpreadThumbnailsSkipped(
+  d: EnqueueSpreadThumbnailsData,
+): d is EnqueueSpreadThumbnailsSkippedData {
+  return (d as EnqueueSpreadThumbnailsSkippedData).skipped === true;
+}
+
+/** POST /api/jobs/spread-thumbnails (path verbatim — FastAPI, no kebab flatten).
+ *  Returns parsed `data` on 2xx (enqueued/deduped/skipped — union preserved);
+ *  throws `EnqueueJobError` (with backend `code` + `httpStatus`) on non-2xx. */
+export async function enqueueSpreadThumbnails(
+  params: EnqueueSpreadThumbnailsParams,
+): Promise<EnqueueSpreadThumbnailsData> {
+  log.info('enqueueSpreadThumbnails', 'request', {
+    snapshotId: params.snapshot_id,
+    canvasW: params.canvas.width,
+    canvasH: params.canvas.height,
+    spreadIdCount: params.spread_ids?.length,
+    maxSide: params.max_side,
+  });
+  const result = await callImageApi<EnqueueJobResponse<EnqueueSpreadThumbnailsData>>(
+    '/api/jobs/spread-thumbnails',
+    {
+      snapshot_id: params.snapshot_id,
+      canvas: params.canvas,
+      ...(params.spread_ids ? { spread_ids: params.spread_ids } : {}),
+      ...(params.max_side != null ? { max_side: params.max_side } : {}),
+    },
+  );
+  if (!result.success) {
+    const failure = result as ImageApiFailure;
+    log.error('enqueueSpreadThumbnails', 'failed', {
+      snapshotId: params.snapshot_id,
+      httpStatus: failure.httpStatus,
+      errorCode: failure.errorCode,
+    });
+    throw new EnqueueJobError(failure.error, failure.httpStatus, failure.errorCode);
+  }
+  return result.data;
+}
+
 /** POST /api/jobs/{jobId}/cancel */
 export async function cancelJobRemote(
   jobId: string,
