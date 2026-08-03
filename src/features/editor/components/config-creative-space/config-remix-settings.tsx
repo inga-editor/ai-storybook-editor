@@ -21,8 +21,8 @@ import {
   REMIX_SETTINGS_DEFAULT_TAB,
   REMIX_STORY_FEATURES,
   makeDefaultRemixMemories,
-  makeDefaultRemixStory,
   makeDefaultTraits,
+  normalizeRemixStory,
   normalizeRemixTraits,
   type RemixSettingsTab,
   type RemixStoryFeatureKey,
@@ -65,6 +65,7 @@ function summarizeRemix(remix: BookRemix) {
   return {
     presetOn: remix.story.preset.is_enabled,
     branchOn: remix.story.branch.is_enabled,
+    poolOn: remix.story.spread_pool.is_enabled,
     chars: remix.characters.length,
     memPhotos: remix.memories.photos.length,
     memGate: remix.memories.is_enabled,
@@ -84,7 +85,9 @@ export function ConfigRemixSettings() {
   if (!book) return null;
 
   const remix: BookRemix = {
-    story:      remixRaw?.story      ?? makeDefaultRemixStory(),
+    // normalizeRemixStory fills any missing gate (incl. legacy `spread_pool`) so the
+    // STORY tab never reads `.is_enabled` on undefined.
+    story:      normalizeRemixStory(remixRaw?.story),
     characters: remixRaw?.characters ?? DEFAULT_REMIX.characters,
     memories:   remixRaw?.memories   ?? makeDefaultRemixMemories(),
     voices:     remixRaw?.voices     ?? DEFAULT_REMIX.voices,

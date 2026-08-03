@@ -48,7 +48,7 @@ import type {
 import { createLogger } from '@/utils/logger';
 import { newUuid } from '@/utils/uuid';
 import { resolveRemixCastSets } from '@/features/remix/effective-cast';
-import { resolveRemixSpreadPath } from './clone/resolve-remix-spread-path';
+import { resolveRemixSpreadPath, filterPoolSpreads } from './clone/resolve-remix-spread-path';
 import {
   materializeCastedLayer,
   type MaterializeCastingContext,
@@ -94,6 +94,10 @@ function stripSpread(spread: BaseSpread): RemixSpread {
   delete cloned.tiny_sketch_media_url;
   // Remix has no branching — the resolved path is already linear.
   delete cloned.branch_setting;
+  // Spread pool is resolve-at-create (parity with branch_setting/casting_slot):
+  // the pool filter already applied the choices, so the flag is spent. `title`
+  // + `thumbnail_url` are harmless display metadata (P2) — KEEP them.
+  delete cloned.pool;
   return cloned as RemixSpread;
 }
 
@@ -210,6 +214,15 @@ export function buildRemixClonePayload(
     config.story.branches,
   );
 
+  // ── c2. Pool filter — apply remix_config.story.pool_spreads[] choices ──────
+  // ⚠️ ORDER (invariant P3): filter runs AFTER the branch walk and BEFORE the
+  // strip/materialize map. A pool spread can also be a branch spread — the walk
+  // must resolve its branch first so the topology (and everything reachable
+  // through it) survives; removal only shortens this OUTPUT list. From here on
+  // use `keptSpreads`, NOT `path.ordered`, so an unchecked pool spread cannot
+  // leak back into the payload.
+  const keptSpreads = filterPoolSpreads(path.ordered, config.story.pool_spreads ?? []);
+
   // ── 2. Strip spreads + materialize casting + rewrite casted tags ───────────
   const materCtx: MaterializeCastingContext = {
     castingAxes: input.castingAxes,
@@ -224,7 +237,7 @@ export function buildRemixClonePayload(
 
   let castedLayerCount = 0;
   let materializedCount = 0;
-  const spreads: RemixSpread[] = path.ordered.map((srcSpread) => {
+  const spreads: RemixSpread[] = keptSpreads.map((srcSpread) => {
     const spread = stripSpread(srcSpread);
     for (const layer of spread.images ?? []) {
       const hadSlot = !!layer.casting_slot;

@@ -12,6 +12,8 @@ const ALL_SPREAD_KEYS = [
   'raw_textboxes', 'images', 'textboxes', 'shapes', 'videos', 'auto_pics',
   'audios', 'auto_audios', 'composites', 'quizzes', 'animations',
   'branch_setting',
+  // Spread Pool metadata (2026-08-03) — scene owned keys.
+  'pool', 'thumbnail_url', 'title',
 ];
 
 describe('collab-owned-subtree partition', () => {
@@ -33,6 +35,7 @@ describe('collab-owned-subtree partition', () => {
     expect([...SCENE_OWNED_KEYS]).toEqual([
       'raw_images', 'raw_textboxes', 'manuscript',
       'tiny_sketch_media_url', 'pages', 'branch_setting',
+      'pool', 'thumbnail_url', 'title',
     ]);
     expect([...RETOUCH_OWNED_KEYS]).toEqual([
       'images', 'textboxes', 'shapes', 'videos', 'auto_pics', 'audios',

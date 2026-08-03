@@ -69,7 +69,7 @@ const CAST_BY_PRESET: Record<'A' | 'B', string[]> = {
 };
 
 const INITIAL_CONFIG: RemixConfig = {
-  story: { presets: [], branches: [] },
+  story: { presets: [], branches: [], pool_spreads: [] },
   characters: [],
   memories: {
     is_enabled: true,

@@ -19,7 +19,7 @@
 
 import type { BaseSpread } from '@/types/spread-types';
 import type { Section } from '@/types/illustration-types';
-import type { RemixBranchChoice } from '@/types/remix';
+import type { RemixBranchChoice, RemixPoolSpreadChoice } from '@/types/remix';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('Store', 'RemixSpreadPath');
@@ -122,4 +122,66 @@ export function resolveRemixSpreadPath(
     truncatedByCap,
   });
   return { ordered, truncatedByCycle, truncatedByCap };
+}
+
+// ── Spread pool filter (clone step c2) ────────────────────────────────────────
+//
+// Applies the frozen `remix_config.story.pool_spreads[]` choices to the ALREADY
+// walked linear path. MUST run AFTER `resolveRemixSpreadPath` (walk-before-filter,
+// invariant P3): a pool spread can also be a branch spread — it must resolve its
+// branch normally so the topology (and every spread reachable through it) stays
+// intact. Removal only shortens the OUTPUT list, never the walk.
+//
+// Rules (see snapshot/illustration-structure.md §Spread Pool):
+//   - Normal spread (`pool?.is_true !== true`) → ALWAYS kept. `is_default === true`
+//     without `is_true` is meaningless (P1) → keep as normal + warn.
+//   - Pool spread → enabled by its choice `is_enabled`; a missing/dangling entry
+//     (P5) falls back to `pool.is_default` + warn (never throw, never default-drop).
+//
+// Pure function — no side effects beyond logging. Relative order preserved.
+export function filterPoolSpreads(
+  ordered: BaseSpread[],
+  poolChoices: RemixPoolSpreadChoice[],
+): BaseSpread[] {
+  const choiceById = new Map<string, boolean>(
+    poolChoices.map((c) => [c.spread_id, c.is_enabled]),
+  );
+  const kept: BaseSpread[] = [];
+
+  for (const spread of ordered) {
+    const pool = spread.pool;
+
+    // ── normal spread — always kept ──────────────────────────────────────────
+    if (pool?.is_true !== true) {
+      if (pool?.is_default === true) {
+        // rule P1: is_default is only meaningful when is_true.
+        log.warn('filterPoolSpreads', 'is_default without is_true — treated as normal spread', {
+          spreadId: spread.id,
+        });
+      }
+      kept.push(spread);
+      continue;
+    }
+
+    // ── pool spread — gated by its choice ────────────────────────────────────
+    let enabled: boolean;
+    if (choiceById.has(spread.id)) {
+      enabled = choiceById.get(spread.id) as boolean;
+    } else {
+      // P5 dangling: missing choice → fall back to the pool default.
+      enabled = pool.is_default === true;
+      log.warn('filterPoolSpreads', 'missing pool choice — fallback to is_default', {
+        spreadId: spread.id,
+        fallback: enabled,
+      });
+    }
+
+    if (enabled) {
+      kept.push(spread);
+    } else {
+      log.debug('filterPoolSpreads', 'spread excluded from clone', { spreadId: spread.id });
+    }
+  }
+
+  return kept;
 }

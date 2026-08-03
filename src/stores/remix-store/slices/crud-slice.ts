@@ -23,7 +23,7 @@ const log = createLogger('Store', 'RemixStore');
  *  characters ⇒ the swappable set resolves to empty (soft, non-blocking; the
  *  visual roster still clones — it is not gated). */
 const EMPTY_BOOK_REMIX: BookRemix = {
-  story: { preset: { is_enabled: false }, branch: { is_enabled: false } },
+  story: { preset: { is_enabled: false }, branch: { is_enabled: false }, spread_pool: { is_enabled: false } },
   characters: [],
   memories: { is_enabled: false, photos: [] },
   voices: [],

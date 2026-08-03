@@ -495,9 +495,18 @@ export interface RemixBranchChoice {
   section_id: string;
 }
 
+/** 1 entry / pool spread — remixer bật/tắt 1 pooled spread (alternative playable
+ *  page). Materialize-always: seeded từ `pool.is_default` kể cả khi gate OFF.
+ *  Soft ref → snapshot.illustration.spreads[].pool. NEW 2026-08-03. */
+export interface RemixPoolSpreadChoice {
+  spread_id: string;
+  is_enabled: boolean;
+}
+
 export interface RemixStoryConfig {
   presets: RemixPresetChoice[];
   branches: RemixBranchChoice[];
+  pool_spreads: RemixPoolSpreadChoice[]; // NEW 2026-08-03
 }
 
 export interface RemixMemoryPhotoChoice {
@@ -566,6 +575,18 @@ export interface BranchSpreadOption {
   spread_number: string; // pages[0].number — label "SPREAD {n}"
   title: string; // câu hỏi rẽ nhánh
   branches: BranchSpreadBranchOption[];
+}
+
+/** Ephemeral read-model built by `usePoolSpreadOptions` (Phase 05). One entry per
+ *  spread with `pool.is_true === true`, in snapshot array order. `title` resolves
+ *  original_language → first available language → `Spread {n}`; `is_default`
+ *  seeds the pre-check state. */
+export interface PoolSpreadOption {
+  spread_id: string;
+  spread_number: string; // pages[0].number — label "SPREAD {n}"
+  title: string; // đã resolve qua chuỗi fallback
+  thumbnail_url: string | null;
+  is_default: boolean;
 }
 
 /** Default name for a freshly created remix (create-only modal). */

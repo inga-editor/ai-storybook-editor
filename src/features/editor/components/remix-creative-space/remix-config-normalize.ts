@@ -24,8 +24,10 @@ import type { Human, TraitType } from '@/types/human';
 import type { BookRemix, CastingAxis, RemixCharacterEntry } from '@/types/editor';
 import type {
   BranchSpreadOption,
+  PoolSpreadOption,
   RemixBranchChoice,
   RemixConfig,
+  RemixPoolSpreadChoice,
   RemixPresetChoice,
   RemixTraitChoice,
 } from '@/types/remix';
@@ -116,6 +118,7 @@ export interface NormalizeRemixConfigContext {
   bookRemix: BookRemix;
   castingAxes: CastingAxis[];
   branchSpreads: BranchSpreadOption[];
+  poolSpreads: PoolSpreadOption[];
   humans: Human[];
 }
 
@@ -125,6 +128,9 @@ export interface NormalizeRemixConfigContext {
  *     modal was open are dropped naturally (we map over the current axes); axes
  *     with zero presets contribute nothing.
  *  2. `story.branches` — same rule over the live branch spreads.
+ *  2b.`story.pool_spreads` — fill each LIVE pool spread by `spread_id` (missing →
+ *     `is_enabled = option.is_default`); entries pointing at a spread no longer in
+ *     options are DROPPED (dangling). Materialize-always: every option gets an entry.
  *  3. `characters`     — WYSIWYG trait mask (`normalizeRemixConfigTraits`);
  *     entries OUTSIDE the effective cast are KEPT (createRemix purges later).
  *  4. `memories` / `voices` / `languages` — passed through untouched.
@@ -134,7 +140,7 @@ export function normalizeRemixConfig(
   draft: RemixConfig,
   ctx: NormalizeRemixConfigContext,
 ): RemixConfig {
-  const { bookRemix, castingAxes, branchSpreads, humans } = ctx;
+  const { bookRemix, castingAxes, branchSpreads, poolSpreads, humans } = ctx;
 
   // 1. Story presets — fill/resolve over the current axes (drops vanished axes).
   const presets: RemixPresetChoice[] = [];
@@ -163,9 +169,20 @@ export function normalizeRemixConfig(
     branches.push({ spread_id: bs.spread_id, section_id: sectionId });
   }
 
+  // 2b. Pool spreads — fill each live option (missing → default); dangling dropped
+  //     naturally (we map over the current options, not the draft entries).
+  const pool_spreads: RemixPoolSpreadChoice[] = [];
+  for (const option of poolSpreads) {
+    const existing = draft.story.pool_spreads.find((p) => p.spread_id === option.spread_id);
+    pool_spreads.push({
+      spread_id: option.spread_id,
+      is_enabled: existing ? existing.is_enabled : option.is_default,
+    });
+  }
+
   // 3. Character traits — WYSIWYG mask; entries preserved (no purge here).
   const traitsNormalized = normalizeRemixConfigTraits(
-    { ...draft, story: { presets, branches } },
+    { ...draft, story: { presets, branches, pool_spreads } },
     bookRemix.characters,
     humans,
   );
@@ -173,12 +190,13 @@ export function normalizeRemixConfig(
   log.info('normalizeRemixConfig', 'normalized draft', {
     presetCount: presets.length,
     branchCount: branches.length,
+    poolSpreadCount: pool_spreads.length,
     characterCount: traitsNormalized.characters.length,
   });
 
   // 5. props intentionally omitted — build the result explicitly (no spread of props).
   return {
-    story: { presets, branches },
+    story: { presets, branches, pool_spreads },
     characters: traitsNormalized.characters,
     memories: traitsNormalized.memories,
     voices: traitsNormalized.voices,

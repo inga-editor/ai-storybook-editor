@@ -41,6 +41,7 @@ export type ConfigSection =
   | 'layout'
   | 'effect'
   | 'remix'
+  | 'spread-pool'
   | 'parametric-slot'
   | 'casting-slot'
   | 'distribution'
@@ -59,10 +60,12 @@ export const CONFIG_SECTIONS: ConfigSectionItem[] = [
   { key: 'narrator',       label: 'Narrator',         icon: 'AudioLines'     },
   { key: 'musics-sounds',  label: 'Musics & Sounds',  icon: 'Music'          },
   { key: 'quiz',           label: 'Quiz',             icon: 'HelpCircle'     },
-  { key: 'branch',         label: 'Branch',           icon: 'GitBranch'      },
   { key: 'layout',         label: 'Layout',           icon: 'LayoutGrid'     },
   { key: 'effect',         label: 'Effect',           icon: 'Sparkles'       },
   { key: 'remix',          label: 'Remix',            icon: 'RefreshCw'      },
+  // Order CHỐT (validation 2026-08-03): remix → branch → spread-pool → parametric-slot.
+  { key: 'branch',         label: 'Branch',           icon: 'GitBranch'      },
+  { key: 'spread-pool',    label: 'Spread Pool',      icon: 'Layers'         },
   { key: 'parametric-slot',label: 'Parametric Slot',  icon: 'SlidersHorizontal' },
   { key: 'casting-slot',   label: 'Casting Slot',     icon: 'Drama'          },
   { key: 'distribution',   label: 'Distribution',     icon: 'Share2'         },
@@ -287,6 +290,7 @@ export type RemixStoryFeatureKey = keyof RemixStory;
 export const REMIX_STORY_FEATURES: ReadonlyArray<{ key: RemixStoryFeatureKey; label: string }> = [
   { key: 'preset', label: 'Preset' },
   { key: 'branch', label: 'Branch' },
+  { key: 'spread_pool', label: 'Spread Pool' },
 ] as const;
 
 // Every trait defaults enabled when a character is first added to remix.
@@ -297,6 +301,7 @@ export const makeDefaultTraits = (): RemixTraitEntry[] =>
 export const makeDefaultRemixStory = (): RemixStory => ({
   preset: { is_enabled: false },
   branch: { is_enabled: false },
+  spread_pool: { is_enabled: false },
 });
 
 export const makeDefaultRemixMemories = (): RemixMemories => ({
@@ -360,11 +365,26 @@ export function normalizeBookRemix(raw: unknown): BookRemix | null {
   };
 }
 
-/** Coerce a raw `story` node — missing/partial gates fall back to OFF. */
-function normalizeRemixStory(raw: RemixStory | undefined): RemixStory {
+/** Coerce a raw `story` node — missing/partial gates fall back to OFF.
+ *  Reader tolerance (2026-08-03): legacy `story` (shape 2026-07-31) lacks
+ *  `spread_pool`; fill `{is_enabled:false}` and warn ONCE per normalize so an old
+ *  book opens without crashing the STORY tab (no DB backfill). */
+export function normalizeRemixStory(raw: Partial<RemixStory> | undefined): RemixStory {
+  if (raw != null && raw.spread_pool === undefined) {
+    // debug (not warn): called in render body, so a legacy book would log every
+    // render — the fill is a benign default, not an anomaly worth warn-level noise.
+    log.debug('normalizeRemixStory', 'legacy story missing spread_pool, filling OFF', {
+      hadSpreadPool: false,
+    });
+  } else {
+    log.debug('normalizeRemixStory', 'story normalized', {
+      hasSpreadPool: raw?.spread_pool !== undefined,
+    });
+  }
   return {
     preset: { is_enabled: raw?.preset?.is_enabled === true },
     branch: { is_enabled: raw?.branch?.is_enabled === true },
+    spread_pool: { is_enabled: raw?.spread_pool?.is_enabled === true },
   };
 }
 

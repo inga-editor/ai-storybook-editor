@@ -18,6 +18,7 @@ function baseConfig(): RemixConfig {
     story: {
       presets: [{ axis_id: 'ax1', preset_id: 'p1' }],
       branches: [{ spread_id: 's1', section_id: 'sec1' }],
+      pool_spreads: [],
     },
     characters: [
       {

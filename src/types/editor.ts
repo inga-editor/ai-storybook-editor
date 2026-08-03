@@ -164,6 +164,7 @@ export interface RemixToggleEntry {
 export interface RemixStory {
   preset: RemixToggleEntry;
   branch: RemixToggleEntry;
+  spread_pool: RemixToggleEntry; // NEW 2026-08-03 — remixer may pick pooled spreads
 }
 
 // MEMORIES — availability overlay per photo slot. key soft-refs

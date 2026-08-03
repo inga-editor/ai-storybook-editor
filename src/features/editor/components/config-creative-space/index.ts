@@ -11,5 +11,6 @@ export { ConfigRemixSettings } from './config-remix-settings';
 export { ConfigParametricSlotSettings } from './config-parametric-slot-settings';
 export { ConfigCastingSlotSettings } from './config-casting-slot-settings';
 export { ConfigMusicsSoundsSettings } from './musics-sounds/config-musics-sounds-settings';
+export { ConfigSpreadPoolSettings } from './spread-pool/config-spread-pool-settings';
 export { LayoutThumbnail } from './layout-thumbnail';
 export { LayoutSelectionModal } from './layout-selection-modal';

@@ -38,7 +38,7 @@ interface RawRemixRow {
 }
 
 const EMPTY_ILLUSTRATION: RemixIllustration = { spreads: [], sections: [] };
-const EMPTY_STORY: RemixStoryConfig = { presets: [], branches: [] };
+const EMPTY_STORY: RemixStoryConfig = { presets: [], branches: [], pool_spreads: [] };
 const EMPTY_MEMORIES: RemixMemoriesConfig = {
   is_enabled: false,
   style: MEMORY_STYLE_DEFAULT,

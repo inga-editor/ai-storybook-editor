@@ -13,8 +13,11 @@
 import { describe, it, expect } from 'vitest';
 import {
   normalizeBookRemix,
+  normalizeRemixStory,
   normalizeRemixTraits,
   normalizeBookTypography,
+  CONFIG_SECTIONS,
+  REMIX_STORY_FEATURES,
   DEFAULT_TYPOGRAPHY,
 } from './config-constants';
 import { TRAIT_TYPES } from './trait-constants';
@@ -33,7 +36,11 @@ describe('normalizeBookRemix', () => {
   it('coerces missing fields to full default shape (story/memories all OFF)', () => {
     const result = normalizeBookRemix({});
     expect(result).toEqual({
-      story: { preset: { is_enabled: false }, branch: { is_enabled: false } },
+      story: {
+        preset: { is_enabled: false },
+        branch: { is_enabled: false },
+        spread_pool: { is_enabled: false },
+      },
       characters: [],
       memories: { is_enabled: false, photos: [] },
       voices: [],
@@ -68,6 +75,7 @@ describe('normalizeBookRemix', () => {
     expect(result!.story).toEqual({
       preset: { is_enabled: false },
       branch: { is_enabled: false },
+      spread_pool: { is_enabled: false },
     });
     expect(result!.memories).toEqual({ is_enabled: false, photos: [] });
   });
@@ -114,6 +122,67 @@ describe('normalizeBookRemix', () => {
     const traits = result!.characters[0].traits;
     expect(traits.map((t) => t.type)).toEqual(TRAIT_TYPES);
     expect(traits.every((t) => t.is_enabled === true)).toBe(true);
+  });
+});
+
+describe('normalizeRemixStory (Spread Pool reader tolerance 2026-08-03)', () => {
+  it('fills spread_pool OFF when legacy story (shape 2026-07-31) lacks the key', () => {
+    const out = normalizeRemixStory({
+      preset: { is_enabled: true },
+      branch: { is_enabled: false },
+    });
+    expect(out).toEqual({
+      preset: { is_enabled: true },
+      branch: { is_enabled: false },
+      spread_pool: { is_enabled: false },
+    });
+  });
+
+  it('preserves an explicit spread_pool gate', () => {
+    const out = normalizeRemixStory({
+      preset: { is_enabled: false },
+      branch: { is_enabled: false },
+      spread_pool: { is_enabled: true },
+    });
+    expect(out.spread_pool.is_enabled).toBe(true);
+  });
+
+  it('fills all three gates OFF for undefined story', () => {
+    expect(normalizeRemixStory(undefined)).toEqual({
+      preset: { is_enabled: false },
+      branch: { is_enabled: false },
+      spread_pool: { is_enabled: false },
+    });
+  });
+});
+
+describe('CONFIG_SECTIONS — Spread Pool sidebar entry (2026-08-03)', () => {
+  const keys = CONFIG_SECTIONS.map((s) => s.key);
+
+  it('contains the spread-pool section with PascalCase Layers icon', () => {
+    const entry = CONFIG_SECTIONS.find((s) => s.key === 'spread-pool');
+    expect(entry).toBeDefined();
+    expect(entry!.label).toBe('Spread Pool');
+    expect(entry!.icon).toBe('Layers'); // PascalCase — lowercase 'layers' → blank icon
+  });
+
+  it('orders remix < branch < spread-pool < parametric-slot', () => {
+    const remix = keys.indexOf('remix');
+    const branch = keys.indexOf('branch');
+    const pool = keys.indexOf('spread-pool');
+    const parametric = keys.indexOf('parametric-slot');
+    expect(remix).toBeGreaterThanOrEqual(0);
+    expect(remix).toBeLessThan(branch);
+    expect(branch).toBeLessThan(pool);
+    expect(pool).toBeLessThan(parametric);
+  });
+
+  it('exposes spread_pool as the 3rd STORY remix feature row', () => {
+    expect(REMIX_STORY_FEATURES.map((f) => f.key)).toEqual([
+      'preset',
+      'branch',
+      'spread_pool',
+    ]);
   });
 });
 

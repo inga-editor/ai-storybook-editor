@@ -11,8 +11,9 @@ import { useMemo } from 'react';
 import { useBookCastingSlot, useBookParametricSlot } from '@/stores/book-store';
 import { useCharacterKeys } from '@/stores/snapshot-store/selectors';
 import type { CastingAxis, ParametricPhotoEntry } from '@/types/editor';
-import type { BranchSpreadOption } from '@/types/remix';
+import type { BranchSpreadOption, PoolSpreadOption } from '@/types/remix';
 import { useBranchSpreadOptions } from './use-branch-spread-options';
+import { usePoolSpreadOptions } from './use-pool-spread-options';
 
 // Module-level empties → stable identity when a book has no casting/parametric slot.
 const EMPTY_AXES: CastingAxis[] = [];
@@ -21,6 +22,7 @@ const EMPTY_PHOTOS: ParametricPhotoEntry[] = [];
 export interface RemixLookupSources {
   castingAxes: CastingAxis[];
   branchSpreads: BranchSpreadOption[];
+  poolSpreads: PoolSpreadOption[];
   parametricPhotos: ParametricPhotoEntry[];
   snapshotCharacterKeys: string[];
 }
@@ -29,13 +31,14 @@ export function useRemixLookupSources(): RemixLookupSources {
   const castingSlot = useBookCastingSlot();
   const parametricSlot = useBookParametricSlot();
   const branchSpreads = useBranchSpreadOptions();
+  const poolSpreads = usePoolSpreadOptions();
   const snapshotCharacterKeys = useCharacterKeys();
 
   const castingAxes = castingSlot?.casting_axes ?? EMPTY_AXES;
   const parametricPhotos = parametricSlot?.photos ?? EMPTY_PHOTOS;
 
   return useMemo(
-    () => ({ castingAxes, branchSpreads, parametricPhotos, snapshotCharacterKeys }),
-    [castingAxes, branchSpreads, parametricPhotos, snapshotCharacterKeys],
+    () => ({ castingAxes, branchSpreads, poolSpreads, parametricPhotos, snapshotCharacterKeys }),
+    [castingAxes, branchSpreads, poolSpreads, parametricPhotos, snapshotCharacterKeys],
   );
 }

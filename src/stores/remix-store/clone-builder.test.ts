@@ -66,7 +66,7 @@ function makeAxis(): CastingAxis {
 
 function makeBookRemix(enabledKeys: string[]): BookRemix {
   return {
-    story: { preset: { is_enabled: true }, branch: { is_enabled: true } },
+    story: { preset: { is_enabled: true }, branch: { is_enabled: true }, spread_pool: { is_enabled: false } },
     characters: enabledKeys.map((k) => ({ key: k, name: k, is_enabled: true, traits: [] })),
     memories: { is_enabled: false, photos: [] },
     voices: [],
@@ -76,7 +76,7 @@ function makeBookRemix(enabledKeys: string[]): BookRemix {
 
 function makeConfig(over: Partial<RemixConfig> = {}): RemixConfig {
   return {
-    story: { presets: [], branches: [] },
+    story: { presets: [], branches: [], pool_spreads: [] },
     characters: [],
     memories: { is_enabled: false, style: 'styled', photos: [] },
     voices: [],
@@ -175,10 +175,64 @@ describe('buildRemixClonePayload — linear clone', () => {
   });
 });
 
+// ── spread pool filter (clone step c2) ───────────────────────────────────────
+
+describe('buildRemixClonePayload — spread pool filter', () => {
+  it('excludes an unchecked pool spread and strips the `pool` key from every spread', () => {
+    const normal = spread('n1');
+    const pool = spread('p1', { pool: { is_true: true, is_default: false } });
+    const illustration = makeIllustration([normal, pool]);
+    const cfg = makeConfig({
+      story: { presets: [], branches: [], pool_spreads: [{ spread_id: 'p1', is_enabled: false }] },
+    });
+    const r = build({ characters: [makeChar('c1')], illustration, config: cfg });
+
+    expect(r.illustration.spreads.map((s) => s.id)).toEqual(['n1']);
+    for (const s of r.illustration.spreads) {
+      expect((s as { pool?: unknown }).pool).toBeUndefined();
+    }
+  });
+
+  it('keeps an enabled pool spread but strips `pool`, preserving title + thumbnail_url (P2)', () => {
+    const pool = spread('p1', {
+      pool: { is_true: true, is_default: false },
+      thumbnail_url: 'https://cdn/p1.png',
+      title: { en_US: { text: 'Alt Page' } },
+    });
+    const illustration = makeIllustration([spread('n1'), pool]);
+    const cfg = makeConfig({
+      story: { presets: [], branches: [], pool_spreads: [{ spread_id: 'p1', is_enabled: true }] },
+    });
+    const r = build({ characters: [makeChar('c1')], illustration, config: cfg });
+
+    const kept = r.illustration.spreads.find((s) => s.id === 'p1');
+    expect(kept).toBeDefined();
+    expect((kept as { pool?: unknown }).pool).toBeUndefined();
+    expect((kept as { thumbnail_url?: string }).thumbnail_url).toBe('https://cdn/p1.png');
+    expect((kept as { title?: unknown }).title).toEqual({ en_US: { text: 'Alt Page' } });
+  });
+
+  it('carries pool_spreads verbatim into remix_config.story', () => {
+    const choices = [{ spread_id: 'p1', is_enabled: false }];
+    const cfg = makeConfig({ story: { presets: [], branches: [], pool_spreads: choices } });
+    const r = build({ characters: [makeChar('c1')], illustration: makeIllustration([spread('n1')]), config: cfg });
+    expect(r.remix_config.story.pool_spreads).toEqual(choices);
+  });
+
+  it('regression: a book with no pool spreads keeps every spread and emits no `pool` key', () => {
+    const illustration = makeIllustration([spread('a'), spread('b'), spread('c')]);
+    const r = build({ characters: [makeChar('c1')], illustration });
+    expect(r.illustration.spreads.map((s) => s.id)).toEqual(['a', 'b', 'c']);
+    for (const s of r.illustration.spreads) {
+      expect((s as { pool?: unknown }).pool).toBeUndefined();
+    }
+  });
+});
+
 // ── cast sets (NO layer-content scan) ────────────────────────────────────────
 
 function makeAltStoryConfig(): RemixConfig {
-  return makeConfig({ story: { presets: [{ axis_id: 'ax1', preset_id: 'p_alt' }], branches: [] } });
+  return makeConfig({ story: { presets: [{ axis_id: 'ax1', preset_id: 'p_alt' }], branches: [], pool_spreads: [] } });
 }
 
 describe('buildRemixClonePayload — cast sets', () => {
@@ -214,7 +268,7 @@ describe('buildRemixClonePayload — cast sets', () => {
 
   it('voices carry VERBATIM — a visually re-cast role keeps its voice slot (no cast purge)', () => {
     const cfg = makeConfig({
-      story: { presets: [{ axis_id: 'ax1', preset_id: 'p_alt' }], branches: [] },
+      story: { presets: [{ axis_id: 'ax1', preset_id: 'p_alt' }], branches: [], pool_spreads: [] },
       voices: [
         { key: 'narrator', name: 'Narrator', voice_id: null, is_enabled: true },
         { key: 'c1', name: 'C1', voice_id: null, is_enabled: true }, // displaced default — still speaks
@@ -232,7 +286,7 @@ describe('buildRemixClonePayload — cast sets', () => {
 
   it('cast-in actor NOT book-enabled: cloned into characters[] but purged from remix_config (F1)', () => {
     const cfg = makeConfig({
-      story: { presets: [{ axis_id: 'ax1', preset_id: 'p_alt' }], branches: [] },
+      story: { presets: [{ axis_id: 'ax1', preset_id: 'p_alt' }], branches: [], pool_spreads: [] },
       characters: [
         { key: 'c2', human_id: null, visual: null, traits: [], base_image_url: null, is_enabled: true },
         { key: 'c3', human_id: null, visual: null, traits: [], base_image_url: null, is_enabled: true },
@@ -253,7 +307,7 @@ describe('buildRemixClonePayload — cast sets', () => {
 
   it('purges remix_config.characters to the swappable set', () => {
     const cfg = makeConfig({
-      story: { presets: [{ axis_id: 'ax1', preset_id: 'p_alt' }], branches: [] },
+      story: { presets: [{ axis_id: 'ax1', preset_id: 'p_alt' }], branches: [], pool_spreads: [] },
       characters: [
         { key: 'c1', human_id: null, visual: null, traits: [], base_image_url: null, is_enabled: true },
         { key: 'c2', human_id: null, visual: null, traits: [], base_image_url: null, is_enabled: true },

@@ -45,6 +45,21 @@ export function upsertBranchChoice(
   return { ...config, story: { ...config.story, branches } };
 }
 
+/** Upsert the include flag for a pool spread (by `spread_id`). Immutable — mirrors
+ *  `upsertBranchChoice`. */
+export function upsertPoolSpreadChoice(
+  config: RemixConfig,
+  spreadId: string,
+  isEnabled: boolean,
+): RemixConfig {
+  const pool_spreads = config.story.pool_spreads.some((p) => p.spread_id === spreadId)
+    ? config.story.pool_spreads.map((p) =>
+        p.spread_id === spreadId ? { ...p, is_enabled: isEnabled } : p,
+      )
+    : [...config.story.pool_spreads, { spread_id: spreadId, is_enabled: isEnabled }];
+  return { ...config, story: { ...config.story, pool_spreads } };
+}
+
 /** Upsert a character choice (by `key`). A missing entry is initialized with all
  *  5 trait toggles enabled (book gate is re-applied by `normalizeRemixConfig` on
  *  save); the `patch` overrides any seeded field. */

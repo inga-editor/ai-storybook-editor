@@ -9,6 +9,7 @@
 import type { BookRemix, CastingAxis, ParametricPhotoEntry } from '@/types/editor';
 import type {
   BranchSpreadOption,
+  PoolSpreadOption,
   RemixBranchChoice,
   RemixConfig,
   RemixPresetChoice,
@@ -24,6 +25,7 @@ export interface DefaultConfigInput {
   bookRemix: BookRemix;
   castingAxes: CastingAxis[];
   branchSpreads: BranchSpreadOption[];
+  poolSpreads: PoolSpreadOption[];
   parametricPhotos: ParametricPhotoEntry[];
   /** `snapshot.characters[].key` in snapshot order — effective-cast order source. */
   snapshotCharacterKeys: string[];
@@ -40,7 +42,7 @@ export interface DefaultConfigInput {
  * - `props` is intentionally NOT emitted.
  */
 export function defaultConfigFromBookRemix(input: DefaultConfigInput): RemixConfig {
-  const { bookRemix, castingAxes, branchSpreads, parametricPhotos, snapshotCharacterKeys } = input;
+  const { bookRemix, castingAxes, branchSpreads, poolSpreads, parametricPhotos, snapshotCharacterKeys } = input;
 
   // 1. story.presets — one entry per axis with a resolvable default; axis with
   //    zero presets contributes no entry.
@@ -68,7 +70,14 @@ export function defaultConfigFromBookRemix(input: DefaultConfigInput): RemixConf
     branches.push({ spread_id: bs.spread_id, section_id });
   }
 
-  const story = { presets, branches };
+  // 2b. story.pool_spreads — one entry per pool spread, seeded to `pool.is_default`
+  //     (materialize-always: seeded even when the spread_pool gate is OFF).
+  const pool_spreads = poolSpreads.map((p) => ({
+    spread_id: p.spread_id,
+    is_enabled: p.is_default,
+  }));
+
+  const story = { presets, branches, pool_spreads };
 
   // 3. characters — swappable cast of the default presets, mapped to draft
   // entries (config entries exist only for the swap surface).
@@ -113,6 +122,7 @@ export function defaultConfigFromBookRemix(input: DefaultConfigInput): RemixConf
   log.info('defaultConfigFromBookRemix', 'built draft', {
     presetCount: presets.length,
     branchCount: branches.length,
+    poolSpreadCount: pool_spreads.length,
     characterCount: characters.length,
     memoryPhotoCount: memories.photos.length,
     voiceCount: voices.length,
@@ -129,6 +139,7 @@ export function isBookRemixEmpty(book: BookRemix | null): boolean {
   return (
     !book.story.preset.is_enabled &&
     !book.story.branch.is_enabled &&
+    !book.story.spread_pool.is_enabled &&
     !book.memories.is_enabled &&
     book.voices.every((v) => !v.is_enabled) &&
     book.characters.every((c) => !c.is_enabled) &&

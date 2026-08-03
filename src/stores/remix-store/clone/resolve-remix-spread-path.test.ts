@@ -2,12 +2,12 @@
 // live player walker (resolveBookSequence) on an all-default fixture.
 
 import { describe, it, expect } from 'vitest';
-import { resolveRemixSpreadPath } from './resolve-remix-spread-path';
+import { resolveRemixSpreadPath, filterPoolSpreads } from './resolve-remix-spread-path';
 import { resolveBookSequence } from '@/features/editor/components/playable-spread-view/resolve-book-sequence';
-import type { BaseSpread } from '@/types/spread-types';
+import type { BaseSpread, SpreadPool } from '@/types/spread-types';
 import type { Section } from '@/types/illustration-types';
 import type { PlayableSpread } from '@/types/playable-types';
-import type { RemixBranchChoice } from '@/types/remix';
+import type { RemixBranchChoice, RemixPoolSpreadChoice } from '@/types/remix';
 
 // ── fixture helpers ───────────────────────────────────────────────────────────
 
@@ -99,6 +99,89 @@ describe('resolveRemixSpreadPath — guardrails', () => {
   it('honours an explicit startSpreadId', () => {
     const r = resolveRemixSpreadPath([sp('a'), sp('b'), sp('c')], [], [], { startSpreadId: 'b' });
     expect(ids(r)).toEqual(['b', 'c']);
+  });
+});
+
+// ── filterPoolSpreads ─────────────────────────────────────────────────────────
+
+function poolSpread(id: string, pool: SpreadPool): BaseSpread {
+  return sp(id, { pool });
+}
+
+describe('filterPoolSpreads', () => {
+  it('always keeps normal spreads (pool undefined / is_true=false), even with no choices', () => {
+    const ordered = [sp('a'), sp('b'), poolSpread('c', { is_true: false, is_default: false })];
+    expect(filterPoolSpreads(ordered, []).map((s) => s.id)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('keeps a pool spread when its choice is_enabled=true', () => {
+    const ordered = [sp('a'), poolSpread('p', { is_true: true, is_default: false })];
+    const choices: RemixPoolSpreadChoice[] = [{ spread_id: 'p', is_enabled: true }];
+    expect(filterPoolSpreads(ordered, choices).map((s) => s.id)).toEqual(['a', 'p']);
+  });
+
+  it('excludes a pool spread when its choice is_enabled=false', () => {
+    const ordered = [sp('a'), poolSpread('p', { is_true: true, is_default: true }), sp('b')];
+    const choices: RemixPoolSpreadChoice[] = [{ spread_id: 'p', is_enabled: false }];
+    expect(filterPoolSpreads(ordered, choices).map((s) => s.id)).toEqual(['a', 'b']);
+  });
+
+  it('missing entry → fallback keeps when pool.is_default=true (P5 dangling)', () => {
+    const ordered = [poolSpread('p', { is_true: true, is_default: true })];
+    expect(filterPoolSpreads(ordered, []).map((s) => s.id)).toEqual(['p']);
+  });
+
+  it('missing entry → fallback excludes when pool.is_default=false (P5 dangling)', () => {
+    const ordered = [poolSpread('p', { is_true: true, is_default: false }), sp('b')];
+    expect(filterPoolSpreads(ordered, []).map((s) => s.id)).toEqual(['b']);
+  });
+
+  it('is_true=false ∧ is_default=true → kept as a normal spread (rule P1)', () => {
+    const ordered = [poolSpread('p', { is_true: false, is_default: true })];
+    // choice with is_enabled=false must NOT remove it — it is not a pool spread.
+    const choices: RemixPoolSpreadChoice[] = [{ spread_id: 'p', is_enabled: false }];
+    expect(filterPoolSpreads(ordered, choices).map((s) => s.id)).toEqual(['p']);
+  });
+
+  it('preserves relative order after filtering', () => {
+    const ordered = [
+      sp('a'),
+      poolSpread('p1', { is_true: true, is_default: false }),
+      sp('b'),
+      poolSpread('p2', { is_true: true, is_default: false }),
+      sp('c'),
+    ];
+    const choices: RemixPoolSpreadChoice[] = [
+      { spread_id: 'p1', is_enabled: false },
+      { spread_id: 'p2', is_enabled: true },
+    ];
+    expect(filterPoolSpreads(ordered, choices).map((s) => s.id)).toEqual(['a', 'b', 'p2', 'c']);
+  });
+});
+
+// ── P3: walk-BEFORE-filter — pool spread that is ALSO a branch spread ──────────
+
+describe('filterPoolSpreads — P3 walk-before-filter', () => {
+  it('an excluded pool spread that is also a branch spread still resolves its branch; later spreads survive', () => {
+    // s1 is a branch spread (default → sec_a start sA) AND a pool spread. When it
+    // is excluded, its branch must STILL be walked so sA/sB remain in the output.
+    const spreads = [
+      sp('s1', {
+        branch_setting: { branches: [{ section_id: 'sec_a', is_default: true }] },
+        pool: { is_true: true, is_default: false },
+      }),
+      sp('sA'),
+      sp('sB'),
+    ];
+    const sections = [section('sec_a', 'sA', 'sA', 'sB')];
+
+    // 1) walk resolves the branch topology fully.
+    const path = resolveRemixSpreadPath(spreads, sections, []);
+    expect(ids(path)).toEqual(['s1', 'sA', 'sB']);
+
+    // 2) filter drops only s1 from the OUTPUT list; sA/sB reached via s1's branch survive.
+    const choices: RemixPoolSpreadChoice[] = [{ spread_id: 's1', is_enabled: false }];
+    expect(filterPoolSpreads(path.ordered, choices).map((s) => s.id)).toEqual(['sA', 'sB']);
   });
 });
 

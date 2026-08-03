@@ -8,11 +8,11 @@ import { defaultConfigFromBookRemix, isBookRemixEmpty } from './default-config-b
 import type { DefaultConfigInput } from './default-config-builder';
 import { TRAIT_TYPES } from '@/constants/trait-constants';
 import type { BookRemix, CastingAxis, ParametricPhotoEntry } from '@/types/editor';
-import type { BranchSpreadOption } from '@/types/remix';
+import type { BranchSpreadOption, PoolSpreadOption } from '@/types/remix';
 
 const book: BookRemix = {
   // Story gates OFF on purpose — story must still materialize (materialize-always).
-  story: { preset: { is_enabled: false }, branch: { is_enabled: false } },
+  story: { preset: { is_enabled: false }, branch: { is_enabled: false }, spread_pool: { is_enabled: false } },
   memories: {
     is_enabled: true,
     photos: [
@@ -72,10 +72,16 @@ const parametricPhotos: ParametricPhotoEntry[] = [
   { key: 'photo_1', is_enabled: true, original: true, real: false, styled: false },
 ];
 
+const poolSpreads: PoolSpreadOption[] = [
+  { spread_id: 'pool_a', spread_number: '2', title: 'Iceland', thumbnail_url: null, is_default: true },
+  { spread_id: 'pool_b', spread_number: '5', title: 'Kenya', thumbnail_url: 'u', is_default: false },
+];
+
 const input: DefaultConfigInput = {
   bookRemix: book,
   castingAxes,
   branchSpreads,
+  poolSpreads,
   parametricPhotos,
   snapshotCharacterKeys: ['char_a', 'char_b'],
 };
@@ -87,6 +93,13 @@ describe('defaultConfigFromBookRemix — reshape 2026-07-31', () => {
     expect(config.story.presets).toEqual([{ axis_id: 'axis1', preset_id: 'p1' }]);
     // default branch (is_default) wins over array-first.
     expect(config.story.branches).toEqual([{ spread_id: 'sp1', section_id: 'sec_right' }]);
+  });
+
+  it('seeds pool_spreads ALWAYS (gate OFF): one entry per option, is_enabled = pool.is_default', () => {
+    expect(config.story.pool_spreads).toEqual([
+      { spread_id: 'pool_a', is_enabled: true },
+      { spread_id: 'pool_b', is_enabled: false },
+    ]);
   });
 
   it('seeds characters from the effective cast (default presets), snapshot order + 5 traits', () => {
@@ -137,20 +150,30 @@ describe('isBookRemixEmpty', () => {
     expect(
       isBookRemixEmpty({
         ...book,
-        story: { preset: { is_enabled: true }, branch: { is_enabled: false } },
+        story: { preset: { is_enabled: true }, branch: { is_enabled: false }, spread_pool: { is_enabled: false } },
         memories: { is_enabled: false, photos: [] },
         voices: [{ key: 'narrator', name: 'Narrator', is_enabled: false }],
         characters: [],
         languages: [{ name: 'English', code: 'en_US', is_enabled: false }],
       }),
     ).toBe(false); // story.preset enabled
+    expect(
+      isBookRemixEmpty({
+        ...book,
+        story: { preset: { is_enabled: false }, branch: { is_enabled: false }, spread_pool: { is_enabled: true } },
+        memories: { is_enabled: false, photos: [] },
+        voices: [{ key: 'narrator', name: 'Narrator', is_enabled: false }],
+        characters: [],
+        languages: [{ name: 'English', code: 'en_US', is_enabled: false }],
+      }),
+    ).toBe(false); // story.spread_pool enabled
   });
 
   it('is true for null or all-disabled book remix', () => {
     expect(isBookRemixEmpty(null)).toBe(true);
     expect(
       isBookRemixEmpty({
-        story: { preset: { is_enabled: false }, branch: { is_enabled: false } },
+        story: { preset: { is_enabled: false }, branch: { is_enabled: false }, spread_pool: { is_enabled: false } },
         memories: { is_enabled: false, photos: [] },
         languages: [{ name: 'English', code: 'en_US', is_enabled: false }],
         voices: [{ key: 'narrator', name: 'Narrator', is_enabled: false }],

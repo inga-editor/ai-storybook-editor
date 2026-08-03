@@ -55,7 +55,7 @@ function makeRemix(sprites: RemixSpriteEntry[], characters: Remix['characters'] 
     snapshot_id: 's1',
     name: 'R',
     remix_config: {
-      story: { presets: [], branches: [] },
+      story: { presets: [], branches: [], pool_spreads: [] },
       characters: [],
       memories: { is_enabled: false, style: 'styled', photos: [] },
       voices: [],

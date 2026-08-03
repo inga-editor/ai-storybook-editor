@@ -562,6 +562,21 @@ export interface SpreadAnimation {
   };
 }
 
+// === Spread Pool (2026-08-03) ===
+// See snapshot/illustration-structure.md §Spread Pool. Spread-level metadata that
+// marks a spread as a selectable pool entry (alternative playable page). All 3 are
+// SCENE owned-keys (rtype-6, step 2) — see collab-owned-subtree.ts.
+
+/** Pool membership flag pair. `is_default` is only meaningful when `is_true` (invariant P1:
+ *  exactly one default among pooled spreads; the "main story" default skips walk filtering). */
+export interface SpreadPool {
+  is_true: boolean;    // spread belongs to the pool (optional membership)
+  is_default: boolean; // only meaningful when is_true
+}
+
+/** Per-language pool title. key = language_key (e.g. 'en_US'). */
+export type SpreadTitle = Record<string, { text: string }>;
+
 // === Base Spread Interface ===
 export interface BaseSpread {
   id: string;
@@ -587,4 +602,10 @@ export interface BaseSpread {
   tiny_sketch_media_url?: string;
   branch_setting?: BranchSetting;
   next_spread_id?: string | null;
+
+  // Spread Pool metadata (additive optional → non-breaking; absent = legacy valid).
+  // See snapshot/illustration-structure.md §Spread Pool.
+  pool?: SpreadPool;
+  thumbnail_url?: string;
+  title?: SpreadTitle;
 }

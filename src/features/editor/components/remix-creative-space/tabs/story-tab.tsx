@@ -9,9 +9,14 @@ import { useMemo } from 'react';
 import { RemixConfigSection } from './remix-config-section';
 import { PresetRow } from './preset-row';
 import { BranchRow } from './branch-row';
+import { SpreadPoolSection } from './spread-pool-section';
 import { resolveDefaultPreset } from '@/features/editor/components/config-creative-space/casting-slot-helpers';
 import type { CastingAxis } from '@/types/editor';
-import type { BranchSpreadOption, RemixStoryConfig } from '@/types/remix';
+import type {
+  BranchSpreadOption,
+  PoolSpreadOption,
+  RemixStoryConfig,
+} from '@/types/remix';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('Editor', 'RemixStoryTab');
@@ -19,21 +24,27 @@ const log = createLogger('Editor', 'RemixStoryTab');
 interface Props {
   showPresets: boolean;
   showBranches: boolean;
+  showSpreadPool: boolean;
   castingAxes: CastingAxis[];
   branchSpreads: BranchSpreadOption[];
+  poolSpreads: PoolSpreadOption[];
   story: RemixStoryConfig;
   onSelectPreset: (axisId: string, presetId: string) => void;
   onSelectBranch: (spreadId: string, sectionId: string) => void;
+  onTogglePoolSpread: (spreadId: string, next: boolean) => void;
 }
 
 export function StoryTab({
   showPresets,
   showBranches,
+  showSpreadPool,
   castingAxes,
   branchSpreads,
+  poolSpreads,
   story,
   onSelectPreset,
   onSelectBranch,
+  onTogglePoolSpread,
 }: Props) {
   // Axes with at least one preset (edge case 5.3 — 0-preset axes render nothing).
   const presetAxes = useMemo(
@@ -41,7 +52,7 @@ export function StoryTab({
     [castingAxes],
   );
 
-  if (!showPresets && !showBranches) {
+  if (!showPresets && !showBranches && !showSpreadPool) {
     log.debug('StoryTab', 'no story options — empty state', {});
     return (
       <p className="py-8 text-center text-sm text-muted-foreground">
@@ -99,6 +110,14 @@ export function StoryTab({
             })}
           </div>
         </RemixConfigSection>
+      )}
+
+      {showSpreadPool && (
+        <SpreadPoolSection
+          poolSpreads={poolSpreads}
+          story={story}
+          onTogglePoolSpread={onTogglePoolSpread}
+        />
       )}
     </div>
   );

@@ -15,6 +15,7 @@ import type { Human, TraitType } from '@/types/human';
 import type { BookRemix, CastingAxis, RemixCharacterEntry } from '@/types/editor';
 import type {
   BranchSpreadOption,
+  PoolSpreadOption,
   RemixConfig,
   RemixCharacterChoice,
 } from '@/types/remix';
@@ -70,7 +71,7 @@ function choice(overrides: Partial<RemixCharacterChoice>): RemixCharacterChoice 
 
 function configWith(characters: RemixCharacterChoice[]): RemixConfig {
   return {
-    story: { presets: [], branches: [] },
+    story: { presets: [], branches: [], pool_spreads: [] },
     characters,
     memories: { is_enabled: false, style: 'styled', photos: [] },
     props: [{ key: 'prop_a', prop_id: null, visual: null, is_enabled: true }],
@@ -210,7 +211,7 @@ describe('normalizeRemixConfigTraits — WYSIWYG', () => {
 // ── normalizeRemixConfig (full save) ─────────────────────────────────────────
 
 const bookRemix: BookRemix = {
-  story: { preset: { is_enabled: true }, branch: { is_enabled: true } },
+  story: { preset: { is_enabled: true }, branch: { is_enabled: true }, spread_pool: { is_enabled: false } },
   characters: [bookChar],
   memories: { is_enabled: false, photos: [] },
   voices: [],
@@ -238,10 +239,26 @@ const branchSpread: BranchSpreadOption = {
   ],
 };
 
+const poolSpreadA: PoolSpreadOption = {
+  spread_id: 'pool_a',
+  spread_number: '2',
+  title: 'Iceland',
+  thumbnail_url: null,
+  is_default: true,
+};
+const poolSpreadB: PoolSpreadOption = {
+  spread_id: 'pool_b',
+  spread_number: '5',
+  title: 'Kenya',
+  thumbnail_url: 'u',
+  is_default: false,
+};
+
 const ctx = () => ({
   bookRemix,
   castingAxes: [axis],
   branchSpreads: [branchSpread],
+  poolSpreads: [poolSpreadA, poolSpreadB],
   humans: [human],
 });
 
@@ -252,6 +269,7 @@ describe('normalizeRemixConfig — story fill + props drop', () => {
       story: {
         presets: [{ axis_id: 'ax', preset_id: 'p_alt' }],
         branches: [{ spread_id: 's1', section_id: 'sec_alt' }],
+        pool_spreads: [],
       },
     };
     const out = normalizeRemixConfig(draft, ctx());
@@ -260,7 +278,7 @@ describe('normalizeRemixConfig — story fill + props drop', () => {
   });
 
   it('fills a MISSING axis / spread entry with the default', () => {
-    const draft: RemixConfig = { ...configWith([]), story: { presets: [], branches: [] } };
+    const draft: RemixConfig = { ...configWith([]), story: { presets: [], branches: [], pool_spreads: [] } };
     const out = normalizeRemixConfig(draft, ctx());
     expect(out.story.presets).toEqual([{ axis_id: 'ax', preset_id: 'p_def' }]);
     expect(out.story.branches).toEqual([{ spread_id: 's1', section_id: 'sec_def' }]);
@@ -272,6 +290,7 @@ describe('normalizeRemixConfig — story fill + props drop', () => {
       story: {
         presets: [{ axis_id: 'ax', preset_id: 'ghost' }],
         branches: [{ spread_id: 's1', section_id: 'ghost' }],
+        pool_spreads: [],
       },
     };
     const out = normalizeRemixConfig(draft, ctx());
@@ -291,6 +310,7 @@ describe('normalizeRemixConfig — story fill + props drop', () => {
           { spread_id: 's1', section_id: 'sec_def' },
           { spread_id: 'gone', section_id: 'x' },
         ],
+        pool_spreads: [],
       },
     };
     const out = normalizeRemixConfig(draft, ctx());
@@ -298,10 +318,31 @@ describe('normalizeRemixConfig — story fill + props drop', () => {
     expect(out.story.branches.map((b) => b.spread_id)).toEqual(['s1']);
   });
 
+  it('fills MISSING pool_spread entries with pool.is_default; keeps chosen; drops dangling', () => {
+    const draft: RemixConfig = {
+      ...configWith([]),
+      story: {
+        presets: [],
+        branches: [],
+        // pool_a chosen OFF (override default true); pool_b missing (→ default false);
+        // 'ghost' points at a spread no longer in options → dropped.
+        pool_spreads: [
+          { spread_id: 'pool_a', is_enabled: false },
+          { spread_id: 'ghost', is_enabled: true },
+        ],
+      },
+    };
+    const out = normalizeRemixConfig(draft, ctx());
+    expect(out.story.pool_spreads).toEqual([
+      { spread_id: 'pool_a', is_enabled: false }, // chosen kept
+      { spread_id: 'pool_b', is_enabled: false }, // filled = default
+    ]);
+  });
+
   it('never emits props; applies WYSIWYG trait mask; keeps characters', () => {
     const draft: RemixConfig = {
       ...configWith([choice({})]),
-      story: { presets: [], branches: [] },
+      story: { presets: [], branches: [], pool_spreads: [] },
     };
     const out = normalizeRemixConfig(draft, ctx());
     expect(out.props).toBeUndefined();
@@ -313,7 +354,7 @@ describe('normalizeRemixConfig — story fill + props drop', () => {
   it('does not mutate the input draft', () => {
     const draft: RemixConfig = {
       ...configWith([choice({})]),
-      story: { presets: [], branches: [] },
+      story: { presets: [], branches: [], pool_spreads: [] },
     };
     const snapshot = JSON.parse(JSON.stringify(draft));
     normalizeRemixConfig(draft, ctx());

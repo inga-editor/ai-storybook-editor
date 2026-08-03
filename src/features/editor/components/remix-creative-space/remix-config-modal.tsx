@@ -47,6 +47,7 @@ import {
   upsertBranchChoice,
   upsertCharacterChoice,
   upsertLanguageChoice,
+  upsertPoolSpreadChoice,
   upsertPresetChoice,
   upsertVoiceChoice,
 } from './remix-config-draft-helpers';
@@ -107,6 +108,10 @@ export function RemixConfigModal({
     () => bookRemix.story.branch.is_enabled && lookups.branchSpreads.length > 0,
     [bookRemix, lookups.branchSpreads],
   );
+  const showSpreadPool = useMemo(
+    () => bookRemix.story.spread_pool.is_enabled && lookups.poolSpreads.length > 0,
+    [bookRemix, lookups.poolSpreads],
+  );
   const showMemories = useMemo(
     () => bookRemix.memories.is_enabled && draft.memories.photos.length > 0,
     [bookRemix, draft.memories.photos],
@@ -157,6 +162,10 @@ export function RemixConfigModal({
     setDraft((prev) => upsertBranchChoice(prev, spreadId, sectionId));
     setDirty(true);
   };
+  const togglePoolSpread = (spreadId: string, next: boolean) => {
+    setDraft((prev) => upsertPoolSpreadChoice(prev, spreadId, next));
+    setDirty(true);
+  };
   const upsertCharacter = (key: string, patch: Partial<RemixCharacterChoice>) => {
     setDraft((prev) => upsertCharacterChoice(prev, key, patch));
     setDirty(true);
@@ -200,11 +209,17 @@ export function RemixConfigModal({
 
   const handleSave = async () => {
     log.info('handleSave', 'submitting', { name: name.trim().length });
-    log.debug('handleSave', 'gate state', { showPresets, showBranches, showMemories });
+    log.debug('handleSave', 'gate state', {
+      showPresets,
+      showBranches,
+      showSpreadPool,
+      showMemories,
+    });
     const normalized = normalizeRemixConfig(draft, {
       bookRemix,
       castingAxes: lookups.castingAxes,
       branchSpreads: lookups.branchSpreads,
+      poolSpreads: lookups.poolSpreads,
       humans,
     });
     await onSave(normalized, name.trim() || REMIX_NAME_DEFAULT);
@@ -272,11 +287,14 @@ export function RemixConfigModal({
                 <StoryTab
                   showPresets={showPresets}
                   showBranches={showBranches}
+                  showSpreadPool={showSpreadPool}
                   castingAxes={lookups.castingAxes}
                   branchSpreads={lookups.branchSpreads}
+                  poolSpreads={lookups.poolSpreads}
                   story={draft.story}
                   onSelectPreset={selectPreset}
                   onSelectBranch={selectBranch}
+                  onTogglePoolSpread={togglePoolSpread}
                 />
               </TabsContent>
               <TabsContent value="cast">

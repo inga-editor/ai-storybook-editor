@@ -22,6 +22,12 @@ export const SCENE_OWNED_KEYS = [
   'tiny_sketch_media_url',
   'pages',
   'branch_setting',
+  // Spread Pool metadata (2026-08-03) — author-entered pool membership + title +
+  // system-generated thumbnail. Structure group of the SCENE partition. MUST stay
+  // byte-identical (order + content) with Python SCENE_OWNED_KEYS.
+  'pool',
+  'thumbnail_url',
+  'title',
 ] as const;
 
 /** RETOUCH pipeline (rtype 10, step 3) — the playable layers + animations.

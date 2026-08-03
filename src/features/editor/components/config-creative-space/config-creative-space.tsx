@@ -15,6 +15,7 @@ import { ConfigParametricSlotSettings } from './config-parametric-slot-settings'
 import { ConfigCastingSlotSettings } from './config-casting-slot-settings';
 import { ConfigDistributionSettings } from './config-distribution-settings';
 import { ConfigMusicsSoundsSettings } from './musics-sounds/config-musics-sounds-settings';
+import { ConfigSpreadPoolSettings } from './spread-pool/config-spread-pool-settings';
 import type { ConfigSection } from '@/constants/config-constants';
 import { createLogger } from '@/utils/logger';
 
@@ -47,6 +48,7 @@ export function ConfigCreativeSpace() {
       case 'layout':  return <ConfigLayoutSettings />;
       case 'effect':  return <ConfigEffectSettings />;
       case 'remix':   return <ConfigRemixSettings />;
+      case 'spread-pool': return <ConfigSpreadPoolSettings />;
       case 'parametric-slot': return <ConfigParametricSlotSettings />;
       case 'casting-slot': return <ConfigCastingSlotSettings />;
       case 'distribution': return <ConfigDistributionSettings />;
