@@ -22,8 +22,6 @@ import { useContentSyncSession } from "@/features/editor/hooks/use-content-sync-
 import { useHeldResourceSession } from "@/features/editor/hooks/use-held-resource-session";
 import { useRegisterEditCommit } from "@/stores/edit-session-status-store";
 import { RETOUCH_OWNED_KEYS } from "@/stores/snapshot-store/slices/collab-owned-subtree";
-import { useEditHistoryStore } from "@/stores/edit-history-store";
-import { buildItemKey } from "@/stores/edit-history-store/item-key";
 import type { LockTarget, SavePayload } from "@/stores/resource-lock-store";
 import { toastLockRequired } from "@/utils/collab-save-toasts";
 import {
@@ -175,23 +173,8 @@ export function ObjectsCreativeSpace() {
     [lockedSpreadId, actions, resetSelection],
   );
 
-  // ── Undo/redo nexus (ADR-045) — begin/endSession tie 1:1 to the retouch held session.
-  // Share the ONE baseline clone the hook already made. onReleased covers release/switch/LOST.
-  const beginSession = useEditHistoryStore((s) => s.beginSession);
-  const endSession = useEditHistoryStore((s) => s.endSession);
-  const handleRetouchAcquired = useCallback(
-    (target: LockTarget, baseline: unknown) => {
-      beginSession(buildItemKey("retouch", target), baseline, "retouch");
-    },
-    [beginSession],
-  );
-  const handleRetouchReleased = useCallback(
-    (target: LockTarget) => {
-      endSession(buildItemKey("retouch", target));
-    },
-    [endSession],
-  );
-
+  // ── Undo/redo nexus (ADR-045) — the engine now bridges begin/endSession itself (retouch grain,
+  // sharing the held baseline clone) on acquire/release/switch/LOST; no space wiring.
   const { status: retouchLockStatus, saveNow: retouchSaveNow } = useHeldResourceSession({
     target: retouchLockTarget,
     getNode: getRetouchNode,
@@ -199,8 +182,6 @@ export function ObjectsCreativeSpace() {
     buildPayload: buildRetouchPayload,
     onBlocked: handleRetouchLockBlocked,
     onLost: handleRetouchLockLost,
-    onAcquired: handleRetouchAcquired,
-    onReleased: handleRetouchReleased,
   });
 
   // The active spread is editable only while THIS editor holds its retouch lock (grey-out otherwise).

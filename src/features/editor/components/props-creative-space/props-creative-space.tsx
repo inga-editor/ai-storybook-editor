@@ -22,8 +22,6 @@ import { useCollabPersistSession } from '@/features/editor/hooks/use-collab-pers
 import { useContentSyncSession } from '@/features/editor/hooks/use-content-sync-session';
 import { useHeldResourceSession } from '@/features/editor/hooks/use-held-resource-session';
 import { useRegisterEditCommit } from '@/stores/edit-session-status-store';
-import { useEditHistoryStore } from '@/stores/edit-history-store';
-import { buildItemKey } from '@/stores/edit-history-store/item-key';
 import {
   useIsLockedByOther,
   useLockHolderName,
@@ -90,22 +88,7 @@ export function PropsCreativeSpace() {
     [lockedKey, actions],
   );
 
-  // ── Undo/redo nexus (ADR-045) — per-entity WHOLE-node history; shares the held baseline clone.
-  const beginSession = useEditHistoryStore((s) => s.beginSession);
-  const endSession = useEditHistoryStore((s) => s.endSession);
-  const handleAcquired = useCallback(
-    (target: LockTarget, baseline: unknown) => {
-      beginSession(buildItemKey('illustration-entity', target), baseline, 'illustration-entity');
-    },
-    [beginSession],
-  );
-  const handleReleased = useCallback(
-    (target: LockTarget) => {
-      endSession(buildItemKey('illustration-entity', target));
-    },
-    [endSession],
-  );
-
+  // ── Undo/redo nexus (ADR-045) — the engine now bridges begin/endSession itself; no space wiring.
   const { status: lockStatus } = useHeldResourceSession({
     target: lockTarget,
     getNode,
@@ -113,8 +96,6 @@ export function PropsCreativeSpace() {
     buildPayload,
     onBlocked: handleLockBlocked,
     onLost: handleLockLost,
-    onAcquired: handleAcquired,
-    onReleased: handleReleased,
   });
 
   const entityEditable = lockStatus === 'held' && lockedKey === selectedPropKey && lockedKey !== null;

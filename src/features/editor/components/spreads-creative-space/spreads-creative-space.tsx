@@ -15,8 +15,6 @@ import { useContentSyncSession } from "@/features/editor/hooks/use-content-sync-
 import { useHeldResourceSession } from "@/features/editor/hooks/use-held-resource-session";
 import { useRegisterEditCommit } from "@/stores/edit-session-status-store";
 import { SCENE_OWNED_KEYS } from "@/stores/snapshot-store/slices/collab-owned-subtree";
-import { useEditHistoryStore } from "@/stores/edit-history-store";
-import { buildItemKey } from "@/stores/edit-history-store/item-key";
 import type { LockTarget, SavePayload } from "@/stores/resource-lock-store";
 import { useSpaceViewState, useEffectiveSpreadId } from "@/features/editor/hooks/use-space-view-state";
 import { ZOOM, COLUMNS } from "@/constants/spread-constants";
@@ -113,24 +111,8 @@ export function SpreadsCreativeSpace() {
     [lockedSpreadId, actions],
   );
 
-  // ── Undo/redo nexus (ADR-045) — begin/endSession tie 1:1 to the held-session lifecycle.
-  // Share the ONE baseline clone the hook already made (no re-clone). onReleased fires on
-  // release / switch / unmount / lock-LOST (the hook calls it in all those paths).
-  const beginSession = useEditHistoryStore((s) => s.beginSession);
-  const endSession = useEditHistoryStore((s) => s.endSession);
-  const handleSceneAcquired = useCallback(
-    (target: LockTarget, baseline: unknown) => {
-      beginSession(buildItemKey("illustration-scene", target), baseline, "illustration-scene");
-    },
-    [beginSession],
-  );
-  const handleSceneReleased = useCallback(
-    (target: LockTarget) => {
-      endSession(buildItemKey("illustration-scene", target));
-    },
-    [endSession],
-  );
-
+  // ── Undo/redo nexus (ADR-045) — the engine now bridges begin/endSession itself (illustration-scene
+  // grain, sharing the held baseline clone) on acquire/release/switch/unmount/LOST; no space wiring.
   const { status: sceneLockStatus, saveNow: sceneSaveNow } = useHeldResourceSession({
     target: sceneLockTarget,
     getNode: getSceneNode,
@@ -138,8 +120,6 @@ export function SpreadsCreativeSpace() {
     buildPayload: buildScenePayload,
     onBlocked: handleSceneLockBlocked,
     onLost: handleSceneLockLost,
-    onAcquired: handleSceneAcquired,
-    onReleased: handleSceneReleased,
   });
 
   // The active spread is editable only while THIS editor holds its SCENE lock (grey-out otherwise).
