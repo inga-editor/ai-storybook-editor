@@ -4,11 +4,12 @@
 // The remix config is FROZEN after create (create-only RemixConfigModal), so
 // this dialog presents it as plain read-only views — a reference while
 // preparing a sprite swap, NOT an editor. Tabs mirror the create modal's
-// leading pair: Story (frozen preset/branch choices) + Characters. Props tab
-// removed with the 2026-07-31 reshape (`remix_config.props` is legacy-only).
+// leading pair: Story (frozen preset/branch/pool-spread choices) + Characters.
+// Props tab removed with the 2026-07-31 reshape (`remix_config.props` is
+// legacy-only); Pools section added with the 2026-08-03 spread-pool reshape.
 //
 // Story labels resolve through the SAME live sources the create modal reads
-// (book casting_slot axes + snapshot branch spreads) — both are soft refs, so
+// (book casting_slot axes + snapshot branch/pool spreads) — all soft refs, so
 // a choice whose axis/preset/spread/section has since been deleted or renamed
 // falls back to its raw id, muted.
 //
@@ -40,8 +41,10 @@ import { createLogger } from '@/utils/logger';
 import { TRAIT_TYPES, TRAIT_LABELS } from '@/constants/trait-constants';
 import { useBookCastingSlot } from '@/stores/book-store';
 import { useBranchSpreadOptions } from '../hooks/use-branch-spread-options';
+import { usePoolSpreadOptions } from '../hooks/use-pool-spread-options';
+import { PoolSpreadCard } from '../tabs/pool-spread-card';
 import type { Human, VisualProfile } from '@/types/human';
-import type { Remix, RemixCharacterChoice } from '@/types/remix';
+import type { PoolSpreadOption, Remix, RemixCharacterChoice } from '@/types/remix';
 import { Z_INDEX } from './swap-modal-constants';
 
 const log = createLogger('Editor', 'SwapConfigReviewModal');
@@ -80,6 +83,17 @@ interface BranchRowView {
   spreadLabel: string;
   sectionLabel: string;
   resolved: boolean;
+}
+
+/** One frozen pool-spread choice row (⚡2026-08-03). `option` is the live join
+ *  for label/thumbnail; dangling refs synthesize a raw-id option (honest
+ *  fallback, parity with presets/branches — the raw UUID title IS the signal).
+ *  Ordinal = 1-based position among ENABLED entries in the FROZEN array order —
+ *  verbatim review, no re-sort. */
+interface PoolRowView {
+  option: PoolSpreadOption;
+  checked: boolean;
+  ordinal: number | null;
 }
 
 /** Muted placeholder for an unset value. */
@@ -137,12 +151,20 @@ export function SwapConfigReviewModal({
 
   const configCharacters = remix.remix_config.characters;
   // Reshape 2026-07-31: story frozen choices are always materialized at create;
-  // coalesce for pre-reshape rows that predate the `story` node.
-  const configStory = remix.remix_config.story ?? { presets: [], branches: [] };
+  // coalesce for pre-reshape rows that predate the `story` node. `pool_spreads`
+  // coalesced separately — rows created between the reshape and the spread-pool
+  // addition (2026-08-03) carry `story` without it.
+  const configStory = remix.remix_config.story ?? {
+    presets: [],
+    branches: [],
+    pool_spreads: [],
+  };
+  const configPoolSpreads = configStory.pool_spreads ?? [];
 
   // Live label sources (same as the create modal's lookups) — soft-ref joins.
   const castingSlot = useBookCastingSlot();
   const branchSpreads = useBranchSpreadOptions();
+  const poolSpreadOptions = usePoolSpreadOptions();
 
   const presetRows = useMemo<PresetRowView[]>(() => {
     const axes = castingSlot?.casting_axes ?? [];
@@ -175,6 +197,31 @@ export function SwapConfigReviewModal({
       };
     });
   }, [configStory.branches, branchSpreads]);
+
+  // Frozen pool choices verbatim, in STORED array order (seeded from snapshot
+  // walk order at create). Ordinal = position among enabled entries; dangling
+  // spread_id (pool spread since deleted / pool flag removed) synthesizes a
+  // raw-id option.
+  const poolRows = useMemo<PoolRowView[]>(() => {
+    let enabledCount = 0;
+    return configPoolSpreads.map((choice) => {
+      const option =
+        poolSpreadOptions.find((o) => o.spread_id === choice.spread_id) ?? null;
+      return {
+        option:
+          option ??
+          ({
+            spread_id: choice.spread_id,
+            spread_number: '',
+            title: choice.spread_id,
+            thumbnail_url: null,
+            is_default: false,
+          } satisfies PoolSpreadOption),
+        checked: choice.is_enabled,
+        ordinal: choice.is_enabled ? ++enabledCount : null,
+      };
+    });
+  }, [configPoolSpreads, poolSpreadOptions]);
 
   // Display joins: config entries are keyed; names live on the remix's
   // character/prop snapshots, human name/profile on the live humans cache.
@@ -209,6 +256,7 @@ export function SwapConfigReviewModal({
       characterCount: configCharacters.length,
       presetCount: configStory.presets.length,
       branchCount: configStory.branches.length,
+      poolCount: configPoolSpreads.length,
     });
   }
 
@@ -251,7 +299,9 @@ export function SwapConfigReviewModal({
 
           <div className="min-h-0 flex-1 overflow-y-auto pr-1 pt-2">
             <TabsContent value="story" className="mt-0">
-              {presetRows.length === 0 && branchRows.length === 0 ? (
+              {presetRows.length === 0 &&
+              branchRows.length === 0 &&
+              poolRows.length === 0 ? (
                 <p className="py-8 text-center text-sm text-muted-foreground">
                   No story options configured in this remix.
                 </p>
@@ -308,6 +358,25 @@ export function SwapConfigReviewModal({
                               {row.sectionLabel}
                             </span>
                           </div>
+                        ))}
+                      </div>
+                    </section>
+                  )}
+
+                  {poolRows.length > 0 && (
+                    <section role="group" aria-label="Spread Pool">
+                      <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                        Pools
+                      </h3>
+                      <div className="grid grid-cols-1 gap-2 lg:grid-cols-2">
+                        {poolRows.map((row) => (
+                          <PoolSpreadCard
+                            key={row.option.spread_id}
+                            option={row.option}
+                            checked={row.checked}
+                            ordinal={row.ordinal}
+                            disabled
+                          />
                         ))}
                       </div>
                     </section>

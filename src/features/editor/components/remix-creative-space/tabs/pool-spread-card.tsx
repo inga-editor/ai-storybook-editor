@@ -16,10 +16,12 @@ interface Props {
   checked: boolean;
   /** Position in the CHECKED set (1-based); null when unchecked → no badge. NOT persisted. */
   ordinal: number | null;
-  onToggle: (next: boolean) => void;
+  /** Read-only rendering (SwapConfigReviewModal) — checkbox inert, no toggle. */
+  disabled?: boolean;
+  onToggle?: (next: boolean) => void;
 }
 
-export function PoolSpreadCard({ option, checked, ordinal, onToggle }: Props) {
+export function PoolSpreadCard({ option, checked, ordinal, disabled, onToggle }: Props) {
   return (
     <div
       className={cn(
@@ -31,7 +33,8 @@ export function PoolSpreadCard({ option, checked, ordinal, onToggle }: Props) {
     >
       <Checkbox
         checked={checked}
-        onCheckedChange={onToggle}
+        disabled={disabled}
+        onCheckedChange={disabled ? undefined : onToggle}
         aria-label={`Include spread ${option.spread_number} (${option.title})`}
       />
 
