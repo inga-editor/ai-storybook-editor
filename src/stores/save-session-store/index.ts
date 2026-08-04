@@ -422,7 +422,11 @@ export const useSaveSessionStore = create<SaveSessionState>()((set, get) => {
         // Measure the serialized patch as the keepalive-budget proxy (the lock-body envelope is tiny
         // and constant). Over budget → still send, just WITHOUT keepalive (a plain fetch may be cut
         // short on an abrupt kill, but attempting beats dropping the change).
-        const bytes = JSON.stringify(payload).length;
+        // Count UTF-8 bytes, NOT String.length (UTF-16 code units): the browser's ~64KB keepalive
+        // quota is enforced on the encoded body, and this app's vi/zh-CN textbox content is 2–3× the
+        // code-unit count — a code-unit measure would let an over-quota CJK patch pick keepalive and
+        // get silently rejected (the very data-loss this flush exists to prevent).
+        const bytes = new TextEncoder().encode(JSON.stringify(payload)).length;
         const useKeepalive = bytes <= KEEPALIVE_MAX_BYTES;
         if (!useKeepalive) {
           log.warn('flushAllOnHidden', 'payload over keepalive budget — plain fetch (may be cut short)', {

@@ -148,4 +148,19 @@ describe('flushAllOnHidden — collab safety net (spec §4.5)', () => {
     const [, , , opts] = h.saveResource.mock.calls[0] as unknown as [unknown, unknown, unknown, { keepalive: boolean }];
     expect(opts.keepalive).toBe(false); // dropped keepalive (over the 64KB browser cap) — but sent
   });
+
+  it('CJK payload under 60k code-units but over 60k UTF-8 bytes → keepalive:false (byte-measured)', () => {
+    // 25k CJK chars = 25,000 UTF-16 code units (String.length) but ~75,000 UTF-8 bytes. A code-unit
+    // measure would (wrongly) pick keepalive:true and the browser would silently reject the over-quota
+    // body. Byte-accurate measure must fall back to keepalive:false so the write is actually attempted.
+    const cjk = seedSession('cjk', { v: '' });
+    nodeById[cjk.entry.id] = { v: '字'.repeat(25_000) };
+    useSaveSessionStore.setState({ sessions: new Map([[cjk.key, cjk.entry]]) });
+
+    useSaveSessionStore.getState().flushAllOnHidden();
+
+    expect(h.saveResource).toHaveBeenCalledTimes(1);
+    const [, , , opts] = h.saveResource.mock.calls[0] as unknown as [unknown, unknown, unknown, { keepalive: boolean }];
+    expect(opts.keepalive).toBe(false);
+  });
 });
