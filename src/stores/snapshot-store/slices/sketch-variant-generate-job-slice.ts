@@ -55,10 +55,17 @@ import type { ImageApiFailure } from '@/apis/image-api-client';
 // resource-lock-store is a leaf store loaded before the slices in snapshot-store/index, so this
 // static import resolves cleanly in the app (no cycle back to snapshot-store). The isolated slice
 // unit tests import this module directly (bypassing index) and mock it.
-import { useResourceLockStore } from '@/stores/resource-lock-store';
+import { useResourceLockStore, keyOf } from '@/stores/resource-lock-store';
+// makeEntityId comes from the PURE entity-id submodule (no imports) to avoid the save-session-store
+// barrel; useSaveSessionStore is imported DYNAMICALLY at call-time (save-session-store →
+// snapshot-store/index → this slice would be an eval-time cycle if static).
+import { makeEntityId } from '@/stores/save-session-store/entity-id';
 // Sibling slice-helper (same dir) — whole sketch-entity gateway flush that KEEPS the lock held so
 // the component held-session stays the sole releaser (ADR-047). Reads no store (caller passes node).
-import { flushSketchEntityUnderLock } from './collab-sketch-variant-save-helper';
+import {
+  flushSketchEntityUnderLock,
+  resolveSketchVariantLockTarget,
+} from './collab-sketch-variant-save-helper';
 import { buildImageVersionSaveResource } from '@/utils/save-resource-path';
 import { toast } from 'sonner';
 import { createLogger } from '@/utils/logger';
@@ -164,9 +171,22 @@ export const createSketchVariantGenerateJobSlice: StateCreator<
    *  collabPersist flipped false) → the legacy owner-direct autoSaveSnapshot. */
   function persistVariantEntity(ref: VariantRef): void {
     if (useResourceLockStore.getState().collabPersist) {
-      void flushSketchEntityUnderLock(ref.kind, ref.entityKey, entityNodeOf(ref), {
-        releaseIfAcquired: true,
-      });
+      // ⚡ Await the flush + rebase the held-session baseline ON SUCCESS (spec §4.4), so the eventual
+      // release-save doesn't double-write the just-persisted raw sheet (parity with image-task-slice).
+      // Fire-and-forget from the caller. rebaseBaseline no-ops if the session already released (browsed
+      // away → one-shot flush) or is solo; only a landed save (saved===true) rebases.
+      void (async () => {
+        const saved = await flushSketchEntityUnderLock(ref.kind, ref.entityKey, entityNodeOf(ref), {
+          releaseIfAcquired: true,
+        });
+        if (!saved) return;
+        const bookId = useResourceLockStore.getState().bookId;
+        if (!bookId) return;
+        const { useSaveSessionStore } = await import('@/stores/save-session-store');
+        useSaveSessionStore
+          .getState()
+          .rebaseBaseline(keyOf(bookId, resolveSketchVariantLockTarget(ref.kind, ref.entityKey)));
+      })();
     } else {
       void get().autoSaveSnapshot();
     }
@@ -245,32 +265,30 @@ export const createSketchVariantGenerateJobSlice: StateCreator<
   // ── generate (phase 1) → auto-cut (phase 2) chain. Plain async, fire-and-forget from start. ─────
   async function runGenerate(ref: VariantRef): Promise<void> {
     try {
-      // ⚡⚡ FLUSH-BEFORE-GENERATE (mirror sketch-spread-generate-job-slice.ts — generate is
-      // SNAPSHOT-READING). autoSaveSnapshot self-guards to a no-op when another save holds isSaving
-      // AND is suppressed under collab → the endpoint would read STALE DB text. Land the entity node
-      // in the DB first: SOLO → awaited flushSnapshot(); COLLAB → gateway whole-node flush (keeps lock).
-      const collab = useResourceLockStore.getState().collabPersist;
-      if (collab) {
-        const flushed = await flushSketchEntityUnderLock(ref.kind, ref.entityKey, entityNodeOf(ref));
-        if (opStale(ref)) return; // op reset during the flush
-        if (!flushed) {
-          log.warn('runGenerate', 'flush-before-generate failed — abort (stale DB / peer lock)', {
-            kind: ref.kind,
-            entityKey: ref.entityKey,
-            variantKey: ref.variantKey,
-          });
-          // Do NOT call the AI on a stale / peer-owned node (would burn tokens + write the wrong text).
-          markOpError(ref, 'Could not save before generating — the entity may be locked by another editor.');
-          return;
-        }
-      } else {
-        await get().flushSnapshot(); // legacy solo: land edits + mint the snapshot row
-        if (opStale(ref)) return; // op reset during the flush
+      // ⚡⚡ SAVE-BEFORE-GENERATE (unified-item-save-spec §4.2). Generate is SNAPSHOT-READING: the
+      // endpoint reads DB text + the BE save_resource directive must anchor to a persisted node.
+      // `ensureSaved` internalizes the solo/collab fork (was a manual `if (collab)` branch here):
+      // held session → save-while-held + rebase; no session → one-shot acquire→save→release; solo →
+      // flushSnapshot. Continue ONLY on saved|clean — never call the AI on a stale / peer-owned node.
+      const { useSaveSessionStore } = await import('@/stores/save-session-store');
+      const saveOutcome = await useSaveSessionStore
+        .getState()
+        .ensureSaved('sketch-entity', makeEntityId(ref.kind, ref.entityKey));
+      if (opStale(ref)) return; // op reset during the save
+      if (saveOutcome !== 'saved' && saveOutcome !== 'clean') {
+        log.warn('runGenerate', 'save-before-generate not persisted — abort (stale DB / peer lock)', {
+          kind: ref.kind,
+          entityKey: ref.entityKey,
+          variantKey: ref.variantKey,
+          outcome: saveOutcome,
+        });
+        markOpError(ref, 'Could not save before generating — the entity may be locked by another editor.');
+        return;
       }
 
       const snapshotId = get().meta.id; // ⚡ meta.id (NOT meta.snapshotId); brand-new book: null till first save
       if (!snapshotId) {
-        log.warn('runGenerate', 'no snapshot id — cannot generate', { kind: ref.kind, collab });
+        log.warn('runGenerate', 'no snapshot id — cannot generate', { kind: ref.kind });
         markOpError(ref, NO_SNAPSHOT_MESSAGE); // keep the op (error set) so it surfaces; retryable after dismiss
         toast.error(NO_SNAPSHOT_MESSAGE);
         return; // do NOT call the endpoint (it would fail SNAPSHOT_NOT_FOUND)

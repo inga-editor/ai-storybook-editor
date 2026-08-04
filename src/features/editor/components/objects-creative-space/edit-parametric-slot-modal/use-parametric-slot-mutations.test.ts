@@ -1,14 +1,14 @@
 // use-parametric-slot-mutations.test.ts — Pins the ENSURE invariant of the write hook
-// (README §4.4): `ensureValueEntry` must resolve ONLY when the value entry actually exists in
-// the LIVE slot after the commit. The opener drops `onUpdateSlot` on three silent paths (peer
-// removed the slot / spread-selection drift / lock lost mid-flight) while `saveNow` still
-// answers `true` for "nothing dirty" — a resolve there would POST against an anchor that was
-// never written and burn a paid AI call for a guaranteed SAVE_RESOURCE_ANCHOR_NOT_FOUND.
+// (unified-item-save-spec §4.2): `ensureValueEntry` reads the tri-state `SaveOutcome` from
+// `onCommitSave` and resolves ONLY on `saved`|`clean`. `blocked` (a peer holds the spread) or
+// `failed` ⇒ it THROWS so the caller aborts, never POSTing against an anchor that did not land
+// (which would burn a paid AI call for a guaranteed SAVE_RESOURCE_ANCHOR_NOT_FOUND).
 // vitest + @testing-library/react only — NO node builtins.
 
 import { describe, it, expect, vi } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import type { ItemParametricSlot } from '@/types/spread-types';
+import type { SaveOutcome } from '@/stores/save-session-store';
 import {
   useParametricSlotMutations,
   type UseParametricSlotMutationsArgs,
@@ -19,17 +19,6 @@ const SLOT: ItemParametricSlot = {
   values: [{ value: 'VN', is_default: true, illustrations: [] }],
 };
 
-/** A commit whose promise the test releases by hand — lets us re-render (or NOT re-render) the
- *  hook with the post-write slot while the ensure is still awaiting, exactly like the store
- *  round-trip does in the app. */
-function makeDeferredCommit() {
-  let release!: () => void;
-  const gate = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  return { onCommitSave: vi.fn(() => gate), release: () => release() };
-}
-
 function makeProps(
   overrides: Partial<UseParametricSlotMutationsArgs> = {},
 ): UseParametricSlotMutationsArgs {
@@ -39,7 +28,7 @@ function makeProps(
     canEdit: true,
     isBusy: false,
     onUpdateSlot: vi.fn(),
-    onCommitSave: vi.fn().mockResolvedValue(undefined),
+    onCommitSave: vi.fn<() => Promise<SaveOutcome>>().mockResolvedValue('saved'),
     ...overrides,
   };
 }
@@ -51,48 +40,50 @@ function render(props: UseParametricSlotMutationsArgs) {
 }
 
 describe('ensureValueEntry', () => {
-  it('resolves when the entry is present in the live slot after the commit', async () => {
-    const { onCommitSave, release } = makeDeferredCommit();
+  it('writes the new entry then resolves when the commit reports "saved"', async () => {
     const onUpdateSlot = vi.fn();
-    const props = makeProps({ onUpdateSlot, onCommitSave });
-    const { result, rerender } = render(props);
+    const onCommitSave = vi.fn<() => Promise<SaveOutcome>>().mockResolvedValue('saved');
+    const { result } = render(makeProps({ onUpdateSlot, onCommitSave }));
 
-    const pending = result.current.ensureValueEntry('US');
+    await act(async () => {
+      await result.current.ensureValueEntry('US');
+    });
+    // The lazy value entry was created…
     expect(onUpdateSlot).toHaveBeenCalledTimes(1);
     const written = onUpdateSlot.mock.calls[0][0] as ItemParametricSlot;
     expect(written.values.map((v) => v.value)).toEqual(['VN', 'US']);
-
-    // The store accepted the write → the shell re-renders with the live slot.
-    rerender({ ...props, slot: written });
-    await act(async () => {
-      release();
-      await pending;
-    });
+    // …and committed.
     expect(onCommitSave).toHaveBeenCalledTimes(1);
   });
 
-  it('throws PARAMETRIC_ENSURE_NOT_PERSISTED when the write was silently dropped', async () => {
-    const { onCommitSave, release } = makeDeferredCommit();
-    // The opener swallows the update (peer removed the slot / drift / lock lost), so the live
-    // slot never gains the entry — but the commit still reports success ("nothing dirty").
+  it('throws PARAMETRIC_ENSURE_NOT_PERSISTED when the commit reports "failed"', async () => {
     const onUpdateSlot = vi.fn();
-    const props = makeProps({ onUpdateSlot, onCommitSave });
-    const { result } = render(props);
+    const onCommitSave = vi.fn<() => Promise<SaveOutcome>>().mockResolvedValue('failed');
+    const { result } = render(makeProps({ onUpdateSlot, onCommitSave }));
 
-    const pending = result.current.ensureValueEntry('US');
-    await act(async () => {
-      release();
-      await expect(pending).rejects.toThrow('PARAMETRIC_ENSURE_NOT_PERSISTED');
-    });
-    // The hook DID attempt the write (and committed) — this is "the opener dropped it", not
-    // "the hook bailed early", which would make the assertion above pass vacuously.
+    await expect(result.current.ensureValueEntry('US')).rejects.toThrow(
+      'PARAMETRIC_ENSURE_NOT_PERSISTED',
+    );
+    // The hook DID attempt the write + commit — this is "the save failed", not "bailed early".
     expect(onUpdateSlot).toHaveBeenCalledTimes(1);
+    expect(onCommitSave).toHaveBeenCalledTimes(1);
+  });
+
+  it('throws PARAMETRIC_ENSURE_BLOCKED when a peer holds the spread ("blocked")', async () => {
+    const onCommitSave = vi.fn<() => Promise<SaveOutcome>>().mockResolvedValue('blocked');
+    const { result } = render(makeProps({ onCommitSave }));
+
+    await expect(result.current.ensureValueEntry('US')).rejects.toThrow(
+      'PARAMETRIC_ENSURE_BLOCKED',
+    );
     expect(onCommitSave).toHaveBeenCalledTimes(1);
   });
 
   // The commit contract: a rejected save must propagate, never be swallowed into a resolve.
-  it('propagates a rejected commit instead of falling through to the verify', async () => {
-    const onCommitSave = vi.fn().mockRejectedValue(new Error('PARAMETRIC_COMMIT_SAVE_REJECTED'));
+  it('propagates a rejected commit instead of resolving', async () => {
+    const onCommitSave = vi
+      .fn<() => Promise<SaveOutcome>>()
+      .mockRejectedValue(new Error('PARAMETRIC_COMMIT_SAVE_REJECTED'));
     const { result } = render(makeProps({ onCommitSave }));
 
     await expect(result.current.ensureValueEntry('US')).rejects.toThrow(
@@ -101,9 +92,9 @@ describe('ensureValueEntry', () => {
     expect(onCommitSave).toHaveBeenCalledTimes(1);
   });
 
-  it('still commits (and resolves) when the entry already exists — no pointless write', async () => {
+  it('resolves on "clean" when the entry already exists — no pointless write', async () => {
     const onUpdateSlot = vi.fn();
-    const onCommitSave = vi.fn().mockResolvedValue(undefined);
+    const onCommitSave = vi.fn<() => Promise<SaveOutcome>>().mockResolvedValue('clean');
     const { result } = render(makeProps({ onUpdateSlot, onCommitSave }));
 
     await act(async () => {
@@ -115,7 +106,7 @@ describe('ensureValueEntry', () => {
 
   it('refuses before any commit when the spread is not editable', async () => {
     const onUpdateSlot = vi.fn();
-    const onCommitSave = vi.fn().mockResolvedValue(undefined);
+    const onCommitSave = vi.fn<() => Promise<SaveOutcome>>().mockResolvedValue('saved');
     const { result } = render(makeProps({ canEdit: false, onUpdateSlot, onCommitSave }));
 
     await expect(result.current.ensureValueEntry('US')).rejects.toThrow(

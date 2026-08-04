@@ -201,6 +201,15 @@ export const SAVE_POLICIES: Record<SaveDomain, SavePolicy> = {
     getNode: () => null,
     buildPayload: (node) => ({ action_type: 3, patch: node }),
     idleAutoSaveMs: DEFAULT_IDLE_AUTO_SAVE_MS,
+    // 404 → nested CREATE: a generated sketch spread page image is minted client-side (never in the
+    // DB), so a one-shot EDIT/UPLOAD 404s → retry ONCE under the spread's `images[]` (mirrors the
+    // sketch spread canvas' inline `create_fallback`, canvas L372). ⚡ PHASE-4: `parentId` derives the
+    // parent spread from a composite id `"{spreadId}/{imageId}"` — the id the spread canvas will thread
+    // when it migrates off `use-resource-lock-session` (no phase-2 consumer, so this is forward-declared).
+    createFallback: {
+      parentId: (id) => (id.includes('/') ? id.slice(0, id.indexOf('/')) : id),
+      collection: 'images',
+    },
   },
 
   'sketch-textbox': {

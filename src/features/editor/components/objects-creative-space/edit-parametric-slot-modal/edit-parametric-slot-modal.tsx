@@ -28,6 +28,7 @@ import type { Book } from '@/types/editor';
 import type { Character } from '@/types/character-types';
 import type { Illustration } from '@/types/prop-types';
 import type { ItemParametricSlot, SpreadImage } from '@/types/spread-types';
+import type { SaveOutcome } from '@/stores/save-session-store';
 import { createLogger } from '@/utils/logger';
 import {
   DEFAULT_PARAMETRIC_SLOT_TAB,
@@ -84,9 +85,9 @@ export interface EditParametricSlotModalProps {
    *  Awaited before a generate POST so the `saveResource` anchor already exists (§4.4).
    *  ⚡ REQUIRED on purpose: an omitted callback would let `onEnsureValueEntry` resolve WITHOUT
    *  persisting, which guarantees `SAVE_RESOURCE_ANCHOR_NOT_FOUND` on every generate with no
-   *  compile-time signal. MUST REJECT when the save fails — the tab treats a rejection as
-   *  "abort, do not call the API" (never burn an AI call on a missing anchor). */
-  onCommitSave: () => Promise<void>;
+   *  compile-time signal. Reports the tri-state `SaveOutcome` — `blocked`/`failed` make
+   *  `ensureValueEntry` throw so the tab aborts (never burn an AI call on a missing anchor). */
+  onCommitSave: () => Promise<SaveOutcome>;
 
   // ── Upload / persist ──
   /** Storage prefix for manual upload, e.g. `parametric/${item.id}`. */

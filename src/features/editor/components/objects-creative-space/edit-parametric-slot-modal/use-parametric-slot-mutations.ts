@@ -7,14 +7,17 @@
 //   1. NO-OP SKIP — the `with*` helpers return the SAME reference when the target value has no
 //      entry. Writing that back would flag the snapshot dirty and trigger a pointless collab
 //      save, so unchanged results are dropped.
-//   2. ENSURE = write THEN flush THEN VERIFY — the BE `saveResource` anchor (`find:value=…`)
-//      must already exist server-side before a generate POST, so `ensureValueEntry` awaits the
-//      parent's commit AND re-reads the live slot afterwards. A rejection must abort the caller
-//      (never burn an AI call on a missing anchor).
+//   2. ENSURE = write THEN commit, branch on the tri-state SaveOutcome — the BE `saveResource`
+//      anchor (`find:value=…`) must already exist server-side before a generate POST, so
+//      `ensureValueEntry` awaits `onCommitSave` and reads its `SaveOutcome`: `saved`|`clean` ⇒
+//      persisted, proceed; `blocked` (peer lock) / `failed` ⇒ THROW so the caller aborts (never
+//      burn an AI call on a missing anchor). The tri-state replaces the old boolean+slot-re-read
+//      verify (unified-item-save-spec §4.2 — `saveNow()===true` no longer conflates saved∨clean).
 
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import type { Illustration } from '@/types/prop-types';
 import type { ItemParametricSlot } from '@/types/spread-types';
+import type { SaveOutcome } from '@/stores/save-session-store';
 import { createLogger } from '@/utils/logger';
 import {
   withClearedIllustrations,
@@ -36,10 +39,10 @@ export interface UseParametricSlotMutationsArgs {
   /** Generate/upload in flight — blocks writes that would race the result. */
   isBusy: boolean;
   onUpdateSlot: (next: ItemParametricSlot) => void;
-  /** REQUIRED (mirrors the shell prop): an optional callback here would let `ensureValueEntry`
-   *  resolve WITHOUT flushing, which guarantees `SAVE_RESOURCE_ANCHOR_NOT_FOUND` on the generate
-   *  that follows. Must REJECT when the save did not land. */
-  onCommitSave: () => Promise<void>;
+  /** REQUIRED (mirrors the shell prop): persist the held retouch spread and report the tri-state
+   *  `SaveOutcome`. `saved`|`clean` ⇒ the anchor is in the DB → proceed; `blocked`/`failed` ⇒
+   *  `ensureValueEntry` throws so the caller aborts (never burn an AI call on a missing anchor). */
+  onCommitSave: () => Promise<SaveOutcome>;
 }
 
 export interface ParametricSlotMutations {
@@ -84,10 +87,9 @@ export function useParametricSlotMutations({
   const ensureValueEntry = useCallback(
     async (value: string) => {
       // ⚡ THROW, do not silently resolve. `onUpdateSlot` is fire-and-forget: the opener's collab
-      // gate swallows a refusal (toast + return), and `saveNow` then reports success for
-      // "nothing dirty". Without this guard the caller would POST against an anchor that was
-      // never written — the exact wasted-AI-call the ensure step exists to prevent. `canEdit`
-      // covers BOTH refusal reasons (no lock held, and spread-selection drift).
+      // gate swallows a refusal (toast + return). `canEdit` covers both refusal reasons (no lock
+      // held, and spread-selection drift). Without this the caller would POST against an anchor
+      // that was never written — the wasted-AI-call the ensure step exists to prevent.
       if (!canEdit) {
         log.warn('ensureValueEntry', 'cannot persist — spread not editable, abort', {
           itemId,
@@ -95,40 +97,29 @@ export function useParametricSlotMutations({
         });
         throw new Error('PARAMETRIC_ENSURE_NOT_EDITABLE');
       }
-      // Base the write on the MIRROR, not the closure `slot` — one source of truth for both the
-      // write and the verify below. `handleParametricUpdate` replaces the whole slot node, so a
-      // stale base would silently drop a concurrent change.
+      // Base the write on the MIRROR, not the closure `slot` — one source of truth. `onUpdateSlot`
+      // replaces the whole slot node, so a stale base would silently drop a concurrent change.
       const base = slotRef.current;
       const next = withValueEntry(base, value);
       if (next !== base) {
         log.info('ensureValueEntry', 'create lazy value entry', { itemId, value });
         onUpdateSlot(next);
       }
-      await onCommitSave();
-      // ⚡ VERIFY, do not assume. A resolved commit is NOT proof the entry landed: the opener
-      // drops `onUpdateSlot` on three silent paths (peer removed the slot / spread-selection
-      // drift / lock lost between the click and this await), and `saveNow` answers `true` for
-      // "nothing dirty". Re-read the LIVE slot — a miss means the anchor does not exist, so the
-      // caller must abort instead of POSTing (the throw sets `ensureFailed` in the visuals tab).
-      //
-      // ⚠ TWO INVARIANTS this check silently depends on — break either and it misjudges:
-      //  1. NO FALSE THROW (microtask vs macrotask). The ref is refreshed by a passive effect
-      //     (Scheduler macrotask) while this `await` resumes on a microtask. Safe only because
-      //     `saveNow`'s ONLY synchronous success return is "not dirty" — i.e. exactly the case
-      //     where no write landed, so a stale ref gives the same (correct) verdict. Every write
-      //     that DID land projects dirty and goes through `await s.save()` (a fetch), which is
-      //     many macrotasks after the effect flushed. If a commit ever resolves synchronously on
-      //     a DIRTY node (local-only mode, optimistic save), this turns into intermittent false
-      //     aborts of PAID generates — re-verify here before making that change.
-      //  2. LOCAL ≠ SERVER. This proves the entry is in the store, not that it reached the DB.
-      //     Sound only because `images` ∈ RETOUCH_OWNED_KEYS (collab-owned-subtree.ts), so the
-      //     slot survives the owned-subtree projection into the flush payload.
-      if (!slotRef.current.values.some((v) => v.value === value)) {
-        log.warn('ensureValueEntry', 'entry absent after commit — write was dropped, abort', {
+      // ⚡ TRI-STATE (unified-item-save-spec §4.2): read `SaveOutcome`, not a boolean. `saved`|`clean`
+      // ⇒ the value entry is persisted (or was already) → proceed. `blocked` (a peer holds the
+      // spread) / `failed` ⇒ the anchor did NOT land → THROW so the caller aborts the generate (its
+      // catch shows PARAMETRIC_ENSURE_ENTRY_ERROR). This replaces the old boolean + slot-re-read
+      // verify, which existed only because `saveNow()===true` conflated saved∨clean.
+      const outcome = await onCommitSave();
+      if (outcome !== 'saved' && outcome !== 'clean') {
+        log.warn('ensureValueEntry', 'save not persisted before generate — abort', {
           itemId,
           value,
+          outcome,
         });
-        throw new Error('PARAMETRIC_ENSURE_NOT_PERSISTED');
+        throw new Error(
+          outcome === 'blocked' ? 'PARAMETRIC_ENSURE_BLOCKED' : 'PARAMETRIC_ENSURE_NOT_PERSISTED',
+        );
       }
     },
     // No `slot` dep on purpose: this callback reads the slot through `slotRef` (live), so a

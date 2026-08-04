@@ -20,7 +20,9 @@ import type { ImageApiFailure } from '@/apis/image-api-client';
 // resolves cleanly in the app. Isolated slice unit tests import this module directly and mock
 // '@/stores/resource-lock-store' to break the slice ↔ store module cycle (collabPersist=false there
 // keeps the solo path — the collab lock/save/release path has its own tests).
-import { useResourceLockStore, type SavePayload } from '@/stores/resource-lock-store';
+import { useResourceLockStore, keyOf, type SavePayload } from '@/stores/resource-lock-store';
+// NOTE: save-session-store is imported DYNAMICALLY at call-time (below) — a static import would
+// create an eval-time cycle (save-session-store → snapshot-store/index → this slice).
 import {
   saveImageResourceUnderLock,
   resolveImageLockTarget,
@@ -225,6 +227,19 @@ async function persistIllustrationCollab(
       entityType,
       resourceId: target.resource_id,
     });
+  }
+
+  // ⚡ Save-via-API rebase (spec §4.4): the freshly-applied version was just persisted, so re-anchor
+  // the held per-entity session baseline — otherwise the eventual release-save would double-write the
+  // same node (an extra audit row). No-op when no held session exists at this target (browse mode /
+  // image-leaf types with no per-item session / peer lock). Only on a landed save (never skip/fail).
+  if (outcome === 'saved') {
+    const bookId = useResourceLockStore.getState().bookId;
+    if (bookId) {
+      // Dynamic import — breaks the static save-session-store ⇄ snapshot-store eval cycle.
+      const { useSaveSessionStore } = await import('@/stores/save-session-store');
+      useSaveSessionStore.getState().rebaseBaseline(keyOf(bookId, target));
+    }
   }
 }
 

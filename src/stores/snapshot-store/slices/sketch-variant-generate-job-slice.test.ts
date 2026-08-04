@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, beforeAll, vi } from 'vitest';
 import { create } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
 import { createSketchSlice } from './sketch-slice';
@@ -27,14 +27,31 @@ const mockedCut = vi.mocked(callCropSheetRow);
 // + the collab whole-node flush helper (mocked to assert ordering + abort). This unit test imports the
 // slice DIRECTLY (bypassing snapshot-store/index), so the real modules would close the slice ↔ store cycle.
 const h = vi.hoisted(() => ({
-  lockState: { collabPersist: false as boolean },
+  lockState: { collabPersist: false as boolean, bookId: undefined as string | undefined },
   flushEntity: vi.fn(async (_k: string, _e: string, _n: unknown) => true as boolean),
+  // ⚡ phase-2: flush-before-generate is now a single `ensureSaved` (engine internalizes solo/collab).
+  ensureSaved: vi.fn(async (_domain: string, _id: string) => 'saved' as string),
+  // ⚡ M1: persist-after rebases the held baseline on a landed save (prevents release double-write).
+  rebaseBaseline: vi.fn((_key: string) => {}),
 }));
 vi.mock('@/stores/resource-lock-store', () => ({
   useResourceLockStore: { getState: () => h.lockState },
+  keyOf: (b: string, t: { step: number; resource_type: number; resource_id: string; locale: string | null }) =>
+    `${b}|${t.step}|${t.resource_type}|${t.resource_id}|${t.locale ?? ''}`,
 }));
 vi.mock('./collab-sketch-variant-save-helper', () => ({
   flushSketchEntityUnderLock: h.flushEntity,
+  resolveSketchVariantLockTarget: (kind: string, key: string) => ({
+    step: 1,
+    resource_type: kind === 'props' ? 4 : 3,
+    resource_id: key,
+    locale: null,
+  }),
+}));
+// The save engine is imported dynamically by the slice; mock its ensureSaved (the save-before-generate
+// gate) + rebaseBaseline (persist-after). makeEntityId is imported from the PURE entity-id submodule.
+vi.mock('@/stores/save-session-store', () => ({
+  useSaveSessionStore: { getState: () => ({ ensureSaved: h.ensureSaved, rebaseBaseline: h.rebaseBaseline }) },
 }));
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -125,32 +142,41 @@ const variantHero = (store: ReturnType<typeof createTestStore>['store']) =>
     (v: { key: string }) => v.key === 'hero',
   )!;
 
+// Warm the (mocked) save-session-store module so the slice's first dynamic `import()` resolves in a
+// microtask — otherwise the very first save-before-generate test races the cold module load.
+beforeAll(async () => {
+  await import('@/stores/save-session-store');
+});
+
 describe('SketchVariantGenerateJobSlice', () => {
   let store: ReturnType<typeof createTestStore>['store'];
-  let flushSnapshot: ReturnType<typeof createTestStore>['flushSnapshot'];
   let autoSaveSnapshot: ReturnType<typeof createTestStore>['autoSaveSnapshot'];
 
   beforeEach(() => {
     mockedGen.mockReset();
     mockedCut.mockReset();
     h.lockState.collabPersist = false; // default: solo path (legacy flushSnapshot)
+    h.lockState.bookId = undefined;
     h.flushEntity.mockReset().mockResolvedValue(true);
-    ({ store, flushSnapshot, autoSaveSnapshot } = createTestStore());
+    h.ensureSaved.mockReset().mockResolvedValue('saved');
+    h.rebaseBaseline.mockReset();
+    ({ store, autoSaveSnapshot } = createTestStore());
     store.getState().setSketchEntities('characters', [entityWithVariant()]);
   });
 
-  it('(a) SOLO: flushes the snapshot BEFORE calling generate; payload has NO artStyleId', async () => {
+  it('(a) save-before-generate: ensureSaved runs BEFORE generate; payload has NO artStyleId', async () => {
     mockedGen.mockResolvedValueOnce(okGen('raw.png'));
     mockedCut.mockResolvedValueOnce(okCut(['c1.png', 'c2.png', 'c3.png', 'c4.png']));
 
     store.getState().startVariantSheetGenerate(REF);
     await tick();
+    await tick(); // 2nd macrotask: the dynamic import of the save engine resolves before generate
 
-    expect(flushSnapshot).toHaveBeenCalled();
-    expect(h.flushEntity).not.toHaveBeenCalled(); // solo uses flushSnapshot, not the gateway helper
+    // ⚡ phase-2: the solo/collab flush fork is now internal to ensureSaved (asserted in
+    // ensure-saved.test.ts). At this layer we assert the gate ran on the right entity, before generate.
+    expect(h.ensureSaved).toHaveBeenCalledWith('sketch-entity', 'characters/kid');
     expect(mockedGen).toHaveBeenCalledTimes(1);
-    // Order: the awaited flush must run before generate is dispatched.
-    expect(flushSnapshot.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(h.ensureSaved.mock.invocationCallOrder[0]).toBeLessThan(
       mockedGen.mock.invocationCallOrder[0],
     );
     // ⚡ ADR-047 contract: snapshot-reading payload carries snapshotId + keys ONLY (artStyleId dropped).
@@ -165,7 +191,7 @@ describe('SketchVariantGenerateJobSlice', () => {
     expect(mockedGen.mock.calls[0][1]).toHaveProperty('saveResource');
   });
 
-  it('(a2) COLLAB: gateway flush (whole entity node) runs BEFORE generate; NO flushSnapshot', async () => {
+  it('(a2) COLLAB: ensureSaved runs BEFORE generate (engine handles the gateway flush)', async () => {
     h.lockState.collabPersist = true;
     mockedGen.mockResolvedValueOnce(okGen('raw.png'));
     mockedCut.mockResolvedValueOnce(okCut(['c1.png', 'c2.png', 'c3.png', 'c4.png']));
@@ -174,24 +200,22 @@ describe('SketchVariantGenerateJobSlice', () => {
     await tick();
     await tick();
 
-    // Risk #1: the entity node is persisted through the gateway BEFORE the AI reads the DB.
-    expect(h.flushEntity).toHaveBeenCalled();
-    expect(h.flushEntity.mock.calls[0].slice(0, 2)).toEqual(['characters', 'kid']);
-    expect(flushSnapshot).not.toHaveBeenCalled(); // suppressed under collab
+    // Risk #1: the entity node is persisted (via the engine) BEFORE the AI reads the DB.
+    expect(h.ensureSaved).toHaveBeenCalledWith('sketch-entity', 'characters/kid');
     expect(mockedGen).toHaveBeenCalledTimes(1);
-    expect(h.flushEntity.mock.invocationCallOrder[0]).toBeLessThan(mockedGen.mock.invocationCallOrder[0]);
+    expect(h.ensureSaved.mock.invocationCallOrder[0]).toBeLessThan(mockedGen.mock.invocationCallOrder[0]);
   });
 
-  it('(a3) COLLAB: flush-before FAILS (peer lock) → generate ABORTED, op kept with error', async () => {
+  it('(a3) save-before FAILS (peer lock) → generate ABORTED, op kept with error', async () => {
     h.lockState.collabPersist = true;
-    h.flushEntity.mockResolvedValueOnce(false); // peer holds the entity / save rejected
+    h.ensureSaved.mockResolvedValueOnce('blocked'); // peer holds the entity / save rejected
     mockedGen.mockResolvedValue(okGen('raw.png'));
 
     store.getState().startVariantSheetGenerate(REF);
     await tick();
     await tick();
 
-    expect(h.flushEntity).toHaveBeenCalled();
+    expect(h.ensureSaved).toHaveBeenCalled();
     expect(mockedGen).not.toHaveBeenCalled(); // never burn AI tokens on a stale / peer-owned node
     expect(store.getState().variantSheetGenerateOps[KEY]?.error).toContain('Could not save before generating');
   });
@@ -206,14 +230,31 @@ describe('SketchVariantGenerateJobSlice', () => {
     await tick();
     await tick();
 
-    // flush called twice: flush-before-generate AND persist-after-crops (both whole entity node).
-    expect(h.flushEntity.mock.calls.length).toBeGreaterThanOrEqual(2);
+    // persist-AFTER-crops fires through the gateway helper (flush-before is now ensureSaved, mocked).
+    expect(h.flushEntity).toHaveBeenCalled();
     expect(autoSaveSnapshot).not.toHaveBeenCalled(); // collab never dual-writes via autosave
     expect(store.getState().variantSheetGenerateOps[KEY]).toBeUndefined();
   });
 
+  it('(a5) M1: persist-after rebases the held-session baseline on a landed save (no release double-write)', async () => {
+    h.lockState.collabPersist = true;
+    h.lockState.bookId = 'book1';
+    mockedGen.mockResolvedValueOnce(okGen('raw.png'));
+    mockedCut.mockResolvedValueOnce(okCut(['c1.png', 'c2.png', 'c3.png', 'c4.png']));
+
+    store.getState().startVariantSheetGenerate(REF);
+    await tick();
+    await tick();
+    await tick();
+    await tick();
+
+    // The landed persist-after (flushEntity → true) re-anchors the held sketch-entity baseline so the
+    // eventual release-save does not re-write the just-persisted raw sheet.
+    expect(h.rebaseBaseline).toHaveBeenCalledWith('book1|1|3|kid|');
+  });
+
   it('(b) meta.id == null → toasts + does NOT call generate + keeps the errored op', async () => {
-    ({ store, flushSnapshot } = createTestStore(null)); // meta.id stays null through the stubbed flush
+    ({ store } = createTestStore(null)); // meta.id stays null after the save-before gate
     store.getState().setSketchEntities('characters', [entityWithVariant()]);
     mockedGen.mockResolvedValue(okGen('raw.png'));
 
@@ -222,7 +263,7 @@ describe('SketchVariantGenerateJobSlice', () => {
     await tick();
 
     const { toast } = await import('sonner');
-    expect(flushSnapshot).toHaveBeenCalled();
+    expect(h.ensureSaved).toHaveBeenCalled();
     expect(mockedGen).not.toHaveBeenCalled();
     expect(toast.error).toHaveBeenCalledWith('Save the book first, then generate.');
     // op kept (error set) so the notifications hook can surface it.

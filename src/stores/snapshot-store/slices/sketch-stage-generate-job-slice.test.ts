@@ -3,7 +3,7 @@
 //   variant   (12 SNAPSHOT-READING — flush-before mandatory) → auto-cut 10
 // plus single-flight, FE 422-mirror gates, add-rollback, recrop, opStale.
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, beforeAll, vi } from 'vitest';
 import { create } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
 import { createSketchStageSlice } from './sketch-stage-slice';
@@ -29,14 +29,30 @@ const mockedCut = vi.mocked(callCropSheetRow);
 
 // Isolate resource-lock (collabPersist toggles solo flushSnapshot vs gateway) + the stage flush helper.
 const h = vi.hoisted(() => ({
-  lockState: { collabPersist: false as boolean },
+  lockState: { collabPersist: false as boolean, bookId: undefined as string | undefined },
   flushStage: vi.fn(async (_k: string, _n: unknown, _o?: { releaseIfAcquired?: boolean }) => true as boolean),
+  // ⚡ phase-2: variant flush-before-generate is now a single `ensureSaved('sketch-stage', key)`.
+  ensureSaved: vi.fn(async (_domain: string, _id: string) => 'saved' as string),
+  // ⚡ M1: persist-after rebases the held baseline on a landed save (prevents release double-write).
+  rebaseBaseline: vi.fn((_key: string) => {}),
 }));
 vi.mock('@/stores/resource-lock-store', () => ({
   useResourceLockStore: { getState: () => h.lockState },
+  keyOf: (b: string, t: { step: number; resource_type: number; resource_id: string; locale: string | null }) =>
+    `${b}|${t.step}|${t.resource_type}|${t.resource_id}|${t.locale ?? ''}`,
 }));
 vi.mock('./collab-sketch-stage-save-helper', () => ({
   flushSketchStageUnderLock: h.flushStage,
+  resolveSketchStageLockTarget: (key: string) => ({
+    step: 1,
+    resource_type: 5,
+    resource_id: key,
+    locale: null,
+  }),
+}));
+// The save engine is imported dynamically by the slice; mock its ensureSaved + rebaseBaseline.
+vi.mock('@/stores/save-session-store', () => ({
+  useSaveSessionStore: { getState: () => ({ ensureSaved: h.ensureSaved, rebaseBaseline: h.rebaseBaseline }) },
 }));
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -150,6 +166,11 @@ const stageOf = (store: ReturnType<typeof createTestStore>['store']): SketchStag
 const stormOf = (store: ReturnType<typeof createTestStore>['store']) =>
   stageOf(store).variants.find((v) => v.key === 'storm')!;
 
+// Warm the (mocked) save-session-store so the slice's first dynamic import() resolves in a microtask.
+beforeAll(async () => {
+  await import('@/stores/save-session-store');
+});
+
 describe('startStageBaseSheetGenerate (11 — STATELESS)', () => {
   let store: ReturnType<typeof createTestStore>['store'];
   let flushSnapshot: ReturnType<typeof createTestStore>['flushSnapshot'];
@@ -160,7 +181,9 @@ describe('startStageBaseSheetGenerate (11 — STATELESS)', () => {
     mockedVariantGen.mockReset();
     mockedCut.mockReset();
     h.lockState.collabPersist = false;
+    h.lockState.bookId = undefined;
     h.flushStage.mockReset().mockResolvedValue(true);
+    h.rebaseBaseline.mockReset();
     ({ store, flushSnapshot, autoSaveSnapshot } = createTestStore('snap-1', [readyStage()]));
   });
 
@@ -282,11 +305,14 @@ describe('startStageVariantSheetGenerate (12 — SNAPSHOT-READING)', () => {
     mockedVariantGen.mockReset();
     mockedCut.mockReset();
     h.lockState.collabPersist = false;
+    h.lockState.bookId = undefined;
     h.flushStage.mockReset().mockResolvedValue(true);
+    h.ensureSaved.mockReset().mockResolvedValue('saved');
+    h.rebaseBaseline.mockReset();
     ({ store, flushSnapshot } = createTestStore('snap-1', [readyStage()]));
   });
 
-  it('SOLO: flushes the snapshot BEFORE generate; payload = {snapshotId, entityKey, variantKey} only', async () => {
+  it('save-before-generate: ensureSaved runs BEFORE generate; payload = {snapshotId, entityKey, variantKey} only', async () => {
     mockedVariantGen.mockResolvedValueOnce(okVariantGen('vraw.png'));
     mockedCut.mockResolvedValueOnce(okCut(['v1.png', 'v2.png']));
 
@@ -294,8 +320,9 @@ describe('startStageVariantSheetGenerate (12 — SNAPSHOT-READING)', () => {
     await tick();
     await tick();
 
-    expect(flushSnapshot).toHaveBeenCalled();
-    expect(flushSnapshot.mock.invocationCallOrder[0]).toBeLessThan(mockedVariantGen.mock.invocationCallOrder[0]);
+    // ⚡ phase-2: the solo/collab flush fork is internal to ensureSaved (asserted in ensure-saved.test.ts).
+    expect(h.ensureSaved).toHaveBeenCalledWith('sketch-stage', 'forest');
+    expect(h.ensureSaved.mock.invocationCallOrder[0]).toBeLessThan(mockedVariantGen.mock.invocationCallOrder[0]);
     expect(mockedVariantGen.mock.calls[0][0]).toMatchObject({
       snapshotId: 'snap-1',
       entityKey: 'forest',
@@ -305,7 +332,7 @@ describe('startStageVariantSheetGenerate (12 — SNAPSHOT-READING)', () => {
     expect(mockedVariantGen.mock.calls[0][0]).toHaveProperty('saveResource');
   });
 
-  it('COLLAB: gateway whole-stage flush BEFORE generate (keeps the lock — no releaseIfAcquired)', async () => {
+  it('COLLAB: ensureSaved runs BEFORE generate; persist-after keeps the lock (releaseIfAcquired:true)', async () => {
     h.lockState.collabPersist = true;
     mockedVariantGen.mockResolvedValueOnce(okVariantGen('vraw.png'));
     mockedCut.mockResolvedValueOnce(okCut(['v1.png', 'v2.png']));
@@ -315,17 +342,31 @@ describe('startStageVariantSheetGenerate (12 — SNAPSHOT-READING)', () => {
     await tick();
     await tick();
 
-    expect(h.flushStage).toHaveBeenCalled();
-    // First call = flush-before (no options object → default keep-lock).
-    expect(h.flushStage.mock.calls[0][0]).toBe('forest');
-    expect(h.flushStage.mock.calls[0][2]).toBeUndefined();
-    expect(h.flushStage.mock.invocationCallOrder[0]).toBeLessThan(mockedVariantGen.mock.invocationCallOrder[0]);
+    expect(h.ensureSaved).toHaveBeenCalledWith('sketch-stage', 'forest');
+    expect(h.ensureSaved.mock.invocationCallOrder[0]).toBeLessThan(mockedVariantGen.mock.invocationCallOrder[0]);
+    // flushStage now fires ONLY for the persist-after (result landed), with releaseIfAcquired:true.
+    expect(h.flushStage).toHaveBeenCalledWith('forest', expect.any(Object), { releaseIfAcquired: true });
     expect(flushSnapshot).not.toHaveBeenCalled();
   });
 
-  it('COLLAB: flush-before FAILS (peer lock) → generate ABORTED, op kept with error', async () => {
+  it('M1: persist-after rebases the held-session baseline on a landed save (no release double-write)', async () => {
     h.lockState.collabPersist = true;
-    h.flushStage.mockResolvedValueOnce(false);
+    h.lockState.bookId = 'book1';
+    mockedVariantGen.mockResolvedValueOnce(okVariantGen('vraw.png'));
+    mockedCut.mockResolvedValueOnce(okCut(['v1.png', 'v2.png']));
+
+    store.getState().startStageVariantSheetGenerate('forest', 'storm');
+    await tick();
+    await tick();
+    await tick();
+    await tick();
+
+    expect(h.rebaseBaseline).toHaveBeenCalledWith('book1|1|5|forest|');
+  });
+
+  it('save-before FAILS (peer lock) → generate ABORTED, op kept with error', async () => {
+    h.lockState.collabPersist = true;
+    h.ensureSaved.mockResolvedValueOnce('blocked');
     mockedVariantGen.mockResolvedValue(okVariantGen('vraw.png'));
 
     store.getState().startStageVariantSheetGenerate('forest', 'storm');

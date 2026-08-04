@@ -34,8 +34,13 @@ import {
 import { callCropSheetRow } from '@/apis/sketch-variant-api';
 import type { ImageApiFailure } from '@/apis/image-api-client';
 // resource-lock-store is a leaf store (loaded before the slices); unit tests mock it.
-import { useResourceLockStore } from '@/stores/resource-lock-store';
-import { flushSketchStageUnderLock } from './collab-sketch-stage-save-helper';
+import { useResourceLockStore, keyOf } from '@/stores/resource-lock-store';
+// useSaveSessionStore is imported DYNAMICALLY at call-time — a static import would create an
+// eval-time cycle (save-session-store → snapshot-store/index → this slice).
+import {
+  flushSketchStageUnderLock,
+  resolveSketchStageLockTarget,
+} from './collab-sketch-stage-save-helper';
 import { buildImageVersionSaveResource } from '@/utils/save-resource-path';
 import { toast } from 'sonner';
 import { createLogger } from '@/utils/logger';
@@ -138,7 +143,21 @@ export const createSketchStageGenerateJobSlice: StateCreator<
    *  stage). SOLO → legacy fire-and-forget autoSaveSnapshot. */
   function persistStage(stageKey: string): void {
     if (useResourceLockStore.getState().collabPersist) {
-      void flushSketchStageUnderLock(stageKey, stageOf(stageKey) ?? null, { releaseIfAcquired: true });
+      // ⚡ Await the flush + rebase the held-session baseline ON SUCCESS (spec §4.4) so the eventual
+      // release-save doesn't double-write the just-persisted sheet (parity with image-task-slice).
+      // Fire-and-forget; rebaseBaseline no-ops if the session already released or is solo.
+      void (async () => {
+        const saved = await flushSketchStageUnderLock(stageKey, stageOf(stageKey) ?? null, {
+          releaseIfAcquired: true,
+        });
+        if (!saved) return;
+        const bookId = useResourceLockStore.getState().bookId;
+        if (!bookId) return;
+        const { useSaveSessionStore } = await import('@/stores/save-session-store');
+        useSaveSessionStore
+          .getState()
+          .rebaseBaseline(keyOf(bookId, resolveSketchStageLockTarget(stageKey)));
+      })();
     } else {
       void get().autoSaveSnapshot();
     }
@@ -271,29 +290,26 @@ export const createSketchStageGenerateJobSlice: StateCreator<
   ): Promise<void> {
     const { stageKey, variantKey } = target;
     try {
-      // ⚡⚡ FLUSH-BEFORE-GENERATE: 12 reads snapshot.sketch from the DB — land the stage node
-      // (text + the base chain just locked) first. COLLAB → gateway whole-stage flush (KEEPS the
-      // lock — the caller just adopted the stage); SOLO → awaited flushSnapshot().
-      const collab = useResourceLockStore.getState().collabPersist;
-      if (collab) {
-        const flushed = await flushSketchStageUnderLock(stageKey, stageOf(stageKey) ?? null);
-        if (opStale(target)) return;
-        if (!flushed) {
-          log.warn('runVariantGenerate', 'flush-before-generate failed — abort (stale DB / peer lock)', {
-            stageKey,
-            variantKey,
-          });
-          markOpError('Could not save before generating — the stage may be locked by another editor.');
-          return;
-        }
-      } else {
-        await get().flushSnapshot();
-        if (opStale(target)) return;
+      // ⚡⚡ SAVE-BEFORE-GENERATE (unified-item-save-spec §4.2): 12 reads snapshot.sketch from the DB
+      // — land the stage node (text + the base chain just locked) first. `ensureSaved` internalizes
+      // the solo/collab fork (was a manual `if (collab)` branch): held session → save-while-held +
+      // rebase; no session → one-shot; solo → flushSnapshot. Continue ONLY on saved|clean.
+      const { useSaveSessionStore } = await import('@/stores/save-session-store');
+      const saveOutcome = await useSaveSessionStore.getState().ensureSaved('sketch-stage', stageKey);
+      if (opStale(target)) return;
+      if (saveOutcome !== 'saved' && saveOutcome !== 'clean') {
+        log.warn('runVariantGenerate', 'save-before-generate not persisted — abort (stale DB / peer lock)', {
+          stageKey,
+          variantKey,
+          outcome: saveOutcome,
+        });
+        markOpError('Could not save before generating — the stage may be locked by another editor.');
+        return;
       }
 
       const snapshotId = get().meta.id; // brand-new book: null until the first save
       if (!snapshotId) {
-        log.warn('runVariantGenerate', 'no snapshot id — cannot generate', { stageKey, collab });
+        log.warn('runVariantGenerate', 'no snapshot id — cannot generate', { stageKey });
         markOpError(STAGE_NO_SNAPSHOT_MESSAGE);
         toast.error(STAGE_NO_SNAPSHOT_MESSAGE);
         return; // don't call the endpoint (it would 404 SNAPSHOT_NOT_FOUND)

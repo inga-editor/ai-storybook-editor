@@ -39,6 +39,7 @@ import {
   useImageTasksForChild,
 } from '@/stores/snapshot-store/selectors';
 import { useReferenceImagePicker } from '@/features/editor/hooks/use-reference-image-picker';
+import { ensureEntitySavedBeforeGenerate } from '@/features/editor/hooks/ensure-entity-saved-before-generate';
 import type { CharacterAppearance, CharacterVariant } from '@/types/character-types';
 import { useCurrentBook } from '@/stores/book-store';
 import { uploadImageToStorage } from '@/apis/storage-api';
@@ -198,7 +199,7 @@ export function VariantItem({ characterKey, variantData, isExpanded, onToggle, e
   // Collab: also disabled unless this editor holds the entity lock (`editable`).
   const isGenerateDisabled = !editable || isProcessing || !visualDescription.trim() || !artStyleId || (!isBase && !baseVariantImageUrl);
 
-  const handleGenerate = () => {
+  const handleGenerate = async () => {
     if (!editable) return; // collab gate
     const trimmedPrompt = visualDescription.trim();
     if (!trimmedPrompt || isProcessing) return;
@@ -210,6 +211,10 @@ export function VariantItem({ characterKey, variantData, isExpanded, onToggle, e
     }
     log.info('handleGenerate', 'start', { characterKey, variantKey: variantData.key, isBase });
     updateCharacterVariant(characterKey, variantData.key, { visual_description: trimmedPrompt });
+
+    // GATE (spec §4.2): persist the entity BEFORE generate so the BE save_resource directive can
+    // anchor the result. Aborts (with a toast) on a peer lock / save failure — never burns an AI call.
+    if (!(await ensureEntitySavedBeforeGenerate('character', characterKey))) return;
 
     const referenceImages = generateRefs.images.length > 0
       ? generateRefs.images.map(({ base64Data, mimeType }) => ({ base64Data, mimeType }))

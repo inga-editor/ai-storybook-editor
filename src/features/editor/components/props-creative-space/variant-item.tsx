@@ -40,6 +40,7 @@ import { Label } from "@/components/ui/label";
 import { useSnapshotActions, usePropByKey, useImageTasksForChild } from "@/stores/snapshot-store";
 import { useAssetCategories } from "@/stores/asset-category-store";
 import { useReferenceImagePicker } from "@/features/editor/hooks/use-reference-image-picker";
+import { ensureEntitySavedBeforeGenerate } from "@/features/editor/hooks/ensure-entity-saved-before-generate";
 import { useCurrentBook } from '@/stores/book-store';
 import type { PropVariant } from "@/types/prop-types";
 import { uploadImageToStorage } from "@/apis/storage-api";
@@ -171,7 +172,7 @@ export function VariantItem({
   // Non-base states cannot generate without base illustration; all states need a book art style.
   const isGenerateDisabled = !editable || isProcessing || !visualDescription.trim() || !artStyleId || (!isBase && !basePropImageUrl);
 
-  const handleGenerate = () => {
+  const handleGenerate = async () => {
     if (!editable) return; // collab gate
     const trimmedPrompt = visualDescription.trim();
     if (!trimmedPrompt || isProcessing) return;
@@ -188,6 +189,10 @@ export function VariantItem({
     updatePropVariant(propKey, variantData.key, {
       visual_description: trimmedPrompt,
     });
+
+    // GATE (spec §4.2): persist the entity BEFORE generate so the BE save_resource directive can
+    // anchor the result. Aborts (with a toast) on a peer lock / save failure — never burns an AI call.
+    if (!(await ensureEntitySavedBeforeGenerate('prop', propKey))) return;
 
     const referenceImages =
       generateRefs.images.length > 0

@@ -81,6 +81,7 @@ import { useArtStyleDescription } from "@/stores/art-style-store";
 import { getTextboxContentForLanguage } from "@/features/editor/utils/textbox-helpers";
 import { useLanguageCode } from "@/stores/editor-settings-store";
 import { useBookTemplateLayout, useCurrentBook, useBookActions } from "@/stores/book-store";
+import { useSaveSessionStore, type SaveOutcome } from "@/stores/save-session-store";
 import { useCanvasWidth, useCanvasHeight } from "@/stores/editor-settings-store";
 import { useInteractionLayerContext } from "@/features/editor/contexts/interaction-layer-provider";
 import { COLUMNS, DEFAULT_AUDIO_TITLES } from "@/constants/spread-constants";
@@ -697,11 +698,13 @@ export function ObjectsMainView({
    *  before a generate POST so the BE `saveResource` anchor (`find:value=…`) already exists; a
    *  rejection aborts the run, so a failed persist never burns an AI call (README §4.4). This is
    *  the one deliberate exception to "slot writes ride the normal release/saveNow flush". */
-  const handleParametricCommitSave = useCallback(async () => {
-    if (!onCommitSave) throw new Error("PARAMETRIC_NO_COMMIT_SAVE");
-    const ok = await onCommitSave();
-    if (!ok) throw new Error("PARAMETRIC_COMMIT_SAVE_REJECTED");
-  }, [onCommitSave]);
+  const handleParametricCommitSave = useCallback((): Promise<SaveOutcome> => {
+    // Tri-state persist of the held retouch spread (unified-item-save-spec §4.2). `ensureSaved`
+    // reuses the held retouch session (save-while-held + rebase — no extra lock churn) and reports
+    // saved|clean|blocked|failed, so the modal can distinguish a peer lock from a transient failure
+    // (the old boolean `onCommitSave` conflated them). Reachable only with a selected spread.
+    return useSaveSessionStore.getState().ensureSaved("retouch-spread", selectedSpreadId);
+  }, [selectedSpreadId]);
 
   // Thin wrapper — the path grammar itself lives in `parametric-slot-utils` (pure + unit-tested;
   // it is COLUMN-RELATIVE by contract and percent-encodes the value). Only reachable while the

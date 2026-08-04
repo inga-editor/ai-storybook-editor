@@ -27,6 +27,7 @@ import { useSnapshotStore } from '@/stores/snapshot-store';
 import { useEditSessionStatusStore } from '@/stores/edit-session-status-store';
 import { beginHistory, endHistory } from './history-bridge';
 import { SAVE_POLICIES, projectNode } from './save-policies';
+import { ensureSweepRunning, maybeStopSweep } from './idle-sweep';
 import type { BeginOptions, SaveDomain, SaveOutcome, SessionEntry } from './types';
 
 const log = createLogger('Store', 'SaveSessionStore');
@@ -135,6 +136,8 @@ export const useSaveSessionStore = create<SaveSessionState>()((set, get) => {
     patchEntry(key, { status: 'lost' });
     entry.onLost?.(entry.baseline);
     endHistory(entry.domain, entry.target);
+    // A lost session is no longer savable; stop the sweep if it was the only one left.
+    maybeStopSweep(get);
   };
 
   return {
@@ -198,6 +201,8 @@ export const useSaveSessionStore = create<SaveSessionState>()((set, get) => {
         if (manage) useEditSessionStatusStore.getState().beginHold();
         // Undo nexus: beginSession shares this exact baseline clone.
         beginHistory(domain, target, base);
+        // Idle auto-save (phase 2): the single sweep interval starts on the first held session.
+        ensureSweepRunning(get);
         log.info('begin', 'held', { key });
         return 'held';
       } catch (err) {
@@ -218,6 +223,7 @@ export const useSaveSessionStore = create<SaveSessionState>()((set, get) => {
         // here (lost already ran endHold + endHistory; acquiring/blocked never held). Cleanup only.
         rl.unregisterOnLost(key);
         dropEntry(key);
+        maybeStopSweep(get);
         log.debug('end', 'no held lock — cleanup only', { key, status: entry.status });
         return;
       }
@@ -248,6 +254,8 @@ export const useSaveSessionStore = create<SaveSessionState>()((set, get) => {
       rl.unregisterOnLost(key);
       endHistory(entry.domain, entry.target);
       dropEntry(key);
+      // Last session gone → stop the idle sweep (no per-session timer to leak).
+      maybeStopSweep(get);
     },
 
     saveNow: async (key) => {
@@ -277,21 +285,78 @@ export const useSaveSessionStore = create<SaveSessionState>()((set, get) => {
       return res.blocked ? 'blocked' : 'failed';
     },
 
+    // ensureSaved — save-before-continue (spec §4.2). MUST be awaited before any generate that reads
+    // persisted data (a client-mint node must exist in the DB before the BE `save_resource` directive
+    // can anchor it — else ANCHOR_NOT_FOUND). Caller continues ONLY on `saved`|`clean`.
+    //
+    //   held + dirty  → saveNow (save while held + rebase baseline)
+    //   held + clean  → saveNow → 'clean' (already persisted, no request)
+    //   no session    → ONE-SHOT: acquire → save → release (mirrors runLockedResourceSave). This
+    //                   branch is NOT dirty-gated — with no baseline outside a session it ALWAYS
+    //                   writes once (parity with runLockedResourceSave; the extra write is harmless).
+    //                   It creates NO SessionEntry (no lock kept afterwards, never swept).
+    //   acquire 409 / degraded save → 'blocked' (caller must NOT generate)
     ensureSaved: async (domain, id, locale) => {
       const rl = useResourceLockStore.getState();
       const bookId = rl.bookId;
-      if (!bookId) return 'clean';
-      const target = SAVE_POLICIES[domain].resolveTarget(id, locale ?? null);
+      if (!bookId) {
+        log.warn('ensureSaved', 'no book connected — skip', { domain });
+        return 'clean';
+      }
+      const policy = SAVE_POLICIES[domain];
+      const target = policy.resolveTarget(id, locale ?? null);
       const key = keyOf(bookId, target);
       const entry = get().sessions.get(key);
       if (entry && entry.status === 'held') {
         // held + dirty → saveNow; held + clean → saveNow returns 'clean' (spec §4.2).
         return get().saveNow(key);
       }
-      // NOT-held one-shot (acquire→save→release) + blocked/degraded handling are PHASE 2. Declared
-      // in the interface but intentionally a no-op 'clean' here (no phase-1 caller exercises it).
-      log.warn('ensureSaved', 'not held — one-shot deferred to phase 2 (no-op clean)', { domain });
-      return 'clean';
+
+      // ── ONE-SHOT (no live session) ──────────────────────────────────────────────────────────
+      // Solo book (no collab persist): the whole-snapshot flush is the durable write; no lock/node.
+      if (!rl.collabPersist) {
+        log.info('ensureSaved', 'one-shot solo flush', { key, domain });
+        await useSnapshotStore.getState().flushSnapshot();
+        return 'saved';
+      }
+      const rawNode = policy.getNode(id);
+      if (rawNode == null) {
+        // No local node to persist → nothing to anchor. Abort so a generate never runs against a
+        // missing node (mirrors saveNow's node-null → 'failed').
+        log.warn('ensureSaved', 'one-shot node missing — nothing to save', { key, domain });
+        return 'failed';
+      }
+      log.info('ensureSaved', 'one-shot acquire→save→release', { key, domain });
+      const acq = await rl.acquire(target);
+      if (!acq.ok) {
+        log.info('ensureSaved', 'one-shot blocked (409)', { key, hasHolder: !!acq.holder });
+        return 'blocked';
+      }
+      try {
+        const projected = projectNode(policy, rawNode);
+        const base = policy.buildPayload(projected, id);
+        // Client-mint node (never written) → 404 on EDIT; a policy with `createFallback` retries the
+        // write ONCE as a nested CREATE inside the store (see resource-lock-store.saveWithCreateFallback).
+        const payload = policy.createFallback
+          ? {
+              ...base,
+              create_fallback: {
+                parent_id: policy.createFallback.parentId(id),
+                collection: policy.createFallback.collection,
+              },
+            }
+          : base;
+        const res = await rl.save(target, payload);
+        if (res.ok) {
+          log.info('ensureSaved', 'one-shot saved', { key });
+          return 'saved';
+        }
+        log.warn('ensureSaved', 'one-shot save rejected', { key, blocked: res.blocked });
+        return res.blocked ? 'blocked' : 'failed';
+      } finally {
+        // ALWAYS release — a stranded server lock would grey the item out to its TTL for peers.
+        await rl.release(target);
+      }
     },
 
     rebaseBaseline: (key) => {
