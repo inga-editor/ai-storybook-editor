@@ -7,7 +7,7 @@
 // Collab (ADR-043 sketch-base — GRAIN B): entity TEXT is a per-entity node (step 1 / rtype 3
 // character · 4 prop), INDEPENDENT of the sheet (rtype 11) — so this modal REUSES the variant
 // helper (`resolveSketchVariantLockTarget` + `flushSketchEntityUnderLock`), NOT the base-sheet
-// helper. It holds a per-ACTIVE-TAB entity lock (`useHeldResourceSession`): acquire on open, and on
+// helper. It holds a per-ACTIVE-TAB entity lock (`useSaveSession`): acquire on open, and on
 // tab switch the hook releases the departing entity lock + acquires the new one (lock-on-switch).
 // Textareas are disabled while NOT held (acquiring / peer-blocked); a peer-held tab shows a 🔒 badge
 // + banner. Drafts are LOCAL until Save (static `initialDrafts` baseline → clean discard + no peer-
@@ -43,15 +43,14 @@ import {
   useIsLockedByOther,
   useLockHolderName,
   type LockTarget,
-  type SavePayload,
 } from '@/stores/resource-lock-store';
 import {
   resolveSketchVariantLockTarget,
-  buildSketchEntityPayload,
   flushSketchEntityUnderLock,
 } from '@/stores/snapshot-store/slices/collab-sketch-variant-save-helper';
 import { toastSketchSaveOutcome } from '@/stores/snapshot-store/slices/sketch-save-outcome-toast';
-import { useHeldResourceSession } from '@/features/editor/hooks/use-held-resource-session';
+import { useSaveSession } from '@/features/editor/hooks/use-save-session';
+import { deriveSaveTarget } from '@/stores/save-session-store';
 import { useEditSessionStatusStore } from '@/stores/edit-session-status-store';
 import { useInteractionLayer } from '@/features/editor/contexts';
 import { titleCase } from '@/features/editor/components/sketch-variants-creative-space/sketch-variants-constants';
@@ -114,21 +113,12 @@ export function EditBaseEntityModal({ kind, onClose }: EditBaseEntityModalProps)
   // ── Per-active-tab held ENTITY session (grain B, rtype 3/4) ───────────────────────────────────
   // Target = the active tab's entity; switching tabs release-then-acquires (the hook keys on the
   // STRING target). Persistence is NOT via this session's save (drafts are uncommitted until Save)
-  // — the hold is for PEER-LOCK visibility + textarea gating. A null buildPayload is not allowed, so
-  // getNode/buildPayload are wired but the release-save is a no-op (store unchanged until Save).
+  // — the hold is for PEER-LOCK visibility + textarea gating. getNode/buildPayload are policy-owned
+  // (sketch-entity); the release-save is a no-op here (store unchanged until Save commits drafts).
   const lockTarget = useMemo<LockTarget | null>(
     () => (activeKey ? resolveSketchVariantLockTarget(kind, activeKey) : null),
     [kind, activeKey],
   );
-  const getNode = useCallback(
-    () =>
-      activeKey
-        ? (sketchEntitiesOfKind(useSnapshotStore.getState().sketch, kind).find((e) => e.key === activeKey) ??
-          null)
-        : null,
-    [kind, activeKey],
-  );
-  const buildPayload = useCallback((node: unknown): SavePayload => buildSketchEntityPayload(node), []);
   const handleBlocked = useCallback((holder: string) => {
     log.info('handleBlocked', 'entity held by another editor — read-only tab', { hasHolder: !!holder });
   }, []);
@@ -137,11 +127,8 @@ export function EditBaseEntityModal({ kind, onClose }: EditBaseEntityModalProps)
     toast.warning('You lost the edit lock for this entity — your last change may not have saved.');
   }, []);
 
-  const session = useHeldResourceSession({
-    target: lockTarget,
-    getNode,
-    ownedKeys: undefined, // whole entity node
-    buildPayload,
+  const session = useSaveSession({
+    ...deriveSaveTarget(lockTarget),
     manageHeaderStatus: false, // transient modal — drives its own Saving…→Saved on Save (below)
     onBlocked: handleBlocked,
     onLost: handleLost,

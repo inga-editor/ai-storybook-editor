@@ -10,7 +10,7 @@
 // helper's `flushSketchEntityUnderLock` (rtype 3/4) — it is NOT re-implemented here.
 //
 // Two consumers:
-//   • the space held-session (`useHeldResourceSession`, step 1 / rtype 11) drives the SHEET edits
+//   • the space held-session (`useSaveSession`, step 1 / rtype 11) drives the SHEET edits
 //     (crop-edit / raw-edit / lock-style `is_selected`) — it acquires/saves/releases the whole
 //     sheet node itself, using `resolveSketchBaseSheetLockTarget` + a whole-node payload.
 //   • the generate JOB slice (off-render, cannot call the React `saveNow`) drives persist-after-

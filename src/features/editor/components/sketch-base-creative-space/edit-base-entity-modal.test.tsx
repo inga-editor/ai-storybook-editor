@@ -41,14 +41,26 @@ vi.mock('@/stores/edit-session-status-store', () => ({
 }));
 
 vi.mock('@/stores/snapshot-store/slices/collab-sketch-variant-save-helper', () => ({
-  resolveSketchVariantLockTarget: (kind: string, key: string) => ({ kind, key }),
+  // Return a REAL LockTarget shape (step/resource_type/resource_id/locale) — the modal now derives the
+  // save-session via `deriveSaveTarget(lockTarget)` in render (the old wrapper did this internally).
+  resolveSketchVariantLockTarget: (kind: string, key: string) => ({
+    step: 1,
+    resource_type: kind === 'props' ? 4 : 3,
+    resource_id: key,
+    locale: null,
+  }),
   buildSketchEntityPayload: (node: unknown) => node,
   flushSketchEntityUnderLock: vi.fn(),
 }));
 
-// Held session: the tab is MINE → fields editable (the drafts are what the gate reads).
-vi.mock('@/features/editor/hooks/use-held-resource-session', () => ({
-  useHeldResourceSession: () => ({ status: 'held', saveNow: vi.fn() }),
+// Save session: the tab is MINE → fields editable (the drafts are what the gate reads).
+vi.mock('@/features/editor/hooks/use-save-session', () => ({
+  useSaveSession: () => ({
+    status: 'held',
+    saveNow: vi.fn(),
+    ensureSaved: vi.fn(),
+    commitOnModalClose: vi.fn(),
+  }),
 }));
 
 vi.mock('@/features/editor/contexts', () => ({ useInteractionLayer: () => {} }));

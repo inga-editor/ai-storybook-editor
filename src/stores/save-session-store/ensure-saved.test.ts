@@ -27,7 +27,7 @@ const h = vi.hoisted(() => {
     props: [] as unknown[],
     stages: [] as unknown[],
     illustration: { spreads: [] as unknown[] },
-    sketch: { characters: [], props: [], stages: [], base: {}, lineups: [] },
+    sketch: { characters: [], props: [], stages: [], base: {}, lineups: [], spreads: [] },
     flushSnapshot: vi.fn(async () => {}),
   };
   const ess = { beginHold: vi.fn(), endHold: vi.fn(), markSaving: vi.fn(), markSaved: vi.fn() };

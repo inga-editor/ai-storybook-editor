@@ -12,10 +12,10 @@ import { createLogger } from "@/utils/logger";
 import { useCurrentBookId } from "@/stores/book-store";
 import { useCollabPersistSession } from "@/features/editor/hooks/use-collab-persist-session";
 import { useContentSyncSession } from "@/features/editor/hooks/use-content-sync-session";
-import { useHeldResourceSession } from "@/features/editor/hooks/use-held-resource-session";
+import { useSaveSession } from "@/features/editor/hooks/use-save-session";
+import { deriveSaveTarget } from "@/stores/save-session-store";
 import { useRegisterEditCommit } from "@/stores/edit-session-status-store";
-import { SCENE_OWNED_KEYS } from "@/stores/snapshot-store/slices/collab-owned-subtree";
-import type { LockTarget, SavePayload } from "@/stores/resource-lock-store";
+import type { LockTarget } from "@/stores/resource-lock-store";
 import { useSpaceViewState, useEffectiveSpreadId } from "@/features/editor/hooks/use-space-view-state";
 import { ZOOM, COLUMNS } from "@/constants/spread-constants";
 import type { ViewMode } from "@/types/canvas-types";
@@ -67,21 +67,11 @@ export function SpreadsCreativeSpace() {
 
   // Live (non-reactive) read of the locked spread node — baseline + dirty-diff source. Reads
   // getState() by the closure `lockedSpreadId` so a switch's release-cleanup still sees the OLD id.
-  const getSceneNode = useCallback(
-    () =>
-      lockedSpreadId
-        ? useSnapshotStore.getState().illustration.spreads.find((s) => s.id === lockedSpreadId) ?? null
-        : null,
-    [lockedSpreadId],
-  );
+  // getNode + owned-subtree projection + buildPayload now live in the `scene-spread` policy
+  // (save-policies, SCENE_OWNED_KEYS) — the engine reads the live spread node and builds the payload.
 
   // Owned sub-tree → gateway save payload (backend contract: action_type 3 edit, patch = SCENE
   // owned-key sub-object, log:true). step/rtype/id/locale come from the LockTarget.
-  const buildScenePayload = useCallback(
-    (subtree: unknown): SavePayload => ({ action_type: 3, patch: subtree, log: true }),
-    [],
-  );
-
   // 409 on acquire → another editor holds this spread's scene sub-tree. Toast + drop the click
   // (target → null → idle) so a re-click can retry.
   const handleSceneLockBlocked = useCallback(
@@ -114,14 +104,11 @@ export function SpreadsCreativeSpace() {
   // ── Undo/redo nexus (ADR-045) — the engine now bridges begin/endSession itself (illustration-scene
   // grain, sharing the held baseline clone) on acquire/release/switch/unmount/LOST; no space wiring.
   const { status: sceneLockStatus, commitOnModalClose: sceneCommitOnModalClose } =
-    useHeldResourceSession({
-    target: sceneLockTarget,
-    getNode: getSceneNode,
-    ownedKeys: SCENE_OWNED_KEYS,
-    buildPayload: buildScenePayload,
-    onBlocked: handleSceneLockBlocked,
-    onLost: handleSceneLockLost,
-  });
+    useSaveSession({
+      ...deriveSaveTarget(sceneLockTarget),
+      onBlocked: handleSceneLockBlocked,
+      onLost: handleSceneLockLost,
+    });
 
   // The active spread is editable only while THIS editor holds its SCENE lock (grey-out otherwise).
   const spreadEditable = sceneLockStatus === "held" && lockedSpreadId === effectiveSpreadId;

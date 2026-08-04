@@ -14,18 +14,17 @@ import { toast } from 'sonner';
 import { CharactersSidebar } from './characters-sidebar';
 import { CharactersContentArea, type CharacterContentTab } from './characters-content-area';
 import { useCharacterKeys, useSnapshotActions } from '@/stores/snapshot-store/selectors';
-import { useSnapshotStore } from '@/stores/snapshot-store';
 import { createLogger } from '@/utils/logger';
 import { useCurrentBookId } from '@/stores/book-store';
 import { useCollabPersistSession } from '@/features/editor/hooks/use-collab-persist-session';
 import { useContentSyncSession } from '@/features/editor/hooks/use-content-sync-session';
-import { useHeldResourceSession } from '@/features/editor/hooks/use-held-resource-session';
+import { useSaveSession } from '@/features/editor/hooks/use-save-session';
+import { deriveSaveTarget } from '@/stores/save-session-store';
 import { useRegisterEditCommit } from '@/stores/edit-session-status-store';
 import {
   useIsLockedByOther,
   useLockHolderName,
   type LockTarget,
-  type SavePayload,
 } from '@/stores/resource-lock-store';
 import { LockedByOtherOverlay } from '@/features/editor/components/shared-components/sketch-locked-by-other-overlay';
 
@@ -61,18 +60,8 @@ export function CharactersCreativeSpace() {
     [lockedKey],
   );
 
-  // Live (non-reactive) read of the locked character node — baseline + dirty-diff source. Reads
-  // getState() by the closure `lockedKey` so a switch's release-cleanup still sees the OLD key.
-  const getNode = useCallback(
-    () => (lockedKey ? useSnapshotStore.getState().characters.find((c) => c.key === lockedKey) ?? null : null),
-    [lockedKey],
-  );
-
-  // Whole entity node → gateway save payload (backend contract: action_type 3, patch = whole node).
-  const buildPayload = useCallback(
-    (node: unknown): SavePayload => ({ action_type: 3, patch: node, log: true }),
-    [],
-  );
+  // getNode + buildPayload now live in the `illustration-entity` policy (save-policies) — the engine
+  // reads the live node + builds the whole-node edit payload from the derived id.
 
   // 409 on acquire → another editor holds this character. Toast + drop the click (idle) so a re-click
   // can retry. `useContentSyncSession` will still reflect their edits.
@@ -98,11 +87,8 @@ export function CharactersCreativeSpace() {
 
   // ── Undo/redo nexus (ADR-045) — the engine now bridges begin/endSession itself (per-entity
   // WHOLE-node history, sharing the held baseline clone); the space no longer wires it.
-  const { status: lockStatus } = useHeldResourceSession({
-    target: lockTarget,
-    getNode,
-    ownedKeys: undefined, // entity = per-entity grain → baseline/dirty/save on the WHOLE node
-    buildPayload,
+  const { status: lockStatus } = useSaveSession({
+    ...deriveSaveTarget(lockTarget),
     onBlocked: handleLockBlocked,
     onLost: handleLockLost,
   });

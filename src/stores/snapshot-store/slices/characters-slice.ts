@@ -4,7 +4,7 @@ import { createLogger } from '@/utils/logger';
 import { cascadeRemixName, cascadeRemixDelete } from '../utils/remix-name-resync';
 import { cascadeCastingDelete } from '../utils/casting-slot-resync';
 // ADR-044 §Revision 2026-07-10 (per-entity HELD session): entity EDIT no longer fire-and-forgets —
-// it mutates + dirties only, and the entity held session (`useHeldResourceSession` mounted per
+// it mutates + dirties only, and the entity held session (`useSaveSession` mounted per
 // entity space) saves the WHOLE entity node on lock release. CREATE + DELETE, however, are
 // COLLECTION-level ops on the parent column (add/remove the node) that a node-scoped release-save
 // CANNOT express — a released deleted node has no node to save (would 400) and a freshly-created

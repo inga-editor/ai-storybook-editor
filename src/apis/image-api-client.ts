@@ -70,7 +70,8 @@ async function getAuthHeader(): Promise<string | undefined> {
  */
 export async function callImageApi<R extends { success: boolean; error?: string }>(
   path: string,
-  body: object
+  body: object,
+  opts?: { keepalive?: boolean }
 ): Promise<R | ImageApiFailure> {
   const url = `${imageApiBaseUrl}${path}`;
   const payload = body as Record<string, unknown>;
@@ -80,10 +81,15 @@ export async function callImageApi<R extends { success: boolean; error?: string 
   const headers = await buildHeaders(true);
 
   try {
+    // `keepalive` (flush-on-hidden): lets the POST outlive the page unload so a held+dirty item is
+    // still persisted when the tab is hidden/closed. The browser caps a keepalive body at 64KB —
+    // callers measure the body and pass `keepalive:false` when it would exceed that (still a normal
+    // fetch, best-effort). Omitted for every other call (identical behavior to before).
     const response = await fetch(url, {
       method: 'POST',
       headers,
       body: JSON.stringify(body),
+      ...(opts?.keepalive ? { keepalive: true } : {}),
     });
 
     if (!response.ok) {

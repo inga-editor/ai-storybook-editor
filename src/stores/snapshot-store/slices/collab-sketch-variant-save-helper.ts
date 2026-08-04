@@ -6,7 +6,7 @@
 //
 // Three consumers (⚡ updated 2026-07-16 — the space moved from eager-atomic per-gesture to
 // BATCH-AT-RELEASE, ADR-043 Rev):
-//   • the component held-session (`useHeldResourceSession`) is now the PRIMARY path: the cheap
+//   • the component held-session (`useSaveSession`) is now the PRIMARY path: the cheap
 //     edits (text / edit-crop) only mutate the store under the hold, and the session
 //     acquires/saves/releases the whole node ONCE at release — using `resolveSketchVariantLockTarget`
 //     for the target + a whole-node payload (`buildSketchEntityPayload`).

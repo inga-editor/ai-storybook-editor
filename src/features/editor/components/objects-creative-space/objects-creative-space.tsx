@@ -14,15 +14,14 @@ import {
   useRetouchAnimations,
   useSnapshotActions,
 } from "@/stores/snapshot-store/selectors";
-import { useSnapshotStore } from "@/stores/snapshot-store";
 import { createLogger } from "@/utils/logger";
 import { useCurrentBookId } from "@/stores/book-store";
 import { useCollabPersistSession } from "@/features/editor/hooks/use-collab-persist-session";
 import { useContentSyncSession } from "@/features/editor/hooks/use-content-sync-session";
-import { useHeldResourceSession } from "@/features/editor/hooks/use-held-resource-session";
+import { useSaveSession } from "@/features/editor/hooks/use-save-session";
+import { deriveSaveTarget } from "@/stores/save-session-store";
 import { useRegisterEditCommit } from "@/stores/edit-session-status-store";
-import { RETOUCH_OWNED_KEYS } from "@/stores/snapshot-store/slices/collab-owned-subtree";
-import type { LockTarget, SavePayload } from "@/stores/resource-lock-store";
+import type { LockTarget } from "@/stores/resource-lock-store";
 import { toastLockRequired } from "@/utils/collab-save-toasts";
 import {
   useSpaceViewState,
@@ -127,21 +126,11 @@ export function ObjectsCreativeSpace() {
 
   // Live (non-reactive) read of the locked spread node — baseline + dirty-diff source. Reads
   // getState() by the closure `lockedSpreadId` so a switch's release-cleanup still sees the OLD id.
-  const getRetouchNode = useCallback(
-    () =>
-      lockedSpreadId
-        ? useSnapshotStore.getState().illustration.spreads.find((s) => s.id === lockedSpreadId) ?? null
-        : null,
-    [lockedSpreadId],
-  );
+  // getNode + owned-subtree projection + buildPayload now live in the `retouch-spread` policy
+  // (save-policies, RETOUCH_OWNED_KEYS) — the engine reads the live spread node and builds the payload.
 
   // Owned sub-tree → gateway save payload (backend contract: action_type 3 edit, patch = retouch
   // owned-key sub-object, log:true). step/rtype/id/locale come from the LockTarget.
-  const buildRetouchPayload = useCallback(
-    (subtree: unknown): SavePayload => ({ action_type: 3, patch: subtree, log: true }),
-    [],
-  );
-
   // 409 on acquire → another editor holds this spread's objects. Toast + drop the click (target →
   // null → idle) so a re-click can retry.
   const handleRetouchLockBlocked = useCallback(
@@ -176,14 +165,11 @@ export function ObjectsCreativeSpace() {
   // ── Undo/redo nexus (ADR-045) — the engine now bridges begin/endSession itself (retouch grain,
   // sharing the held baseline clone) on acquire/release/switch/LOST; no space wiring.
   const { status: retouchLockStatus, commitOnModalClose: retouchCommitOnModalClose } =
-    useHeldResourceSession({
-    target: retouchLockTarget,
-    getNode: getRetouchNode,
-    ownedKeys: RETOUCH_OWNED_KEYS,
-    buildPayload: buildRetouchPayload,
-    onBlocked: handleRetouchLockBlocked,
-    onLost: handleRetouchLockLost,
-  });
+    useSaveSession({
+      ...deriveSaveTarget(retouchLockTarget),
+      onBlocked: handleRetouchLockBlocked,
+      onLost: handleRetouchLockLost,
+    });
 
   // The active spread is editable only while THIS editor holds its retouch lock (grey-out otherwise).
   const spreadEditable = retouchLockStatus === "held" && lockedSpreadId === selectedSpreadId;

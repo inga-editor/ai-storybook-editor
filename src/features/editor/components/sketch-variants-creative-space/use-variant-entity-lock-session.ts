@@ -3,7 +3,7 @@
 // module): the root keeps UI state (selection / tabs / zoom / overlays), this hook keeps the collab
 // lock lifecycle.
 //
-// Grain: the WHOLE sketch ENTITY node at step 1 (rtype 3 character / 4 prop) — `useHeldResourceSession`
+// Grain: the WHOLE sketch ENTITY node at step 1 (rtype 3 character / 4 prop) — `useSaveSession`
 // with `ownedKeys: undefined`.
 //
 // LOCK-ON-INTERACT (browse ≠ lock): `activeLockEntity` starts null and is set ONLY by `adopt()` from
@@ -26,18 +26,16 @@
 
 import { useCallback, useMemo, useState } from 'react';
 import { toast } from 'sonner';
-import { useSnapshotStore } from '@/stores/snapshot-store';
-import { type LockTarget, type SavePayload } from '@/stores/resource-lock-store';
+import { type LockTarget } from '@/stores/resource-lock-store';
 import {
   resolveSketchVariantLockTarget,
-  buildSketchEntityPayload,
   flushSketchEntityUnderLock,
 } from '@/stores/snapshot-store/slices/collab-sketch-variant-save-helper';
 import { toastSketchSaveOutcome } from '@/stores/snapshot-store/slices/sketch-save-outcome-toast';
 import { useRegisterEditCommit } from '@/stores/edit-session-status-store';
-import { useHeldResourceSession } from '@/features/editor/hooks/use-held-resource-session';
+import { useSaveSession } from '@/features/editor/hooks/use-save-session';
+import { deriveSaveTarget } from '@/stores/save-session-store';
 import type { BaseKind } from '@/types/sketch';
-import { sketchEntitiesOfKind } from '@/types/sketch';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('Editor', 'useVariantEntityLockSession');
@@ -77,20 +75,7 @@ export function useVariantEntityLockSession(): UseVariantEntityLockSessionResult
     [activeLockEntity],
   );
 
-  // Live (non-reactive) read of the WHOLE locked entity node — baseline + dirty-diff source. Reads
-  // getState() through the closure so a switch's release-cleanup still sees the OLD entity (React
-  // runs all effect destroys before any creates, and the cbRef that latches these args is written in
-  // an earlier-declared effect → the cleanup observes the PREVIOUS render's getNode).
-  const getNode = useCallback(
-    () =>
-      activeLockEntity
-        ? sketchEntitiesOfKind(useSnapshotStore.getState().sketch, activeLockEntity.kind).find(
-            (e) => e.key === activeLockEntity.entityKey,
-          ) ?? null
-        : null,
-    [activeLockEntity],
-  );
-  const buildPayload = useCallback((node: unknown): SavePayload => buildSketchEntityPayload(node), []);
+  // getNode (WHOLE entity node) + buildPayload now live in the `sketch-entity` policy (save-policies).
 
   // 409 on acquire → another editor holds this entity. Toast + drop the interaction (idle).
   const handleLockBlocked = useCallback((holder: string) => {
@@ -106,11 +91,8 @@ export function useVariantEntityLockSession(): UseVariantEntityLockSessionResult
     toast.warning('You lost the edit lock for this entity — a later change may not have saved.');
   }, []);
 
-  useHeldResourceSession({
-    target,
-    getNode,
-    ownedKeys: undefined, // entity = per-entity grain → baseline/dirty on the WHOLE node
-    buildPayload,
+  useSaveSession({
+    ...deriveSaveTarget(target),
     onBlocked: handleLockBlocked,
     onLost: handleLockLost,
   });

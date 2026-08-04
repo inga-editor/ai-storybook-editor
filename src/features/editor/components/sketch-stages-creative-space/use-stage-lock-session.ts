@@ -27,16 +27,15 @@
 
 import { useCallback, useMemo, useState } from 'react';
 import { toast } from 'sonner';
-import { useSnapshotStore } from '@/stores/snapshot-store';
-import { type LockTarget, type SavePayload, type SessionStatus } from '@/stores/resource-lock-store';
+import { type LockTarget, type SessionStatus } from '@/stores/resource-lock-store';
 import {
   resolveSketchStageLockTarget,
-  buildSketchStagePayload,
   flushSketchStageUnderLock,
 } from '@/stores/snapshot-store/slices/collab-sketch-stage-save-helper';
 import { toastSketchSaveOutcome } from '@/stores/snapshot-store/slices/sketch-save-outcome-toast';
 import { useRegisterEditCommit } from '@/stores/edit-session-status-store';
-import { useHeldResourceSession } from '@/features/editor/hooks/use-held-resource-session';
+import { useSaveSession } from '@/features/editor/hooks/use-save-session';
+import { deriveSaveTarget } from '@/stores/save-session-store';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('Editor', 'useStageLockSession');
@@ -69,17 +68,7 @@ export function useStageLockSession(): UseStageLockSessionResult {
     [lockedStageKey],
   );
 
-  // Live (non-reactive) read of the WHOLE locked stage node — baseline + dirty-diff source. Reads
-  // getState() through the closure so a switch's release-cleanup still sees the OLD stage (effect
-  // destroys run before creates; the engine's cbRef latched the previous render's getNode).
-  const getNode = useCallback(
-    () =>
-      lockedStageKey
-        ? useSnapshotStore.getState().sketch.stages.find((s) => s.key === lockedStageKey) ?? null
-        : null,
-    [lockedStageKey],
-  );
-  const buildPayload = useCallback((node: unknown): SavePayload => buildSketchStagePayload(node), []);
+  // getNode (WHOLE stage node) + buildPayload now live in the `sketch-stage` policy (save-policies).
 
   // 409 on acquire → another editor holds this stage. Toast + drop the interaction (idle).
   const handleLockBlocked = useCallback((holder: string) => {
@@ -95,14 +84,17 @@ export function useStageLockSession(): UseStageLockSessionResult {
     toast.warning('You lost the edit lock for this stage — a later change may not have saved.');
   }, []);
 
-  const { status, saveNow } = useHeldResourceSession({
-    target,
-    getNode,
-    ownedKeys: undefined, // whole stage node (base.styles[] + variants[] together)
-    buildPayload,
+  const { status, saveNow: saveNowOutcome } = useSaveSession({
+    ...deriveSaveTarget(target),
     onBlocked: handleLockBlocked,
     onLost: handleLockLost,
   });
+  // Preserve the public boolean saveNow contract (saved|clean → true, else false) over the engine's
+  // tri-state outcome — the same adaptation the deleted wrapper did.
+  const saveNow = useCallback(async (): Promise<boolean> => {
+    const outcome = await saveNowOutcome();
+    return outcome === 'saved' || outcome === 'clean';
+  }, [saveNowOutcome]);
 
   // Header "Unsaved" → commit now: null the held target so the session cleanup release-saves the
   // stage (Saving…→Saved) and unlocks it. The stage stays DISPLAYED (browse ≠ lock); the next

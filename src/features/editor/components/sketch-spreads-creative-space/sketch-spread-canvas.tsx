@@ -48,13 +48,16 @@ import {
 } from '@/types/sketch';
 import type { SketchTextbox, SketchTextboxContent, SketchSpreadImage } from '@/types/sketch';
 import { useSnapshotStore } from '@/stores/snapshot-store';
-import { useResourceLockSession } from '@/features/editor/hooks/use-resource-lock-session';
+import { useSaveSession } from '@/features/editor/hooks/use-save-session';
+import {
+  makeSketchImageId,
+  makeSketchTextboxId,
+} from '@/stores/save-session-store/sketch-spread-item-id';
+import type { SaveDomain } from '@/stores/save-session-store';
 import { useRegisterEditCommit } from '@/stores/edit-session-status-store';
 import {
   useResourceLockStore,
   FALLBACK_HOLDER_NAME,
-  type LockTarget,
-  type SavePayload,
 } from '@/stores/resource-lock-store';
 import type {
   BaseSpread,
@@ -313,73 +316,20 @@ export function SketchSpreadCanvas({ spreadId }: SketchSpreadCanvasProps) {
   );
 
   // ── Collaborator edit-lock lifecycle ─────────────────────────────────────────
-  // The current selection (image XOR textbox) IS the lock target: selecting acquires, deselecting
-  // release-and-saves-if-dirty (design §18). Edits stay LOCAL until release (collabPersist).
-  const lockTarget: LockTarget | null = useMemo(() => {
-    // selectedImageId holds SketchSpreadImage.id → it IS the lock resource_id (type 1) directly.
-    if (selectedImageId) {
-      return { step: 1, resource_type: 1, resource_id: selectedImageId, locale: null };
-    }
-    if (selectedTextboxId) {
-      return { step: 1, resource_type: 2, resource_id: selectedTextboxId, locale: langCode };
-    }
-    return null;
-  }, [selectedImageId, selectedTextboxId, langCode]);
-
-  // Live snapshot node for the selected target (plain JSON — no Maps/Dates). Read the store each
-  // call so an Edit/Extract version-append is reflected in the release-time dirty diff.
-  const getLockNode = useCallback((): unknown => {
-    const spr = useSnapshotStore.getState().sketch.spreads.find((sp) => sp.id === spreadId);
-    if (!spr) return null;
-    if (selectedImageId) {
-      return spr.images.find((im) => im.id === selectedImageId) ?? null;
-    }
-    if (selectedTextboxId) {
-      const tb = spr.textboxes.find((t) => t.id === selectedTextboxId);
-      return tb ? getSketchTextboxContent(tb, langCode) ?? null : null;
-    }
-    return null;
-  }, [spreadId, selectedImageId, selectedTextboxId, langCode]);
-
-  // Node → gateway save payload (audit map, design §6). action_type 3 = edit.
-  const buildLockPayload = useCallback(
-    (node: unknown): SavePayload => {
-      const idx = spreadIds.indexOf(spreadId);
-      const spread_number = idx >= 0 ? idx + 1 : 1; // 1-based doc-order spread position
-      if (selectedImageId) {
-        // page ∈ left|right|full — taken from the (post-prepend) image node's own type.
-        const img = node as SketchSpreadImage | null;
-        return {
-          action_type: 3,
-          patch: node,
-          target_ref: { spread_number, page: img?.type },
-          // The page-image node is minted CLIENT-SIDE by the generate job
-          // (addSketchSpreadImageVersion → crypto.randomUUID), so on a book written before the
-          // create-grain fix it may not exist in the DB yet → this edit would 404 and the Edit /
-          // Extract version would be silently lost. `create_fallback` makes the store retry the
-          // write ONCE as a nested CREATE under the spread's `images[]` (no CREATE-first branch
-          // here: after a generate the node already exists — YAGNI).
-          // TRADE-OFF (accepted, not yet narrowed): the retry fires on ANY 404, and "never
-          // written" is not the only 404 cause — a peer DELETING this page image mid-selection
-          // 404s the same way, so the fallback would re-create it and undo their delete. The
-          // generate job avoids this by gating on `isNew` (session-minted ids); the canvas has no
-          // equivalent signal today. Deemed acceptable because the delete must land inside this
-          // user's held image lock window, but see the follow-up note in the phase report.
-          // GUARDED on a non-null node: getLockNode() returns null when the image was deleted /
-          // the spread went away mid-session, and a null patch must NEVER be appended into
-          // `images[]` as a brand-new node (an unaddressable null element). Without the fallback
-          // such a save just 404s and is dropped — the correct outcome.
-          ...(img ? { create_fallback: { parent_id: spreadId, collection: 'images' } } : {}),
-        };
-      }
-      return {
-        action_type: 3,
-        patch: node,
-        target_ref: { spread_number, textbox_id: selectedTextboxId, locale: langCode },
-      };
-    },
-    [spreadIds, spreadId, selectedImageId, selectedTextboxId, langCode],
-  );
+  // The current selection (image XOR textbox) IS the save-session target: selecting acquires,
+  // deselecting release-and-saves-if-dirty (design §18). Edits stay LOCAL until release
+  // (collabPersist). getNode + buildPayload (audit map / create-fallback for a client-minted page
+  // image) now live in the policy registry (save-policies `sketch-image` / `sketch-textbox`); the
+  // canvas only threads the COMPOSITE id the policy needs (parent spread, + locale for the textbox).
+  const sessionDomain: SaveDomain = selectedImageId ? 'sketch-image' : 'sketch-textbox';
+  const sessionId = selectedImageId
+    ? makeSketchImageId(spreadId, selectedImageId)
+    : selectedTextboxId
+      ? makeSketchTextboxId(spreadId, selectedTextboxId, langCode)
+      : null; // nothing selected → no session (idle)
+  // image = language-agnostic (locale null); textbox = per-language (locale = current langCode). The
+  // locale lives in the lock target so switching header language while holding a textbox re-keys.
+  const sessionLocale = selectedImageId ? null : langCode;
 
   // 409 on acquire → another editor holds it. Revert the optimistic selection + toast. `holder` is
   // a user id (MAY be '') — resolve its cached name best-effort, else the generic fallback.
@@ -428,21 +378,32 @@ export function SketchSpreadCanvas({ spreadId }: SketchSpreadCanvasProps) {
     [selectedImageId, selectedTextboxId, spreadId, langCode, setSketchSpreads, updateSketchTextbox, deselect],
   );
 
-  // Single session for the ONE selected resource (image XOR textbox). langCode lives in the target,
-  // so switching header language while holding a textbox auto re-keys (release old locale
-  // dirty-checked → acquire new).
-  useResourceLockSession({
-    target: lockTarget,
-    getNode: getLockNode,
-    buildPayload: buildLockPayload,
+  // Single session for the ONE selected resource (image XOR textbox). `sessionLocale` lives in the
+  // target, so switching header language while holding a textbox auto re-keys (release old locale
+  // dirty-checked → acquire new). getNode/buildPayload are policy-owned (save-policies). The engine
+  // captures bookId in its SessionEntry, so the release-save survives an out-of-order space unmount
+  // (fixes the two latent canvas bugs: cleanup reading live myLocks, and the missing bookId override).
+  const { saveNow } = useSaveSession({
+    domain: sessionDomain,
+    id: sessionId,
+    locale: sessionLocale,
     onBlocked: onLockBlocked,
     onLost: onLockLost,
   });
 
-  // Header "Unsaved" commit for the sketch spread: deselecting nulls `lockTarget` → the lock hook's
-  // release-saves the held item (parity with the 5 held-session spaces' commit-now). `deselect` is
-  // stable (empty-dep useCallback) so the registration effect runs once.
-  useRegisterEditCommit(deselect);
+  // Header "Unsaved" commit (spec §7): the canvas now has an explicit saveNow, so committing SAVES
+  // FOR REAL (save-while-held + rebase) and THEN deselects (release the now-clean lock). `saveNow` is
+  // read through a ref so the registered callback stays STABLE across selection switches
+  // (useRegisterEditCommit requires a stable fn) while always saving the CURRENTLY held item.
+  const saveNowRef = useRef(saveNow);
+  useEffect(() => {
+    saveNowRef.current = saveNow;
+  });
+  const commitCanvas = useCallback(() => {
+    log.info('commitCanvas', 'commit held sketch session (save + deselect)');
+    void saveNowRef.current().finally(() => deselect());
+  }, [deselect]);
+  useRegisterEditCommit(commitCanvas);
 
   if (!spread) {
     log.debug('render', 'no spread — render null', { spreadId });

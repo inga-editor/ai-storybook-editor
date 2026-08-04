@@ -13,20 +13,19 @@ import { toast } from 'sonner';
 import { PropsSidebar } from './props-sidebar';
 import { PropsContentArea } from './props-content-area';
 import { usePropKeys, useSnapshotActions } from '@/stores/snapshot-store/selectors';
-import { useSnapshotStore } from '@/stores/snapshot-store';
 import { DEFAULT_CONTENT_TAB } from '@/constants/prop-constants';
 import type { ContentTab } from '@/types/prop-types';
 import { createLogger } from '@/utils/logger';
 import { useCurrentBookId } from '@/stores/book-store';
 import { useCollabPersistSession } from '@/features/editor/hooks/use-collab-persist-session';
 import { useContentSyncSession } from '@/features/editor/hooks/use-content-sync-session';
-import { useHeldResourceSession } from '@/features/editor/hooks/use-held-resource-session';
+import { useSaveSession } from '@/features/editor/hooks/use-save-session';
+import { deriveSaveTarget } from '@/stores/save-session-store';
 import { useRegisterEditCommit } from '@/stores/edit-session-status-store';
 import {
   useIsLockedByOther,
   useLockHolderName,
   type LockTarget,
-  type SavePayload,
 } from '@/stores/resource-lock-store';
 import { LockedByOtherOverlay } from '@/features/editor/components/shared-components/sketch-locked-by-other-overlay';
 
@@ -58,17 +57,8 @@ export function PropsCreativeSpace() {
     [lockedKey],
   );
 
-  // Live read of the locked prop node — reads getState() by the closure `lockedKey` so a switch's
-  // release-cleanup still sees the OLD key.
-  const getNode = useCallback(
-    () => (lockedKey ? useSnapshotStore.getState().props.find((p) => p.key === lockedKey) ?? null : null),
-    [lockedKey],
-  );
-
-  const buildPayload = useCallback(
-    (node: unknown): SavePayload => ({ action_type: 3, patch: node, log: true }),
-    [],
-  );
+  // getNode + buildPayload now live in the `illustration-entity` policy (save-policies) — the engine
+  // reads the live node + builds the whole-node edit payload from the derived id.
 
   const handleLockBlocked = useCallback((holder: string) => {
     log.info('handleLockBlocked', 'prop held by another editor', { hasHolder: !!holder });
@@ -89,11 +79,8 @@ export function PropsCreativeSpace() {
   );
 
   // ── Undo/redo nexus (ADR-045) — the engine now bridges begin/endSession itself; no space wiring.
-  const { status: lockStatus } = useHeldResourceSession({
-    target: lockTarget,
-    getNode,
-    ownedKeys: undefined, // entity = per-entity grain → baseline/dirty/save on the WHOLE node
-    buildPayload,
+  const { status: lockStatus } = useSaveSession({
+    ...deriveSaveTarget(lockTarget),
     onBlocked: handleLockBlocked,
     onLost: handleLockLost,
   });

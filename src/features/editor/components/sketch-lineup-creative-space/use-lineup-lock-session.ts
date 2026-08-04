@@ -21,25 +21,22 @@
 
 import { useCallback, useMemo, useState } from 'react';
 import { toast } from 'sonner';
-import { useSnapshotStore } from '@/stores/snapshot-store';
 import {
   useResourceLockStore,
   keyOf,
   type LockTarget,
-  type SavePayload,
   type SessionStatus,
 } from '@/stores/resource-lock-store';
 import {
   LINEUP_LOCK_TARGET,
-  buildSketchLineupsPayload,
   flushSketchLineupsUnderLock,
 } from '@/stores/snapshot-store/slices/collab-sketch-lineups-save-helper';
 import { toastSketchSaveOutcome } from '@/stores/snapshot-store/slices/sketch-save-outcome-toast';
 import { toastLockedByOther } from '@/utils/collab-save-toasts';
 import { resolveLockHolderName } from '@/stores/snapshot-store/slices/collab-image-save-helper';
 import { useRegisterEditCommit } from '@/stores/edit-session-status-store';
-import { useHeldResourceSession } from '@/features/editor/hooks/use-held-resource-session';
-import type { SketchLineupTab } from '@/types/sketch';
+import { useSaveSession } from '@/features/editor/hooks/use-save-session';
+import { deriveSaveTarget } from '@/stores/save-session-store';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('Editor', 'useLineupLockSession');
@@ -65,16 +62,7 @@ export function useLineupLockSession(): UseLineupLockSessionResult {
   // Target flips null ⇄ the module-constant singleton — never a per-render object.
   const target = useMemo<LockTarget | null>(() => (engaged ? LINEUP_LOCK_TARGET : null), [engaged]);
 
-  // Off-render fresh read (anti stale-closure): the release-cleanup diff must see the LATEST tabs.
-  const getNode = useCallback(
-    (): SketchLineupTab[] => useSnapshotStore.getState().sketch.lineups ?? [],
-    [],
-  );
-  const buildPayload = useCallback(
-    (node: unknown): SavePayload =>
-      buildSketchLineupsPayload(Array.isArray(node) ? (node as SketchLineupTab[]) : []),
-    [],
-  );
+  // getNode (WHOLE tabs array) + buildPayload now live in the `sketch-lineups` policy (save-policies).
 
   const handleLockBlocked = useCallback((holder: string) => {
     log.info('handleLockBlocked', 'lineups held by another editor', { hasHolder: !!holder });
@@ -88,11 +76,8 @@ export function useLineupLockSession(): UseLineupLockSessionResult {
     toast.warning('You lost the edit lock for the Lineup — a later change may not have saved.');
   }, []);
 
-  const { status } = useHeldResourceSession({
-    target,
-    getNode,
-    ownedKeys: undefined, // whole tabs array
-    buildPayload,
+  const { status } = useSaveSession({
+    ...deriveSaveTarget(target),
     onBlocked: handleLockBlocked,
     onLost: handleLockLost,
   });
@@ -136,7 +121,7 @@ export function useLineupLockSession(): UseLineupLockSessionResult {
       }
       return true;
     },
-    [getNode],
+    [],
   );
 
   // Header "Unsaved" → commit: disengage so the held-session cleanup release-saves + unlocks.

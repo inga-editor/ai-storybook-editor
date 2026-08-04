@@ -147,8 +147,15 @@ export async function releaseResourceLock(bookId: string, t: LockTarget): Promis
 }
 
 /** POST /api/resource/save — patch ONE resource node in the snapshot (single
- *  write path). 200 → written; 409/404 → lost (lock gone / node gone). */
-export async function saveResource(bookId: string, t: LockTarget, p: SavePayload): Promise<SaveResult> {
+ *  write path). 200 → written; 409/404 → lost (lock gone / node gone).
+ *  `opts.keepalive` (flush-on-hidden only): let the request survive page unload — the body
+ *  shape is UNCHANGED (the BE knows nothing about keepalive); see callImageApi's 64KB note. */
+export async function saveResource(
+  bookId: string,
+  t: LockTarget,
+  p: SavePayload,
+  opts?: { keepalive?: boolean },
+): Promise<SaveResult> {
   const body: Record<string, unknown> = {
     ...toLockBody(bookId, t),
     action_type: p.action_type,
@@ -161,7 +168,7 @@ export async function saveResource(bookId: string, t: LockTarget, p: SavePayload
     parent_id: p.parent_id,
     collection: p.collection,
   };
-  const res = await callImageApi<SaveOkResponse>('/api/resource/save', body);
+  const res = await callImageApi<SaveOkResponse>('/api/resource/save', body, opts);
   if (res.success) {
     return { ok: true, snapshot_id: res.snapshot_id, updated_at: res.updated_at };
   }

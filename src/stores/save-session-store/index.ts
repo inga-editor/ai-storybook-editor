@@ -19,10 +19,12 @@ import { createLogger } from '@/utils/logger';
 import {
   useResourceLockStore,
   keyOf,
+  isSketchWriteBlocked,
   type LockTarget,
   type SavePayload,
   type SessionStatus,
 } from '@/stores/resource-lock-store';
+import { saveResource } from '@/apis/resource-lock-api';
 import { useSnapshotStore } from '@/stores/snapshot-store';
 import { useEditSessionStatusStore } from '@/stores/edit-session-status-store';
 import { beginHistory, endHistory } from './history-bridge';
@@ -31,6 +33,12 @@ import { ensureSweepRunning, maybeStopSweep } from './idle-sweep';
 import type { BeginOptions, SaveDomain, SaveOutcome, SessionEntry } from './types';
 
 const log = createLogger('Store', 'SaveSessionStore');
+
+/** `fetch(..., { keepalive:true })` caps its body at 64KB (spec §4.5). A per-item save patch of a
+ *  spread with many shapes/textboxes can approach that — measure the serialized payload and drop to a
+ *  plain (non-keepalive) fetch above this threshold so the write is still ATTEMPTED (best-effort),
+ *  never silently skipped. Kept under 64KB with headroom for the lock-body envelope + JSON overhead. */
+export const KEEPALIVE_MAX_BYTES = 60_000;
 
 /** Normalized result of the persist fork (collab gateway save vs solo whole-snapshot flush). */
 interface PersistResult {
@@ -63,6 +71,9 @@ export interface SaveSessionState {
 
   // === Persist fork (the SINGLE solo/collab branch — exposed for the SSOT + tests) ===
   persist: (key: string, payload: SavePayload) => Promise<PersistResult>;
+
+  // === Flush-on-hidden (spec §4.5): best-effort save of EVERY held+dirty session on page-hide ===
+  flushAllOnHidden: () => void;
 }
 
 function errMsg(err: unknown): string {
@@ -382,6 +393,53 @@ export const useSaveSessionStore = create<SaveSessionState>()((set, get) => {
       if (!entry) return Promise.resolve({ ok: false });
       return persistUnderFork(entry, payload, false, true);
     },
+
+    // flushAllOnHidden — the tab-hide safety net for collab spaces (spec §4.5). `useFlushOnHidden`
+    // calls autoSaveSnapshot for solo books, but autoSaveSnapshot self-disables under collabPersist,
+    // so a held+dirty item in ANY collab space would be lost on tab-hide/close. Here we fire ONE
+    // best-effort `POST /api/resource/save` per held+dirty session with `keepalive` so the write
+    // outlives the unload. Deliberately: NO lock release (the 60s TTL reclaims it — losing data is
+    // worse than a peer waiting), NO baseline rebase (the page may die before this resolves), NO
+    // await (fire-and-forget), NO toast (unattended). Solo self-guards below (autoSaveSnapshot owns it).
+    flushAllOnHidden: () => {
+      const rl = useResourceLockStore.getState();
+      if (!rl.collabPersist) {
+        log.debug('flushAllOnHidden', 'solo book — autoSaveSnapshot owns the flush', {});
+        return;
+      }
+      const { sessions, isDirty } = get();
+      let flushed = 0;
+      for (const [key, entry] of sessions) {
+        if (entry.status !== 'held') continue; // acquiring / blocked / lost → nothing durable to write
+        if (!isDirty(key)) continue; // clean → the last save already persisted it
+        // ADR-047: a DEGRADED sketch resource is refused server-side anyway — skip it (mirrors the
+        // idle sweep) so we never fire a doomed keepalive write for quarantined data.
+        if (isSketchWriteBlocked(entry.target)) continue;
+        const policy = SAVE_POLICIES[entry.domain];
+        const rawNode = policy.getNode(entry.id);
+        if (rawNode == null) continue; // node gone (deleted mid-session) → nothing to persist
+        const payload = policy.buildPayload(projectNode(policy, rawNode), entry.id);
+        // Measure the serialized patch as the keepalive-budget proxy (the lock-body envelope is tiny
+        // and constant). Over budget → still send, just WITHOUT keepalive (a plain fetch may be cut
+        // short on an abrupt kill, but attempting beats dropping the change).
+        const bytes = JSON.stringify(payload).length;
+        const useKeepalive = bytes <= KEEPALIVE_MAX_BYTES;
+        if (!useKeepalive) {
+          log.warn('flushAllOnHidden', 'payload over keepalive budget — plain fetch (may be cut short)', {
+            key,
+            bytes,
+          });
+        } else {
+          log.info('flushAllOnHidden', 'keepalive flush', { key, domain: entry.domain, bytes });
+        }
+        // Fire-and-forget: no await, no release, no rebase. Swallow rejections (page may be gone).
+        void saveResource(entry.capturedBookId, entry.target, payload, { keepalive: useKeepalive }).catch(
+          () => {},
+        );
+        flushed += 1;
+      }
+      log.info('flushAllOnHidden', 'flush pass complete', { flushed });
+    },
   };
 });
 
@@ -397,3 +455,4 @@ export type {
 } from './types';
 export { SAVE_POLICIES, projectNode } from './save-policies';
 export { makeEntityId, parseEntityId } from './entity-id';
+export { deriveSaveTarget } from './derive-save-target';

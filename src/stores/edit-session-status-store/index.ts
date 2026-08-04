@@ -1,7 +1,7 @@
 // edit-session-status-store — global UI status for the collab HELD edit session (ADR-044/045).
 // Decouples the header save-label from the 60s snapshot auto-save loop: while any collab creative
 // space is mounted, the header shows Unsaved (holding lock) → Saving… (release-save in flight) →
-// Saved, and NEVER "Auto-saved". Written ONLY by useHeldResourceSession (single choke point — DRY);
+// Saved, and NEVER "Auto-saved". Written ONLY by the save-session engine (single choke point — DRY);
 // read by EditorPage which folds it into the header SaveStatus. `mountCount` ref-counts mounted
 // collab spaces (>0 ⇒ collab UI active) so it survives StrictMode's mount/unmount/mount. Every
 // exported selector returns a PRIMITIVE → no useShallow footgun.
@@ -21,8 +21,8 @@ interface EditSessionStatusState {
    *  shared `useCollabPersistSession` (ONE choke point for all 6 collab spaces incl. sketch — DRY). */
   mountCount: number;
   /** Ref-count of currently-HELD edit locks across any collab space (>0 ⇒ header "Unsaved"). Driven
-   *  identically by BOTH lock hooks — `useHeldResourceSession` (5 spaces) and `useResourceLockSession`
-   *  (sketch) — so the save-label is single-sourced here, decoupled from the undo edit-history store. */
+   *  uniformly by the save-session engine (`useSaveSession`) across all collab spaces (5 held-session
+   *  + both sketch spaces) — so the save-label is single-sourced here, decoupled from the undo store. */
   holdCount: number;
   savePhase: CollabSavePhase;
   /** Commit-now hook for the active collab space: releases its held lock (→ save + unlock). Set by

@@ -41,9 +41,10 @@ import {
   resolveLineupsLockTarget,
   buildSketchLineupsPayload,
 } from '@/stores/snapshot-store/slices/collab-sketch-lineups-save-helper';
-import { sheetOf, type BaseKind } from '@/types/sketch';
-import type { SketchLineupTab } from '@/types/sketch';
+import { sheetOf, getSketchTextboxContent, type BaseKind } from '@/types/sketch';
+import type { SketchLineupTab, SketchSpread, SketchSpreadImage } from '@/types/sketch';
 import { parseEntityId } from './entity-id';
+import { splitSketchImageId, splitSketchTextboxId } from './sketch-spread-item-id';
 import type { SaveDomain, SavePolicy } from './types';
 
 /** Default idle auto-save cadence (phase 2 — the timer is a no-op stub in phase 1). */
@@ -119,6 +120,64 @@ function getSpreadNode(spreadId: string): unknown {
   return useSnapshotStore.getState().illustration.spreads.find((s) => s.id === spreadId) ?? null;
 }
 
+// --- sketch-image / sketch-textbox (step 1, rtype 1/2 — the spread canvas) --------------------
+// The spread canvas migrated off `use-resource-lock-session` (phase 4). Its per-item grain needs the
+// PARENT spread (for `spread_number` + the create-fallback parent) which a bare `resource_id` does
+// not carry, so the canvas threads a COMPOSITE id (built + split by `sketch-spread-item-id.ts`):
+//   • sketch-image   → `"{spreadId}/{imageId}"`
+//   • sketch-textbox → `"{spreadId}/{textboxId}/{locale}"`   (locale needed to project per-language
+//     content — the OLD canvas saved `getSketchTextboxContent(tb, langCode)`, not the whole textbox).
+// `resolveTarget` extracts only the CHILD id into the lock key (`resource_id`), so `keyOf` stays
+// byte-identical to the OLD canvas target (parity-tested). Bare ids (unit-test fixtures / legacy)
+// are tolerated by the splitters: no '/' ⇒ the whole id IS the child (and the create-fallback parent).
+
+/** 1-based doc-order position of a spread in `sketch.spreads[]` (audit `spread_number`); 1 if absent. */
+function sketchSpreadNumber(spreads: SketchSpread[], spreadId: string): number {
+  const idx = spreads.findIndex((s) => s.id === spreadId);
+  return idx >= 0 ? idx + 1 : 1;
+}
+
+function getSketchSpreadImageNode(id: string): unknown {
+  const { spreadId, imageId } = splitSketchImageId(id);
+  const spread = useSnapshotStore.getState().sketch.spreads.find((s) => s.id === spreadId);
+  return spread?.images.find((im) => im.id === imageId) ?? null;
+}
+
+/** Image → edit payload (action_type 3). target_ref carries the audit map; `create_fallback` lets a
+ *  client-minted page image (never written) fall back to a nested CREATE under the spread's `images[]`
+ *  on a 404 (mirrors the OLD canvas `buildLockPayload`). */
+function buildSketchImagePayload(projected: unknown, id: string): SavePayload {
+  const { spreadId } = splitSketchImageId(id);
+  const spread_number = sketchSpreadNumber(useSnapshotStore.getState().sketch.spreads, spreadId);
+  const img = projected as SketchSpreadImage | null;
+  return {
+    action_type: 3,
+    patch: projected,
+    target_ref: { spread_number, page: img?.type },
+    ...(img ? { create_fallback: { parent_id: spreadId, collection: 'images' } } : {}),
+  };
+}
+
+function getSketchTextboxNode(id: string): unknown {
+  const { spreadId, textboxId, locale } = splitSketchTextboxId(id);
+  const spread = useSnapshotStore.getState().sketch.spreads.find((s) => s.id === spreadId);
+  const tb = spread?.textboxes.find((t) => t.id === textboxId);
+  if (!tb) return null;
+  return getSketchTextboxContent(tb, locale ?? '') ?? null;
+}
+
+/** Textbox → per-language edit payload (action_type 3). target_ref { spread_number, textbox_id, locale }
+ *  matches the OLD canvas exactly (the patch is the per-language content, not the whole textbox). */
+function buildSketchTextboxPayload(projected: unknown, id: string): SavePayload {
+  const { spreadId, textboxId, locale } = splitSketchTextboxId(id);
+  const spread_number = sketchSpreadNumber(useSnapshotStore.getState().sketch.spreads, spreadId);
+  return {
+    action_type: 3,
+    patch: projected,
+    target_ref: { spread_number, textbox_id: textboxId, locale },
+  };
+}
+
 /** The declarative registry — one entry per save-domain. */
 export const SAVE_POLICIES: Record<SaveDomain, SavePolicy> = {
   'illustration-entity': {
@@ -186,28 +245,28 @@ export const SAVE_POLICIES: Record<SaveDomain, SavePolicy> = {
     idleAutoSaveMs: DEFAULT_IDLE_AUTO_SAVE_MS,
   },
 
-  // --- phase-4 stubs: registered so the domain union is exhaustive, but NO consumer until the
-  //     sketch spread canvas migrates off `use-resource-lock-session`. resolveTarget IS faithful
-  //     (parity-tested); getNode/buildPayload are intentionally minimal — the real spread-canvas
-  //     builder needs component context (spread_number / create_fallback) not available here.
+  // --- sketch-image / sketch-textbox (step 1, rtype 1/2 — the spread canvas). Composite id carries
+  //     the parent spread (+ locale for textbox); `resolveTarget` extracts only the CHILD id into the
+  //     lock key so `keyOf` matches the OLD canvas target byte-for-byte (parity-tested). A bare id
+  //     (unit-test fixture) yields itself as the resource_id — see the split helpers above.
   'sketch-image': {
     resolveTarget: (id, locale) => ({
       step: 1,
       resource_type: 1,
-      resource_id: id,
+      resource_id: splitSketchImageId(id).imageId,
       locale: locale ?? null,
     }),
     ownedKeys: undefined,
-    getNode: () => null,
-    buildPayload: (node) => ({ action_type: 3, patch: node }),
+    getNode: getSketchSpreadImageNode,
+    buildPayload: buildSketchImagePayload,
     idleAutoSaveMs: DEFAULT_IDLE_AUTO_SAVE_MS,
     // 404 → nested CREATE: a generated sketch spread page image is minted client-side (never in the
-    // DB), so a one-shot EDIT/UPLOAD 404s → retry ONCE under the spread's `images[]` (mirrors the
-    // sketch spread canvas' inline `create_fallback`, canvas L372). ⚡ PHASE-4: `parentId` derives the
-    // parent spread from a composite id `"{spreadId}/{imageId}"` — the id the spread canvas will thread
-    // when it migrates off `use-resource-lock-session` (no phase-2 consumer, so this is forward-declared).
+    // DB), so a one-shot EDIT/UPLOAD 404s → retry ONCE under the spread's `images[]`. `parentId`
+    // derives the parent spread from the composite id `"{spreadId}/{imageId}"`. (The held saveNow /
+    // release path gets `create_fallback` from `buildSketchImagePayload` directly; this field is the
+    // one-shot `ensureSaved` seam that has no built payload to read it off of.)
     createFallback: {
-      parentId: (id) => (id.includes('/') ? id.slice(0, id.indexOf('/')) : id),
+      parentId: (id) => splitSketchImageId(id).spreadId,
       collection: 'images',
     },
   },
@@ -216,12 +275,12 @@ export const SAVE_POLICIES: Record<SaveDomain, SavePolicy> = {
     resolveTarget: (id, locale) => ({
       step: 1,
       resource_type: 2,
-      resource_id: id,
+      resource_id: splitSketchTextboxId(id).textboxId,
       locale: locale ?? null,
     }),
     ownedKeys: undefined,
-    getNode: () => null,
-    buildPayload: (node) => ({ action_type: 3, patch: node }),
+    getNode: getSketchTextboxNode,
+    buildPayload: buildSketchTextboxPayload,
     idleAutoSaveMs: DEFAULT_IDLE_AUTO_SAVE_MS,
   },
 };

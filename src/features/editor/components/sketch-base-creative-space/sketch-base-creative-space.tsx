@@ -6,7 +6,7 @@
 //
 // Collab (ADR-043 sketch-base — the 8th collab space): mounts `useCollabPersistSession` (header
 // Saving…→Saved + suppress owner-direct autosave) + `useContentSyncSession` (peer refetch), and a
-// per-KIND HELD SHEET lock (`useHeldResourceSession`, step 1 / rtype 11 base_sheet, whole-sheet
+// per-KIND HELD SHEET lock (`useSaveSession`, step 1 / rtype 11 base_sheet, whole-sheet
 // grain A). Lock-on-interact (browse ≠ lock): `lockedSheetKind` is set ONLY by a genuine sheet
 // interaction (＋ add / 🔒 lock / [✎] edit / content pointerdown), never by browsing (select/toggle).
 // `manageHeaderStatus:true` (the default — same as the variant space since its 2026-07-16 migration
@@ -47,12 +47,10 @@ import {
   useIsLockedByOther,
   useLockHolderName,
   type LockTarget,
-  type SavePayload,
 } from '@/stores/resource-lock-store';
 import { useEditSessionStatusStore, useRegisterEditCommit } from '@/stores/edit-session-status-store';
 import {
   resolveSketchBaseSheetLockTarget,
-  buildSketchBaseSheetPayload,
   flushSketchBaseSheetUnderLock,
 } from '@/stores/snapshot-store/slices/collab-sketch-base-sheet-save-helper';
 import {
@@ -66,12 +64,12 @@ import {
 } from '@/features/editor/utils/structural-lock-collection-save';
 import { useCollabPersistSession } from '@/features/editor/hooks/use-collab-persist-session';
 import { useContentSyncSession } from '@/features/editor/hooks/use-content-sync-session';
-import { useHeldResourceSession } from '@/features/editor/hooks/use-held-resource-session';
+import { useSaveSession } from '@/features/editor/hooks/use-save-session';
+import { deriveSaveTarget } from '@/stores/save-session-store';
 import { LockedByOtherOverlay } from '@/features/editor/components/shared-components/sketch-locked-by-other-overlay';
 import { SketchDegradedBanner } from '@/features/editor/components/sketch-degraded-banner';
 import { useSketchSheetDegraded } from '@/stores/snapshot-store';
 import {
-  sheetOf,
   sketchEntitiesOfKind,
   BASE_SHEET_ID,
   type BaseKind,
@@ -223,11 +221,7 @@ export function SketchBaseSpace() {
 
   // Live (non-reactive) read of the WHOLE locked sheet node — baseline + dirty-diff source. Reads
   // getState() by the closure so a switch's release-cleanup still sees the OLD sheet.
-  const getSheetNode = useCallback(
-    () => (lockedSheetKind ? sheetOf(useSnapshotStore.getState().sketch.base, lockedSheetKind) : null),
-    [lockedSheetKind],
-  );
-  const buildSheetPayload = useCallback((node: unknown): SavePayload => buildSketchBaseSheetPayload(node), []);
+  // getNode (WHOLE sheet node) + buildPayload now live in the `sketch-base-sheet` policy (save-policies).
 
   // 409 on acquire → another editor holds this sheet. Toast + drop the interaction (idle).
   const handleSheetBlocked = useCallback((holder: string) => {
@@ -247,11 +241,8 @@ export function SketchBaseSpace() {
   // true — base default). Hold lifetime = "Unsaved"; release-save (switch kind / leave) → Saving…→
   // Saved. Crop-edit (setSketchBaseCropIllustrations) has NO immediate flush → the release-save is
   // its ONLY persist path (baseline captured at acquire, BEFORE the modal edit → dirty on release).
-  const sheetSession = useHeldResourceSession({
-    target: sheetLockTarget,
-    getNode: getSheetNode,
-    ownedKeys: undefined, // sheet = whole-node grain
-    buildPayload: buildSheetPayload,
+  const sheetSession = useSaveSession({
+    ...deriveSaveTarget(sheetLockTarget),
     onBlocked: handleSheetBlocked,
     onLost: handleSheetLost,
     manageHeaderStatus: true, // base default — session-driven Unsaved → Saving… → Saved
@@ -267,7 +258,7 @@ export function SketchBaseSpace() {
   }, []);
 
   // Commit-now for the header "Unsaved" button (editor-page handleManualSave → commitFn): null the
-  // held sheet target so `useHeldResourceSession` release-saves the sheet (grain A: crop edits +
+  // held sheet target so `useSaveSession` release-saves the sheet (grain A: crop edits +
   // is_selected) → header Saving…→Saved. Without this the base space registered NO commit → the
   // manual-save fell through to the collab-suppressed autoSaveSnapshot() → the button was a no-op.
   // Mirrors characters/props `setLockedKey(null)` (batch-at-release commit). Display is kept; the
