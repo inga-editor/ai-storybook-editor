@@ -1,18 +1,21 @@
-// collab-scene-save-helper.ts — DORMANT per-resource collab save seam for the SCENE space
-// (step=2 illustration scene overlays — ADR-044 P04 wire-only). Covers the four scene write
-// surfaces the gateway opened in P03:
-//   • spread          → rtype 6 (`illustration.spreads[i]`)            node create/edit + collection delete + reorder
-//   • raw_image       → rtype 1 (`spreads[i].raw_images[j]`)           node create/edit + collection delete
-//   • scene raw_textbox → rtype 7 (`spreads[i].raw_textboxes[j][<locale>]`) node create/edit (locale-scoped) + collection delete
-//   • scene shape     → rtype 8 (`spreads[i].shapes[j]`)              node create/edit + collection delete
+// collab-scene-save-helper.ts — per-resource collab save seam for the SCENE space STRUCTURAL ops
+// (step=2 illustration scene overlays — ADR-044 P04). After the unified-item-save migration
+// (2026-08-04) only the SPREAD-level structural ops remain here (rtype 6):
+//   • spread create/edit → `persistSpreadCollab`         (`illustration.spreads[i]`)
+//   • spread delete      → `persistSpreadDeleteCollab`
+//   • spread reorder     → `persistSpreadReorderCollab`
+// The former per-node scene LEAF saves (`persistSceneImageCollab` / `persistSceneTextboxCollab`
+// + their deletes, rtype 1/7) were REMOVED here — a dirty scene leaf is now persisted with the rest
+// of the spread's owned sub-tree by the per-spread `scene-spread` held session (save-session-store,
+// rtype 6 / SCENE_OWNED_KEYS). The scene SHAPE writes (rtype 8) were re-homed into the retouch held
+// session earlier (see the note at the bottom of this file).
 //
 // Sibling of `collab-entity-save-helper.ts` (characters/props/stages, rtype 3/4/5) — same
 // acquire → save(node) → release lifecycle via the shared `saveImageResourceUnderLock`, kept
-// separate to hold the scene grain (spread + leaf overlays) without bloating the entity helper.
+// separate to hold the scene grain (spread create/delete/reorder).
 //
 // NO-OP under the solo path (`collabPersist=false`): the whole-doc autosave owns persistence
-// there, so the solo path stays byte-identical. DORMANT until the scene space flips collab-on
-// (P05) — every function early-returns now.
+// there, so the solo path stays byte-identical.
 //
 // Fire-and-forget from the slice mutators (`void …`) — none throw (each drives the lifecycle in
 // a try/catch). The node is read FRESH via `get()` at call time (post-mutate) — never a mutator
@@ -25,7 +28,6 @@ import type { SnapshotStore } from '../types';
 import type { BaseSpread } from '@/types/spread-types';
 import {
   saveImageResourceUnderLock,
-  resolveImageLockTarget,
   resolveLockHolderName,
   type ImageSaveOutcome,
 } from './collab-image-save-helper';
@@ -37,16 +39,6 @@ const log = createLogger('Store', 'CollabSceneSaveHelper');
 /** crud audit enum for scene node-scope saves (see SavePayload): 2 create · 3 edit. */
 export type SceneNodeActionType = 2 | 3;
 
-/** Node-level (language-agnostic) keys of a raw_textbox — anything ELSE in an `updates` patch is
- *  a `<language_key>` sub-object (locale-scoped text/typography edit). Mirrors rtype-2 textbox. */
-const RESERVED_TEXTBOX_KEYS: ReadonlySet<string> = new Set([
-  'id',
-  'title',
-  'z-index',
-  'player_visible',
-  'editor_visible',
-]);
-
 /** Read the WHOLE spread node fresh (anti stale-closure) — null when deleted mid-flight. */
 function readSpread(state: SnapshotStore, spreadId: string): BaseSpread | null {
   return state.illustration.spreads.find((s) => s.id === spreadId) ?? null;
@@ -57,37 +49,9 @@ function spreadLockTarget(spreadId: string): LockTarget {
   return { step: 2, resource_type: 6, resource_id: spreadId, locale: null };
 }
 
-/** Derive the locale of a raw_textbox edit from its `updates` patch: the first key that is NOT a
- *  node-level field is the `<language_key>` (locale-scoped). No such key → node-level edit (null).
- *  ASSUMES a SINGLE-KIND patch (all current call-sites pass either reserved-only visibility toggles
- *  OR one locale's content) — a hypothetical mixed `{ title, en_US }` or multi-locale patch would
- *  persist only the first locale's sub-object; a later whole-node edit reconciles. */
-function deriveTextboxLocale(updates?: Record<string, unknown>): string | null {
-  if (!updates) return null;
-  for (const key of Object.keys(updates)) {
-    if (!RESERVED_TEXTBOX_KEYS.has(key)) return key;
-  }
-  return null;
-}
-
 /** Whether collab persistence is active. Solo path (false) → all helpers below no-op. */
 function isCollab(): boolean {
   return useResourceLockStore.getState().collabPersist;
-}
-
-/**
- * Nested-node CREATE params for a scene CHILD save. On `action_type` 2 the gateway inserts a
- * BRAND-NEW leaf, so it needs the parent spread id + the target array name; every scene child
- * (raw_image / raw_textbox / shape) appends under its own spread. On an EDIT (3) it addresses the
- * existing leaf by id → `undefined` (no parent/collection sent, byte-identical to pre-P04B).
- * Spread + entity creates DON'T use this — they append at the spreads/column root (handled elsewhere).
- */
-function nestedCreateParams(
-  actionType: SceneNodeActionType,
-  spreadId: string,
-  collection: string,
-): { parentId: string; collection: string } | undefined {
-  return actionType === 2 ? { parentId: spreadId, collection } : undefined;
 }
 
 /** Shared post-save outcome LOGGING (DRY across the scene node-save helpers). ⚡ unified-item-save
@@ -244,102 +208,15 @@ export async function persistSpreadReorderCollab(
   }
 }
 
-// --- Raw image (rtype 1 — reuses the illustration_image leaf path) -----------
-
-/** NODE-scope save of a scene raw_image (create 2 | edit 3). NO-OP solo. */
-export async function persistSceneImageCollab(
-  get: () => SnapshotStore,
-  spreadId: string,
-  imageId: string,
-  actionType: SceneNodeActionType,
-): Promise<void> {
-  if (!isCollab()) {
-    log.debug('persistSceneImageCollab', 'solo path — whole-doc autosave owns persistence', { spreadId });
-    return;
-  }
-  const node = readSpread(get(), spreadId)?.raw_images?.find((i) => i.id === imageId) ?? null;
-  if (!node) {
-    log.warn('persistSceneImageCollab', 'raw_image missing at save time — skip gateway save', { spreadId, imageId });
-    return;
-  }
-  const target = resolveImageLockTarget('illustration_image', spreadId, imageId);
-  log.info('persistSceneImageCollab', 'collab save', { resourceType: target.resource_type, action: actionType });
-  const outcome = await saveImageResourceUnderLock(
-    target,
-    node,
-    actionType,
-    { spread_id: spreadId, image_id: imageId },
-    nestedCreateParams(actionType, spreadId, 'raw_images'),
-  );
-  reportSaveOutcome(outcome, target, { spreadId, imageId });
-}
-
-/** COLLECTION-scope DELETE of a scene raw_image. NO-OP solo. */
-export async function persistSceneImageDeleteCollab(spreadId: string, imageId: string): Promise<void> {
-  if (!isCollab()) {
-    log.debug('persistSceneImageDeleteCollab', 'solo path — whole-doc autosave owns persistence', { spreadId });
-    return;
-  }
-  const target = resolveImageLockTarget('illustration_image', spreadId, imageId);
-  log.info('persistSceneImageDeleteCollab', 'collab delete', { spreadId, imageId });
-  await deleteSceneResource(target, { spread_id: spreadId, image_id: imageId });
-}
-
-// --- Scene raw_textbox (rtype 7 — locale-scoped like a textbox) --------------
-
-/**
- * NODE-scope save of a scene raw_textbox (create 2 | edit 3). `updates` (present on an EDIT) is
- * inspected for a `<language_key>` → a locale-scoped text/typography edit patches the `[locale]`
- * sub-object (`resource_id=<textbox id>, locale=<key>`); a node-level edit (title/editor_visible)
- * or a CREATE (no `updates`) patches the WHOLE node with `locale=null`. NO-OP solo.
- */
-export async function persistSceneTextboxCollab(
-  get: () => SnapshotStore,
-  spreadId: string,
-  textboxId: string,
-  actionType: SceneNodeActionType,
-  updates?: Record<string, unknown>,
-): Promise<void> {
-  if (!isCollab()) {
-    log.debug('persistSceneTextboxCollab', 'solo path — whole-doc autosave owns persistence', { spreadId });
-    return;
-  }
-  const node = readSpread(get(), spreadId)?.raw_textboxes?.find((t) => t.id === textboxId) ?? null;
-  if (!node) {
-    log.warn('persistSceneTextboxCollab', 'raw_textbox missing at save time — skip gateway save', { spreadId, textboxId });
-    return;
-  }
-  const locale = deriveTextboxLocale(updates);
-  // locale-scoped → patch the fresh `[locale]` sub-object; node-level/create → patch whole node.
-  const patch = locale ? ((node as Record<string, unknown>)[locale] ?? null) : node;
-  if (patch == null) {
-    log.warn('persistSceneTextboxCollab', 'locale sub-object missing — skip gateway save', { spreadId, textboxId, locale });
-    return;
-  }
-  const target = resolveImageLockTarget('scene_raw_textbox', spreadId, textboxId, locale);
-  log.info('persistSceneTextboxCollab', 'collab save', { resourceType: target.resource_type, action: actionType, hasLocale: locale != null });
-  const outcome = await saveImageResourceUnderLock(
-    target,
-    patch,
-    actionType,
-    { spread_id: spreadId, textbox_id: textboxId, locale },
-    // Create carries no `updates` → locale null → whole-node patch appended under the spread.
-    nestedCreateParams(actionType, spreadId, 'raw_textboxes'),
-  );
-  reportSaveOutcome(outcome, target, { spreadId, textboxId, locale });
-}
-
-/** COLLECTION-scope DELETE of a scene raw_textbox (whole node, locale null). NO-OP solo. */
-export async function persistSceneTextboxDeleteCollab(spreadId: string, textboxId: string): Promise<void> {
-  if (!isCollab()) {
-    log.debug('persistSceneTextboxDeleteCollab', 'solo path — whole-doc autosave owns persistence', { spreadId });
-    return;
-  }
-  const target = resolveImageLockTarget('scene_raw_textbox', spreadId, textboxId);
-  log.info('persistSceneTextboxDeleteCollab', 'collab delete', { spreadId, textboxId });
-  await deleteSceneResource(target, { spread_id: spreadId, textbox_id: textboxId });
-}
-
+// --- Scene LEAF saves (raw_image rtype 1 / raw_textbox rtype 7) — REMOVED -----
+//
+// `persistSceneImageCollab` / `persistSceneImageDeleteCollab` / `persistSceneTextboxCollab` /
+// `persistSceneTextboxDeleteCollab` were REMOVED here (unified-item-save, 2026-08-04): a dirty scene
+// raw_image / raw_textbox now rides the per-spread `scene-spread` held session (save-session-store,
+// rtype 6 / SCENE_OWNED_KEYS) — the whole owned sub-tree is persisted on release, so the old per-node
+// one-shot writes from `illustration-slice` are gone (see the `Former persist*Collab … REMOVED`
+// markers there).
+//
 // --- Scene shape (rtype 8) — RE-HOMED (unified-item-save phase 3) -------------
 //
 // `persistSceneShapeCollab` / `persistSceneShapeDeleteCollab` were REMOVED here (2026-08-04): a scene
