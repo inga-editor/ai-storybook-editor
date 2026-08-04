@@ -10,6 +10,7 @@
 // No FE polling — backend reaper guards permanent stuck.
 
 import * as React from 'react';
+import { toast } from 'sonner';
 import { useCurrentBook, useBookActions } from '@/stores/book-store';
 import { useRemixes, useRemixActions } from '@/stores/remix-store';
 import {
@@ -36,6 +37,13 @@ import type {
   VideoType,
 } from '@/types/editor';
 import { createLogger } from '@/utils/logger';
+import {
+  ConfigSectionHeader,
+  assertPersisted,
+  deepEqual,
+  useConfigSectionDraft,
+} from './explicit-save';
+import { useConfigDirtyGuardActions } from '@/stores/config-dirty-guard-store';
 
 const log = createLogger('Editor', 'ConfigDistributionSettings');
 
@@ -50,6 +58,50 @@ interface DistSource {
   dist: Distribution;
 }
 
+// ── Draft model: only user-owned `is_enabled` flags. `status`/`media_url` are
+//    pipeline-owned → always read straight from the live store, never the draft.
+//    Shape: sourceKey → { leafPath → is_enabled }. ────────────────────────────
+type LeafFlags = Record<string, boolean>;
+type DistributionDraft = Record<string, LeafFlags>;
+
+const VIDEO_LEAF_KEYS = ['sd', 'hd', 'fhd', 'qhd'] as const;
+
+/** Stable path key for one leaf (encodes the video type when present). */
+function leafPath(ch: ChannelKey, leafKey: string, videoType?: VideoType): string {
+  return videoType ? `${ch}::${leafKey}::${videoType}` : `${ch}::${leafKey}`;
+}
+
+/** Extract the is_enabled map for every leaf of a (coalesced) distribution. */
+function distEnabledMap(dist: Distribution): LeafFlags {
+  const flags: LeafFlags = {};
+  (['player', 'digital', 'printer'] as const).forEach((chKey) => {
+    const rec = dist[chKey] as Record<string, ExportVariantLeaf>;
+    for (const [leafKey, leaf] of Object.entries(rec)) {
+      flags[leafPath(chKey, leafKey)] = leaf.is_enabled;
+    }
+  });
+  for (const entry of dist.videos) {
+    for (const leafKey of VIDEO_LEAF_KEYS) {
+      flags[leafPath('video', leafKey, entry.type)] = entry[leafKey].is_enabled;
+    }
+  }
+  return flags;
+}
+
+/** Apply draft flags onto a live (coalesced) distribution, leaving status/media intact. */
+function applyFlags(dist: Distribution, flags: LeafFlags): Distribution {
+  let next = dist;
+  for (const [path, enabled] of Object.entries(flags)) {
+    const parts = path.split('::');
+    if (parts[0] === 'video') {
+      next = patchLeafEnabled(next, 'video', parts[1], enabled, parts[2] as VideoType);
+    } else {
+      next = patchLeafEnabled(next, parts[0] as ChannelKey, parts[1], enabled);
+    }
+  }
+  return next;
+}
+
 interface ChannelView {
   groupKey: string;
   label: string;
@@ -60,8 +112,23 @@ interface ChannelView {
   anyExporting: boolean;
 }
 
-/** Build the per-channel view (variants + gating) for one source. */
-function buildChannelViews(dist: Distribution): ChannelView[] {
+/** Read one leaf from the live dist but override is_enabled with the draft flag
+ *  (status/media_url stay live). */
+function leafWithDraft(
+  dist: Distribution,
+  flags: LeafFlags,
+  ch: ChannelKey,
+  leafKey: string,
+  videoType?: VideoType,
+): ExportVariantLeaf {
+  const leaf = getLeaf(dist, ch, leafKey, videoType);
+  const path = leafPath(ch, leafKey, videoType);
+  return path in flags ? { ...leaf, is_enabled: flags[path] } : leaf;
+}
+
+/** Build the per-channel view (variants + gating) for one source. `flags` are the
+ *  draft is_enabled overrides for this source. */
+function buildChannelViews(dist: Distribution, flags: LeafFlags): ChannelView[] {
   const views: ChannelView[] = [];
   for (const ch of CHANNELS) {
     const cap = V1_EXPORT_CAPABILITY[ch.key];
@@ -69,7 +136,7 @@ function buildChannelViews(dist: Distribution): ChannelView[] {
       for (const entry of dist.videos) {
         const variants = ch.variants.map((descriptor) => ({
           descriptor,
-          leaf: getLeaf(dist, 'video', descriptor.leafKey, entry.type),
+          leaf: leafWithDraft(dist, flags, 'video', descriptor.leafKey, entry.type),
         }));
         const exportable = variants.filter((v) =>
           cap.exportableLeafKeys.includes(v.descriptor.leafKey),
@@ -90,7 +157,7 @@ function buildChannelViews(dist: Distribution): ChannelView[] {
     }
     const variants = ch.variants.map((descriptor) => ({
       descriptor,
-      leaf: getLeaf(dist, ch.key, descriptor.leafKey),
+      leaf: leafWithDraft(dist, flags, ch.key, descriptor.leafKey),
     }));
     const exportable = variants.filter((v) =>
       cap.exportableLeafKeys.includes(v.descriptor.leafKey),
@@ -155,6 +222,37 @@ export function ConfigDistributionSettings() {
 
   const remixIds = React.useMemo(() => remixes.map((r) => r.id), [remixes]);
 
+  // Draft baseline: every source's is_enabled flags. Rebuilt whenever `sources`
+  // change (realtime status writes leave is_enabled untouched → stays clean).
+  const draftSource = React.useMemo<DistributionDraft>(() => {
+    const map: DistributionDraft = {};
+    for (const src of sources) map[src.key] = distEnabledMap(src.dist);
+    return map;
+  }, [sources]);
+
+  const { ensureSaved } = useConfigDirtyGuardActions();
+
+  const { draft, isDirty, isSaving, patchDraft, save } = useConfigSectionDraft<DistributionDraft>({
+    sectionKey: 'distribution',
+    source: draftSource,
+    persistFn: async (d) => {
+      // Per source with a diff: rebuild nextDist from the LIVE store dist (so
+      // status/media_url stay intact) then apply only this source's draft flags.
+      for (const src of sources) {
+        const flags = d[src.key];
+        if (!flags) continue;
+        if (deepEqual(flags, distEnabledMap(src.dist))) continue;
+        const nextDist = applyFlags(coalesceDistribution(src.dist), flags);
+        log.info('persistFn', 'saving distribution source', { kind: src.kind, id: src.id });
+        if (src.kind === 'book') {
+          assertPersisted(await updateBook(src.id, { distribution: nextDist }), 'book distribution');
+        } else {
+          assertPersisted(await updateRemixDistribution(src.id, nextDist), 'remix distribution');
+        }
+      }
+    },
+  });
+
   // Mount the standalone export_pdf watcher (book + current remixes).
   useExportJobWatcher({ bookId, remixIds });
 
@@ -176,23 +274,16 @@ export function ConfigDistributionSettings() {
     });
   }, []);
 
-  const saveSource = React.useCallback(
-    (src: DistSource, nextDist: Distribution) => {
-      if (src.kind === 'book') {
-        void updateBook(src.id, { distribution: nextDist });
-      } else {
-        void updateRemixDistribution(src.id, nextDist);
-      }
-    },
-    [updateBook, updateRemixDistribution],
-  );
-
   const handleToggleVariant = React.useCallback(
     (src: DistSource, channelKey: ChannelKey, leafKey: string, next: boolean, videoType?: VideoType) => {
-      const nextDist = patchLeafEnabled(src.dist, channelKey, leafKey, next, videoType);
-      saveSource(src, nextDist);
+      const path = leafPath(channelKey, leafKey, videoType);
+      log.debug('handleToggleVariant', 'patch draft', { source: src.key, path, next });
+      patchDraft((prev) => ({
+        ...prev,
+        [src.key]: { ...(prev[src.key] ?? {}), [path]: next },
+      }));
     },
-    [saveSource],
+    [patchDraft],
   );
 
   const handleExportChannel = React.useCallback(
@@ -201,6 +292,13 @@ export function ConfigDistributionSettings() {
       channelKey: ChannelKey,
       videoType?: VideoType,
     ): Promise<EnqueueExportOutcome> => {
+      // Export jobs read config from DB → the latest toggles must be persisted first.
+      const saved = await ensureSaved();
+      if (!saved) {
+        log.warn('handleExportChannel', 'ensureSaved failed — aborting export', { id: src.id });
+        toast.error('Save failed — export aborted. Please try again.');
+        return { kind: 'skipped', reason: 'unsaved_changes' };
+      }
       if (channelKey === 'printer') {
         log.info('handleExportChannel', 'start export-pdf', { kind: src.kind, id: src.id });
         return src.kind === 'book'
@@ -220,7 +318,7 @@ export function ConfigDistributionSettings() {
       }
       return { kind: 'skipped', reason: 'channel_not_exportable_v1' };
     },
-    [startBookExportPdf, startRemixExportPdf, startBookRenderVideo, startRemixRenderVideo],
+    [ensureSaved, startBookExportPdf, startRemixExportPdf, startBookRenderVideo, startRemixRenderVideo],
   );
 
   const handleViewVariant = React.useCallback(
@@ -245,12 +343,15 @@ export function ConfigDistributionSettings() {
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
-      <div className="flex h-14 shrink-0 items-center border-b px-4">
-        <h3 className="text-sm font-semibold">Distribution Settings</h3>
-      </div>
+      <ConfigSectionHeader
+        title="Distribution Settings"
+        isDirty={isDirty}
+        isSaving={isSaving}
+        onSave={save}
+      />
       <div className="flex flex-col gap-2 overflow-y-auto p-4">
         {sources.map((src) => {
-          const views = buildChannelViews(src.dist);
+          const views = buildChannelViews(src.dist, draft[src.key] ?? {});
           return (
             <DistributionSourceSection
               key={src.key}

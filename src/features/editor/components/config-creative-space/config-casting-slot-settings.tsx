@@ -3,19 +3,18 @@
 // ACTANTS (roles of the selected axis, valued by the selected preset).
 // Axis/preset/role definitions live in book.casting_slot; the actor options are
 // derived at runtime from snapshot.characters[] + snapshot.props[] and only the
-// key + type are persisted. Every change writes immediately (no Apply).
-// Design ref: 13-config-casting-slot-settings.md.
+// key + type are persisted. Edits update a local draft; persisted on [Save] only
+// (explicit-save model, spec 15). Design ref: 13-config-casting-slot-settings.md.
 //
-// LWW note: `books.casting_slot` is a whole-column write, same stance as
+// LWW note: `books.casting_slot` is a whole-column write on [Save], same stance as
 // parametric_slot / remix — the books table is not a snapshot resource, so it is
-// outside the collab gateway and carries NO lock (validation S1 Q3). Every
-// handler re-reads the freshest slot from the store right before mutating, which
-// narrows the race window but does not close it.
+// outside the collab gateway and carries NO lock (validation S1 Q3). Handlers build
+// from the local draft; persistFn writes the full slot once, which narrows but does
+// not close the last-writer-wins window.
 
 import * as React from 'react';
 import { Plus } from 'lucide-react';
 import {
-  useBookStore,
   useCurrentBook,
   useBookCastingSlot,
   useBookActions,
@@ -57,6 +56,11 @@ import { CastingAxisModal } from './casting-slot/casting-axis-modal';
 import { PresetNameModal } from './casting-slot/preset-name-modal';
 import { cn } from '@/utils/utils';
 import { createLogger } from '@/utils/logger';
+import {
+  ConfigSectionHeader,
+  assertPersisted,
+  useConfigSectionDraft,
+} from './explicit-save';
 
 const log = createLogger('Editor', 'ConfigCastingSlotSettings');
 
@@ -65,12 +69,6 @@ type CastingModalState =
   | { kind: 'axis'; mode: 'edit'; axisId: string }
   | { kind: 'preset'; mode: 'new' }
   | { kind: 'preset'; mode: 'edit'; presetId: string };
-
-/** Freshest slot straight from the store (the optimistic `set` is synchronous),
- *  so interleaved writes always merge onto the latest value. */
-function readCurrentSlot(): BookCastingSlot {
-  return normalizeCastingSlot(useBookStore.getState().currentBook?.casting_slot);
-}
 
 const COLUMN_CLASS = 'flex min-w-0 flex-1 flex-col overflow-hidden';
 const COLUMN_HEADER_CLASS = 'mb-3 flex h-6 shrink-0 items-center justify-between gap-2';
@@ -91,8 +89,24 @@ export function ConfigCastingSlotSettings() {
   const [modal, setModal] = React.useState<CastingModalState | null>(null);
   const [pendingDeleteAxisId, setPendingDeleteAxisId] = React.useState<string | null>(null);
 
-  // Normalized slot for DISPLAY only — writes read fresh via readCurrentSlot().
-  const slot = React.useMemo(() => normalizeCastingSlot(rawSlot), [rawSlot]);
+  const bookId = book?.id ?? null;
+  const source = React.useMemo<BookCastingSlot>(() => normalizeCastingSlot(rawSlot), [rawSlot]);
+  const { draft, isDirty, isSaving, patchDraft, save } = useConfigSectionDraft<BookCastingSlot>({
+    sectionKey: 'casting-slot',
+    source,
+    // No derive-keyed prune: casting has no top-level derived list — actor refs are
+    // nested inside preset assignments and dangling refs are surfaced at render
+    // (danglingActorId). Old write path stored the slot verbatim; we keep parity.
+    persistFn: async (d) => {
+      if (!bookId) throw new Error('No current book');
+      log.info('persistFn', 'saving casting slot', { bookId, axes: d.casting_axes.length });
+      assertPersisted(await updateBook(bookId, { casting_slot: d }), 'casting_slot');
+      log.info('persistFn', 'casting slot saved', { bookId });
+    },
+  });
+
+  // Draft is the single source for both display and writes.
+  const slot = draft;
   const actorOptions = React.useMemo(
     () => buildActorOptions(characters, props),
     [characters, props],
@@ -138,38 +152,25 @@ export function ConfigCastingSlotSettings() {
     return null;
   }
 
-  const bookId = book.id;
-
-  const persist = async (next: BookCastingSlot, fn: string) => {
-    const ok = await updateBook(bookId, { casting_slot: next });
-    if (!ok) log.error(fn, 'updateBook failed', { bookId });
-    return ok;
-  };
-
-  // ── Axis handlers ───────────────────────────────────────────────────────────
+  // ── Axis handlers (all mutate the local draft; persist only on Save) ─────────
   const handleSelectAxis = (axisId: string) => {
     log.debug('handleSelectAxis', 'select', { axisId });
     setSelectedAxisId(axisId);
     setSelectedPresetId(null); // fall back to the new axis's default preset
   };
 
-  const handleAxisModalOk = (draft: CastingAxisDraft) => {
+  const handleAxisModalOk = (axisDraft: CastingAxisDraft) => {
     if (!modal || modal.kind !== 'axis') return;
-    const base = readCurrentSlot();
     if (modal.mode === 'new') {
-      const { next, axisId } = addAxis(base, draft);
-      log.info('handleAxisModalOk', 'create axis', { axisId, actantCount: draft.actants.length });
-      void persist(next, 'handleAxisModalOk');
+      const { next, axisId } = addAxis(slot, axisDraft);
+      log.debug('handleAxisModalOk', 'patch draft — create axis', { axisId, actantCount: axisDraft.actants.length });
+      patchDraft(next);
       setSelectedAxisId(axisId);
       setSelectedPresetId(null);
     } else {
-      const { next, removedActantCount } = applyAxisDraft(base, modal.axisId, draft);
-      log.info('handleAxisModalOk', 'update axis', {
-        axisId: modal.axisId,
-        actantCount: draft.actants.length,
-        removedActantCount,
-      });
-      void persist(next, 'handleAxisModalOk');
+      const axisId = modal.axisId;
+      log.debug('handleAxisModalOk', 'patch draft — update axis', { axisId, actantCount: axisDraft.actants.length });
+      patchDraft((prev) => applyAxisDraft(prev, axisId, axisDraft).next);
     }
     setModal(null);
   };
@@ -177,8 +178,8 @@ export function ConfigCastingSlotSettings() {
   const handleConfirmDeleteAxis = () => {
     const axisId = pendingDeleteAxisId;
     if (!axisId) return;
-    log.info('handleConfirmDeleteAxis', 'delete axis', { axisId });
-    void persist(deleteAxis(readCurrentSlot(), axisId), 'handleConfirmDeleteAxis');
+    log.debug('handleConfirmDeleteAxis', 'patch draft — delete axis', { axisId });
+    patchDraft((prev) => deleteAxis(prev, axisId));
     if (selectedAxisId === axisId) {
       setSelectedAxisId(null);
       setSelectedPresetId(null);
@@ -189,15 +190,16 @@ export function ConfigCastingSlotSettings() {
   // ── Preset handlers ─────────────────────────────────────────────────────────
   const handlePresetModalOk = (name: string) => {
     if (!modal || modal.kind !== 'preset' || !axis) return;
-    const base = readCurrentSlot();
+    const axisId = axis.id;
     if (modal.mode === 'new') {
-      const { next, presetId } = addPreset(base, axis.id, name);
-      log.info('handlePresetModalOk', 'create preset', { axisId: axis.id, presetId });
-      void persist(next, 'handlePresetModalOk');
+      const { next, presetId } = addPreset(slot, axisId, name);
+      log.debug('handlePresetModalOk', 'patch draft — create preset', { axisId, presetId });
+      patchDraft(next);
       setSelectedPresetId(presetId);
     } else {
-      log.info('handlePresetModalOk', 'rename preset', { axisId: axis.id, presetId: modal.presetId });
-      void persist(renamePreset(base, axis.id, modal.presetId, name), 'handlePresetModalOk');
+      const presetId = modal.presetId;
+      log.debug('handlePresetModalOk', 'patch draft — rename preset', { axisId, presetId });
+      patchDraft((prev) => renamePreset(prev, axisId, presetId, name));
     }
     setModal(null);
   };
@@ -208,15 +210,17 @@ export function ConfigCastingSlotSettings() {
       log.debug('handleSetDefaultPreset', 'already default — no write', { presetId });
       return;
     }
-    log.info('handleSetDefaultPreset', 'promote', { axisId: axis.id, presetId });
-    void persist(setDefaultPreset(readCurrentSlot(), axis.id, presetId), 'handleSetDefaultPreset');
+    const axisId = axis.id;
+    log.debug('handleSetDefaultPreset', 'patch draft — promote', { axisId, presetId });
+    patchDraft((prev) => setDefaultPreset(prev, axisId, presetId));
   };
 
   // No confirm on preset delete — only axis delete has one (design §4.2).
   const handleDeletePreset = (presetId: string) => {
     if (!axis) return;
-    log.info('handleDeletePreset', 'delete', { axisId: axis.id, presetId });
-    void persist(deletePreset(readCurrentSlot(), axis.id, presetId), 'handleDeletePreset');
+    const axisId = axis.id;
+    log.debug('handleDeletePreset', 'patch draft — delete preset', { axisId, presetId });
+    patchDraft((prev) => deletePreset(prev, axisId, presetId));
     if (selectedPresetId === presetId) setSelectedPresetId(null);
   };
 
@@ -226,16 +230,15 @@ export function ConfigCastingSlotSettings() {
       log.warn('handleAssignChange', 'no axis/preset selected', { actantId });
       return;
     }
-    log.info('handleAssignChange', 'upsert assignment', {
-      axisId: axis.id,
-      presetId: preset.id,
+    const axisId = axis.id;
+    const presetId = preset.id;
+    log.debug('handleAssignChange', 'patch draft — upsert assignment', {
+      axisId,
+      presetId,
       actantId,
       actorType: option?.actor_type ?? null,
     });
-    void persist(
-      upsertAssignment(readCurrentSlot(), axis.id, preset.id, actantId, option),
-      'handleAssignChange',
-    );
+    patchDraft((prev) => upsertAssignment(prev, axisId, presetId, actantId, option));
   };
 
   // ── Render ──────────────────────────────────────────────────────────────────
@@ -250,10 +253,12 @@ export function ConfigCastingSlotSettings() {
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
-      {/* INIT header — height matches the sidebar "Settings" header */}
-      <div className="flex h-14 shrink-0 items-center border-b px-4">
-        <span className="text-sm font-semibold uppercase tracking-wide text-foreground">INIT</span>
-      </div>
+      <ConfigSectionHeader
+        title="INIT"
+        isDirty={isDirty}
+        isSaving={isSaving}
+        onSave={save}
+      />
 
       <div className="flex flex-1 gap-4 overflow-hidden p-4">
       {/* Column 1 — axes */}

@@ -147,3 +147,71 @@ describe('V1_EXPORT_CAPABILITY gating', () => {
     expect(V1_EXPORT_CAPABILITY.video.disabledLeafKeys).toEqual(['sd', 'hd', 'fhd']);
   });
 });
+
+describe('rebuild from live (distribution-draft rebuild contract)', () => {
+  it('applying flag draft onto live dist preserves status + media_url', () => {
+    // Live distribution from DB (already has status/media_url from job execution)
+    const live = coalesceDistribution({
+      printer: {
+        '300dpi': {
+          is_enabled: true,
+          status: 'updated',
+          media_url: 'https://cdn.example.com/export-300.pdf',
+          file_size: 12345,
+          exported_at: '2026-08-04T10:00:00Z',
+          job_id: 'job-123',
+        },
+        '600dpi': makeDefaultLeaf(),
+      },
+    } as unknown as Distribution);
+
+    // Draft from UI: user toggled 300dpi OFF
+    const draftFlagChange = patchLeafEnabled(live, 'printer', '300dpi', false);
+
+    // After rebuild from live with draft flags applied:
+    const rebuilt = draftFlagChange;
+    const leaf = getLeaf(rebuilt, 'printer', '300dpi');
+
+    // Status and media_url preserved
+    expect(leaf.status).toBe('updated');
+    expect(leaf.media_url).toBe('https://cdn.example.com/export-300.pdf');
+    expect(leaf.file_size).toBe(12345);
+    expect(leaf.exported_at).toBe('2026-08-04T10:00:00Z');
+    expect(leaf.job_id).toBe('job-123');
+
+    // Only is_enabled changed
+    expect(leaf.is_enabled).toBe(false);
+  });
+
+  it('sibling leaves keep their status unaffected', () => {
+    const live = coalesceDistribution({
+      printer: {
+        '300dpi': {
+          is_enabled: true,
+          status: 'updated',
+          media_url: 'https://cdn.example.com/300.pdf',
+          file_size: 1000,
+          exported_at: '2026-08-04T10:00:00Z',
+          job_id: 'job-1',
+        },
+        '600dpi': {
+          is_enabled: false,
+          status: 'pending',
+          media_url: null,
+          file_size: null,
+          exported_at: null,
+          job_id: null,
+        },
+      },
+    } as unknown as Distribution);
+
+    // Toggle 300dpi off
+    const draft = patchLeafEnabled(live, 'printer', '300dpi', false);
+
+    // 600dpi unchanged
+    const leaf600 = getLeaf(draft, 'printer', '600dpi');
+    expect(leaf600.status).toBe('pending');
+    expect(leaf600.media_url).toBeNull();
+    expect(leaf600.is_enabled).toBe(false);
+  });
+});

@@ -13,9 +13,9 @@ import {
 import {
   useBookActions,
   useBookMusic,
-  useBookNarrator,
   useBookNarratorVolume,
   useBookSound,
+  useBookStore,
   useCurrentBook,
 } from '@/stores/book-store';
 import { useMusics, useMusicsActions } from '@/stores/musics-store';
@@ -31,14 +31,24 @@ import { MusicTabPanel } from './music-tab-panel';
 import { NarratorTabPanel } from './narrator-tab-panel';
 import { SoundTabPanel } from './sound-tab-panel';
 import { TabHeader } from './tab-header';
+import {
+  ConfigSectionHeader,
+  assertPersisted,
+  useConfigSectionDraft,
+} from '../explicit-save';
 
 const log = createLogger('Editor', 'ConfigMusicsSoundsSettings');
+
+interface MusicsSoundsDraft {
+  music: BookMusicSettings | null;
+  sound: BookSoundSettings | null;
+  narratorVolumeScale: number;
+}
 
 export function ConfigMusicsSoundsSettings() {
   const book = useCurrentBook();
   const music = useBookMusic();
   const sound = useBookSound();
-  const narrator = useBookNarrator();
   const narratorVolume = useBookNarratorVolume();
   const { updateBook } = useBookActions();
 
@@ -64,58 +74,51 @@ export function ConfigMusicsSoundsSettings() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fetchMusics, fetchSounds]);
 
-  // Latest narrator snapshot to avoid wiping per-language entries on volume change.
-  const narratorRef = React.useRef<NarratorSettings | null>(narrator);
-  React.useEffect(() => {
-    narratorRef.current = narrator;
-  }, [narrator]);
+  const bookId = book?.id ?? null;
+  const source = React.useMemo<MusicsSoundsDraft>(
+    () => ({ music, sound, narratorVolumeScale: narratorVolume }),
+    [music, sound, narratorVolume],
+  );
+  const { draft, isDirty, isSaving, patchDraft, save } = useConfigSectionDraft<MusicsSoundsDraft>({
+    sectionKey: 'musics-sounds',
+    source,
+    persistFn: async (d) => {
+      if (!bookId) throw new Error('No current book');
+      // volume_scale merges into the narrator CURRENTLY in the store (not a stale
+      // draft from the Narrator section) so we never clobber peer voice edits.
+      const currentNarrator = useBookStore.getState().currentBook?.narrator ?? DEFAULT_NARRATOR;
+      const nextNarrator: NarratorSettings = { ...currentNarrator, volume_scale: d.narratorVolumeScale };
+      log.info('persistFn', 'saving musics & sounds', { bookId });
+      assertPersisted(
+        await updateBook(bookId, { music: d.music, sound: d.sound, narrator: nextNarrator }),
+        'musics-sounds',
+      );
+      log.info('persistFn', 'musics & sounds saved', { bookId });
+    },
+  });
 
   const handleMusicChange = React.useCallback(
     (next: BookMusicSettings) => {
-      if (!book) {
-        log.warn('handleMusicChange', 'no current book');
-        return;
-      }
-      log.info('handleMusicChange', 'commit', {
-        bookId: book.id,
-        bgId: next.background_id,
-        volume: next.volume_scale,
-      });
-      void updateBook(book.id, { music: next });
+      log.debug('handleMusicChange', 'patch draft', { bgId: next.background_id, volume: next.volume_scale });
+      patchDraft({ music: next });
     },
-    [book, updateBook],
+    [patchDraft],
   );
 
   const handleSoundChange = React.useCallback(
     (next: BookSoundSettings) => {
-      if (!book) {
-        log.warn('handleSoundChange', 'no current book');
-        return;
-      }
-      log.info('handleSoundChange', 'commit', {
-        bookId: book.id,
-        volume: next.volume_scale,
-      });
-      void updateBook(book.id, { sound: next });
+      log.debug('handleSoundChange', 'patch draft', { volume: next.volume_scale });
+      patchDraft({ sound: next });
     },
-    [book, updateBook],
+    [patchDraft],
   );
 
   const handleNarratorVolumeChange = React.useCallback(
     (v: number) => {
-      if (!book) {
-        log.warn('handleNarratorVolumeChange', 'no current book');
-        return;
-      }
-      const current = narratorRef.current ?? DEFAULT_NARRATOR;
-      const nextNarrator: NarratorSettings = { ...current, volume_scale: v };
-      log.info('handleNarratorVolumeChange', 'commit', {
-        bookId: book.id,
-        volume: v,
-      });
-      void updateBook(book.id, { narrator: nextNarrator });
+      log.debug('handleNarratorVolumeChange', 'patch draft', { volume: v });
+      patchDraft({ narratorVolumeScale: v });
     },
-    [book, updateBook],
+    [patchDraft],
   );
 
   if (!book) {
@@ -125,26 +128,32 @@ export function ConfigMusicsSoundsSettings() {
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
+      <ConfigSectionHeader
+        title="Musics & Sounds"
+        isDirty={isDirty}
+        isSaving={isSaving}
+        onSave={save}
+      />
       <TabHeader activeTab={activeTab} onTabChange={setActiveTab} />
 
       <div className="flex flex-col gap-5 overflow-y-auto p-4">
         {activeTab === 'music' && (
           <MusicTabPanel
-            music={music}
+            music={draft.music}
             musicsList={musicsList}
             onChange={handleMusicChange}
           />
         )}
         {activeTab === 'sound' && (
           <SoundTabPanel
-            sound={sound}
+            sound={draft.sound}
             soundsList={soundsList}
             onChange={handleSoundChange}
           />
         )}
         {activeTab === 'narrator' && (
           <NarratorTabPanel
-            volume={narratorVolume}
+            volume={draft.narratorVolumeScale}
             onChange={handleNarratorVolumeChange}
           />
         )}

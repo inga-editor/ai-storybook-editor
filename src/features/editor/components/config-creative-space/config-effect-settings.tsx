@@ -10,6 +10,11 @@ import { Switch } from '@/components/ui/switch';
 import { DEFAULT_EFFECTS, TRANSITION_OPTIONS } from '@/constants/config-constants';
 import type { BookEffectsSettings, TransitionType } from '@/types/editor';
 import { createLogger } from '@/utils/logger';
+import {
+  ConfigSectionHeader,
+  assertPersisted,
+  useConfigSectionDraft,
+} from './explicit-save';
 
 const log = createLogger('Editor', 'ConfigEffectSettings');
 
@@ -35,34 +40,45 @@ export function ConfigEffectSettings() {
   const effects = useBookEffects();
   const { updateBook } = useBookActions();
 
-  const current: BookEffectsSettings = effects ?? DEFAULT_EFFECTS;
+  const bookId = book?.id ?? null;
+  const source = React.useMemo<BookEffectsSettings>(() => effects ?? DEFAULT_EFFECTS, [effects]);
+  const { draft, isDirty, isSaving, patchDraft, save } = useConfigSectionDraft<BookEffectsSettings>({
+    sectionKey: 'effect',
+    source,
+    persistFn: async (d) => {
+      if (!bookId) throw new Error('No current book');
+      log.info('persistFn', 'saving effects', { bookId });
+      assertPersisted(await updateBook(bookId, { effects: d }), 'effects');
+      log.info('persistFn', 'effects saved', { bookId });
+    },
+  });
+
+  const current = draft;
 
   if (!book) return null;
-
-  const persist = (next: BookEffectsSettings) => {
-    log.debug('persist', 'updating effects', { ...next });
-    void updateBook(book.id, { effects: next });
-  };
 
   const handleTransitionChange = (value: string) => {
     if (!isTransitionType(value)) {
       log.warn('handleTransitionChange', 'rejected unknown value', { value });
       return;
     }
-    log.info('handleTransitionChange', 'updating', { transition_type: value });
-    persist({ ...current, transition_type: value });
+    log.debug('handleTransitionChange', 'patch draft', { transition_type: value });
+    patchDraft({ transition_type: value });
   };
 
   const handleGyroscopeChange = (checked: boolean) => {
-    log.info('handleGyroscopeChange', 'updating', { gyroscope: checked });
-    persist({ ...current, gyroscope: checked });
+    log.debug('handleGyroscopeChange', 'patch draft', { gyroscope: checked });
+    patchDraft({ gyroscope: checked });
   };
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
-      <div className="flex h-14 shrink-0 items-center border-b px-4">
-        <h3 className="text-sm font-semibold">Effect Settings</h3>
-      </div>
+      <ConfigSectionHeader
+        title="Effect Settings"
+        isDirty={isDirty}
+        isSaving={isSaving}
+        onSave={save}
+      />
       <div className="flex flex-col gap-6 overflow-y-auto p-4">
         <div>
           <GroupHeader>Transition</GroupHeader>

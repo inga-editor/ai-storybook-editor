@@ -8,6 +8,11 @@ import { SearchableDropdown } from '@/components/ui/searchable-dropdown';
 import { OUTLINE_STYLES } from '@/constants/config-constants';
 import type { BookShape } from '@/types/editor';
 import { createLogger } from '@/utils/logger';
+import {
+  ConfigSectionHeader,
+  assertPersisted,
+  useConfigSectionDraft,
+} from './explicit-save';
 
 const log = createLogger('Editor', 'ConfigObjectSettings');
 
@@ -34,15 +39,28 @@ export function ConfigObjectSettings() {
   const shape = useBookShape();
   const { updateBook } = useBookActions();
 
-  const current = shape ?? DEFAULT_SHAPE;
+  const bookId = book?.id ?? null;
+  const source = React.useMemo<BookShape>(() => shape ?? DEFAULT_SHAPE, [shape]);
+  const { draft, isDirty, isSaving, patchDraft, save } = useConfigSectionDraft<BookShape>({
+    sectionKey: 'objects',
+    source,
+    persistFn: async (d) => {
+      if (!bookId) throw new Error('No current book');
+      log.info('persistFn', 'saving shape', { bookId });
+      assertPersisted(await updateBook(bookId, { shape: d }), 'shape');
+      log.info('persistFn', 'shape saved', { bookId });
+    },
+  });
+
+  const current = draft;
 
   if (!book) return null;
 
   // ── Helpers ─────────────────────────────────────────────────────────────────
 
   const updateShape = (next: BookShape) => {
-    log.debug('updateShape', 'persisting', { fill: next.fill, outline: next.outline });
-    void updateBook(book.id, { shape: next });
+    log.debug('updateShape', 'patch draft', { fill: next.fill, outline: next.outline });
+    patchDraft(next);
   };
 
   // ── Fill handlers ────────────────────────────────────────────────────────────
@@ -65,7 +83,7 @@ export function ConfigObjectSettings() {
     updateShape({ ...current, outline: { ...current.outline, radius: val } });
 
   const handleOutlineStyle = (val: string) => {
-    log.info('handleOutlineStyle', 'updating', { type: val });
+    log.debug('handleOutlineStyle', 'patch draft', { type: val });
     updateShape({ ...current, outline: { ...current.outline, type: Number(val) } });
   };
 
@@ -75,9 +93,12 @@ export function ConfigObjectSettings() {
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
-      <div className="flex h-14 shrink-0 items-center border-b px-4">
-        <h3 className="text-sm font-semibold">Object Settings</h3>
-      </div>
+      <ConfigSectionHeader
+        title="Object Settings"
+        isDirty={isDirty}
+        isSaving={isSaving}
+        onSave={save}
+      />
       <div className="flex flex-col gap-5 overflow-y-auto p-4">
 
       <div>

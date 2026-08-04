@@ -6,15 +6,11 @@ import * as React from "react";
 import { useCurrentBook, useBookActions } from "@/stores/book-store";
 import {
   useThemes,
-  useSelectedThemeIds,
-  usePrimaryThemeId,
   useThemeActions,
   useSelectedThemes,
 } from "@/stores/theme-store";
 import {
   useGenres,
-  useSelectedGenreIds,
-  usePrimaryGenreId,
   useGenreActions,
   useSelectedGenres,
 } from "@/stores/genre-store";
@@ -32,8 +28,31 @@ import { DIMENSION_MAP, TARGET_AUDIENCE_MAP } from "@/constants/book-enums";
 import { SUPPORTED_LANGUAGES } from "@/constants/config-constants";
 import { resolveMultiLangName } from "@/utils/multi-lang-helpers";
 import { createLogger } from "@/utils/logger";
+import {
+  ConfigSectionHeader,
+  assertPersisted,
+  deepEqual,
+  useConfigSectionDraft,
+} from "./explicit-save";
 
 const log = createLogger("Editor", "ConfigGeneralSettings");
+
+interface ThemeSelection {
+  theme_id: string;
+  is_primary: boolean;
+}
+interface GenreSelection {
+  genre_id: string;
+  is_primary: boolean;
+}
+interface GeneralDraft {
+  era_id: string | null;
+  location_id: string | null;
+  artstyle_id: string | null;
+  sketchstyle_id: string | null;
+  themes: ThemeSelection[];
+  genres: GenreSelection[];
+}
 
 function FieldLabel({ children }: { children: React.ReactNode }) {
   return (
@@ -48,16 +67,12 @@ export function ConfigGeneralSettings() {
   const { updateBook } = useBookActions();
 
   const themes = useThemes();
-  const selectedThemeIds = useSelectedThemeIds();
   const selectedThemes = useSelectedThemes();
-  const primaryThemeId = usePrimaryThemeId();
-  const { fetchThemes, fetchBookThemes, updateBookThemes, setPrimaryTheme } = useThemeActions();
+  const { fetchThemes, fetchBookThemes, updateBookThemes } = useThemeActions();
 
   const genres = useGenres();
-  const selectedGenreIds = useSelectedGenreIds();
   const selectedGenres = useSelectedGenres();
-  const primaryGenreId = usePrimaryGenreId();
-  const { fetchGenres, fetchBookGenres, updateBookGenres, setPrimaryGenre } = useGenreActions();
+  const { fetchGenres, fetchBookGenres, updateBookGenres } = useGenreActions();
 
   const formats = useFormats();
   const { fetchFormats } = useFormatActions();
@@ -101,6 +116,76 @@ export function ConfigGeneralSettings() {
       void useArtStyleStore.getState().fetchArtStyle(book.artstyle_id);
     }
   }, [book?.artstyle_id, artStyleName]);
+
+  // ── Draft ─────────────────────────────────────────────────────────────────
+  const bookId = book?.id ?? null;
+  const source = React.useMemo<GeneralDraft>(
+    () => ({
+      era_id: book?.era_id ?? null,
+      location_id: book?.location_id ?? null,
+      artstyle_id: book?.artstyle_id ?? null,
+      sketchstyle_id: book?.sketchstyle_id ?? null,
+      themes: selectedThemes.map((t) => ({ theme_id: t.theme_id, is_primary: t.is_primary })),
+      genres: selectedGenres.map((g) => ({ genre_id: g.genre_id, is_primary: g.is_primary })),
+    }),
+    [
+      book?.era_id,
+      book?.location_id,
+      book?.artstyle_id,
+      book?.sketchstyle_id,
+      selectedThemes,
+      selectedGenres,
+    ],
+  );
+
+  const { draft, isDirty, isSaving, patchDraft, save } = useConfigSectionDraft<GeneralDraft>({
+    sectionKey: "general",
+    source,
+    persistFn: async (d) => {
+      if (!bookId) throw new Error("No current book");
+      log.info("persistFn", "saving general", { bookId });
+      // 1) Scalars — only when any changed (idempotent but avoids a needless write).
+      const scalarsChanged =
+        d.era_id !== source.era_id ||
+        d.location_id !== source.location_id ||
+        d.artstyle_id !== source.artstyle_id ||
+        d.sketchstyle_id !== source.sketchstyle_id;
+      if (scalarsChanged) {
+        assertPersisted(
+          await updateBook(bookId, {
+            era_id: d.era_id,
+            location_id: d.location_id,
+            artstyle_id: d.artstyle_id,
+            sketchstyle_id: d.sketchstyle_id,
+          }),
+          "general scalars",
+        );
+      }
+      // 2) Junctions — diff-sync. `updateBookThemes/Genres` persist membership AND
+      // is_primary in a single call (delete-all + insert with is_primary), so no
+      // separate setPrimary* call is needed (open question #1 resolved). Partial
+      // failure surfaces via toast; draft is kept (no FE transaction).
+      if (!deepEqual(d.themes, source.themes)) {
+        assertPersisted(await updateBookThemes(bookId, d.themes), "book themes");
+      }
+      if (!deepEqual(d.genres, source.genres)) {
+        assertPersisted(await updateBookGenres(bookId, d.genres), "book genres");
+      }
+      // 3) Art-style side-effect AFTER a successful persist (drives illustration
+      // prompt description). Reset first (fetch short-circuits on existing desc).
+      if (d.artstyle_id !== source.artstyle_id) {
+        const store = useArtStyleStore.getState();
+        store.reset();
+        if (d.artstyle_id) void store.fetchArtStyle(d.artstyle_id);
+      }
+      log.info("persistFn", "general saved", { bookId, scalarsChanged });
+    },
+  });
+
+  const selectedThemeIds = draft.themes.map((t) => t.theme_id);
+  const primaryThemeId = draft.themes.find((t) => t.is_primary)?.theme_id;
+  const selectedGenreIds = draft.genres.map((g) => g.genre_id);
+  const primaryGenreId = draft.genres.find((g) => g.is_primary)?.genre_id;
 
   if (!book) return null;
 
@@ -154,68 +239,74 @@ export function ConfigGeneralSettings() {
   // ── Handlers ────────────────────────────────────────────────────────────────
 
   const handleThemeChange = (values: string[]) => {
-    log.info("handleThemeChange", "updating", { count: values.length });
-    // Map incoming IDs to { theme_id, is_primary } — preserve existing is_primary flags
-    const newThemes = values.map((id) => {
-      const existing = selectedThemes.find((t) => t.theme_id === id);
-      return { theme_id: id, is_primary: existing?.is_primary ?? false };
-    });
-    // Store action handles auto-promote when primary is removed
-    void updateBookThemes(book.id, newThemes);
+    log.debug("handleThemeChange", "patch draft", { count: values.length });
+    // Preserve existing is_primary flags from the DRAFT (not the store).
+    patchDraft((prev) => ({
+      ...prev,
+      themes: values.map((id) => ({
+        theme_id: id,
+        is_primary: prev.themes.find((t) => t.theme_id === id)?.is_primary ?? false,
+      })),
+    }));
   };
 
   const handleGenreChange = (values: string[]) => {
-    log.info("handleGenreChange", "updating", { count: values.length });
-    const newGenres = values.map((id) => {
-      const existing = selectedGenres.find((g) => g.genre_id === id);
-      return { genre_id: id, is_primary: existing?.is_primary ?? false };
-    });
-    void updateBookGenres(book.id, newGenres);
+    log.debug("handleGenreChange", "patch draft", { count: values.length });
+    patchDraft((prev) => ({
+      ...prev,
+      genres: values.map((id) => ({
+        genre_id: id,
+        is_primary: prev.genres.find((g) => g.genre_id === id)?.is_primary ?? false,
+      })),
+    }));
   };
 
   const handlePrimaryThemeChange = (themeId: string) => {
-    log.info("handlePrimaryThemeChange", "setting primary", { themeId });
-    void setPrimaryTheme(book.id, themeId);
+    log.debug("handlePrimaryThemeChange", "patch draft", { themeId });
+    patchDraft((prev) => ({
+      ...prev,
+      themes: prev.themes.map((t) => ({ ...t, is_primary: t.theme_id === themeId })),
+    }));
   };
 
   const handlePrimaryGenreChange = (genreId: string) => {
-    log.info("handlePrimaryGenreChange", "setting primary", { genreId });
-    void setPrimaryGenre(book.id, genreId);
+    log.debug("handlePrimaryGenreChange", "patch draft", { genreId });
+    patchDraft((prev) => ({
+      ...prev,
+      genres: prev.genres.map((g) => ({ ...g, is_primary: g.genre_id === genreId })),
+    }));
   };
 
   const handleEraChange = (value: string) => {
-    log.info("handleEraChange", "updating", { eraId: value });
-    void updateBook(book.id, { era_id: value });
+    log.debug("handleEraChange", "patch draft", { eraId: value });
+    patchDraft({ era_id: value });
   };
 
   const handleLocationChange = (value: string) => {
-    log.info("handleLocationChange", "updating", { locationId: value });
-    void updateBook(book.id, { location_id: value });
+    log.debug("handleLocationChange", "patch draft", { locationId: value });
+    patchDraft({ location_id: value });
   };
 
+  // Art-style store side-effect is deferred to persistFn (runs only after a
+  // successful save), so the handler just records the choice in the draft.
   const handleArtStyleChange = (artStyleId: string | null) => {
-    log.info("handleArtStyleChange", "updating", { artStyleId });
-    void updateBook(book.id, { artstyle_id: artStyleId });
-    // Refresh the singular art-style store (drives illustration prompt
-    // description). Its fetch short-circuits on existing description, so reset
-    // first; on clear, leave it reset.
-    const store = useArtStyleStore.getState();
-    store.reset();
-    if (artStyleId) void store.fetchArtStyle(artStyleId);
+    log.debug("handleArtStyleChange", "patch draft", { artStyleId });
+    patchDraft({ artstyle_id: artStyleId });
   };
 
-  // Sketch style only persists book.sketchstyle_id — no prompt-store refresh
-  // (sketch generate-pipeline resolve is a backend follow-up, out of scope).
   const handleSketchStyleChange = (sketchStyleId: string | null) => {
-    log.info("handleSketchStyleChange", "updating", { sketchStyleId });
-    void updateBook(book.id, { sketchstyle_id: sketchStyleId });
+    log.debug("handleSketchStyleChange", "patch draft", { sketchStyleId });
+    patchDraft({ sketchstyle_id: sketchStyleId });
   };
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
-      <div className="flex h-14 shrink-0 items-center border-b px-4">
-        <h3 className="text-sm font-semibold">General Settings</h3>
-      </div>
+      <ConfigSectionHeader
+        title="General Settings"
+        isDirty={isDirty}
+        isSaving={isSaving}
+        onSave={save}
+      />
       <div className="flex flex-col gap-5 overflow-y-auto p-4">
         {/* FORMAT — readonly */}
         <div>
@@ -286,7 +377,7 @@ export function ConfigGeneralSettings() {
         <div>
           <FieldLabel>Sketch Style</FieldLabel>
           <ArtStyleSelect
-            value={book.sketchstyle_id ?? null}
+            value={draft.sketchstyle_id ?? null}
             options={sketchStyleOptions}
             onChange={handleSketchStyleChange}
             placeholder="Select sketch style..."
@@ -298,7 +389,7 @@ export function ConfigGeneralSettings() {
         <div>
           <FieldLabel>Art Style</FieldLabel>
           <ArtStyleSelect
-            value={book.artstyle_id ?? null}
+            value={draft.artstyle_id ?? null}
             options={artStyleOptions}
             onChange={handleArtStyleChange}
             placeholder="Select art style..."
@@ -311,7 +402,7 @@ export function ConfigGeneralSettings() {
           <FieldLabel>Era</FieldLabel>
           <SearchableDropdown
             options={eraOptions}
-            value={book.era_id}
+            value={draft.era_id}
             onChange={handleEraChange}
             placeholder="Select era..."
           />
@@ -322,7 +413,7 @@ export function ConfigGeneralSettings() {
           <FieldLabel>Location</FieldLabel>
           <SearchableDropdown
             options={locationOptions}
-            value={book.location_id}
+            value={draft.location_id}
             onChange={handleLocationChange}
             placeholder="Select location..."
           />

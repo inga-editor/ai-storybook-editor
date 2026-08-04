@@ -22,6 +22,13 @@ import {
 } from '@/components/ui/alert-dialog';
 import type { BookTypography, TypographyStep, TypographySettings } from '@/types/editor';
 import { createLogger } from '@/utils/logger';
+import {
+  ConfigSectionHeader,
+  assertPersisted,
+  useConfigSectionDraft,
+} from './explicit-save';
+
+const EMPTY_TYPOGRAPHY: BookTypography = { sketch: {}, illustration: {}, retouch: {} };
 
 const log = createLogger('Editor', 'ConfigTextSettings');
 
@@ -44,25 +51,40 @@ export function ConfigTextSettings() {
     langLabel: null,
   });
 
+  const bookId = book?.id ?? null;
+  const source = React.useMemo<BookTypography>(
+    () => typography ?? EMPTY_TYPOGRAPHY,
+    [typography],
+  );
+  const { draft, isDirty, isSaving, patchDraft, save } = useConfigSectionDraft<BookTypography>({
+    sectionKey: 'text',
+    source,
+    persistFn: async (d) => {
+      if (!bookId) throw new Error('No current book');
+      log.info('persistFn', 'saving typography', { bookId });
+      assertPersisted(await updateBook(bookId, { typography: d }), 'typography');
+      log.info('persistFn', 'typography saved', { bookId });
+    },
+  });
+
   if (!book) return null;
 
-  const stepTypo = typography?.[activeStep] ?? {};
+  const stepTypo = draft[activeStep] ?? {};
 
   const handleTypographyChange = (langCode: string, updates: Partial<TypographySettings>) => {
-    const current = stepTypo[langCode] ?? DEFAULT_TYPOGRAPHY;
-    const nextStep = { ...stepTypo, [langCode]: { ...current, ...updates } };
-    // Fresh empty steps first so a null book.typography yields independent {}
-    // slices (no shared module ref), then existing steps override, then activeStep.
-    const nextTypography: BookTypography = {
-      sketch: {},
-      illustration: {},
-      retouch: {},
-      ...(typography ?? {}),
-      [activeStep]: nextStep,
-    };
-
-    log.info('handleTypographyChange', 'updating', { step: activeStep, langCode, keys: Object.keys(updates) });
-    void updateBook(book.id, { typography: nextTypography });
+    log.debug('handleTypographyChange', 'patch draft', {
+      step: activeStep,
+      langCode,
+      keys: Object.keys(updates),
+    });
+    patchDraft((prev) => {
+      const prevStep = prev[activeStep] ?? {};
+      const current = prevStep[langCode] ?? DEFAULT_TYPOGRAPHY;
+      const nextStep = { ...prevStep, [langCode]: { ...current, ...updates } };
+      // Draft always carries all 3 steps (source defaults to EMPTY_TYPOGRAPHY) so a
+      // plain spread + override is enough — no null seeding needed.
+      return { ...prev, [activeStep]: nextStep };
+    });
   };
 
   const openForceApplyConfirm = (langCode: string, langLabel: string) => {
@@ -80,6 +102,12 @@ export function ConfigTextSettings() {
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
+      <ConfigSectionHeader
+        title="Text Settings"
+        isDirty={isDirty}
+        isSaving={isSaving}
+        onSave={save}
+      />
       <TextSettingsStepTabs activeStep={activeStep} onStepChange={setActiveStep} />
       <div className="flex flex-col gap-5 overflow-y-auto p-4">
         {TEXT_LANGUAGES.map((lang) => (

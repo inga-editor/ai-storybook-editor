@@ -12,6 +12,13 @@ import { NumberStepper } from '@/components/ui/number-stepper';
 import { FONT_FAMILY_OPTIONS } from '@/constants/config-constants';
 import type { BookTemplateLayout, PageNumberingPosition, PageNumberingSettings, TemplateLayout } from '@/types/editor';
 import { createLogger } from '@/utils/logger';
+import {
+  ConfigSectionHeader,
+  assertPersisted,
+  useConfigSectionDraft,
+} from './explicit-save';
+
+const EMPTY_TEMPLATE_LAYOUT: BookTemplateLayout = { spread: '', left_page: '', right_page: '' };
 
 const DEFAULT_PAGE_NUMBERING: PageNumberingSettings = {
   position: 'none',
@@ -87,6 +94,22 @@ export function ConfigLayoutSettings() {
   const [modalOpen, setModalOpen] = React.useState(false);
   const [modalTarget, setModalTarget] = React.useState<LayoutSlot | null>(null);
 
+  const bookId = book?.id ?? null;
+  const source = React.useMemo<BookTemplateLayout>(
+    () => templateLayout ?? EMPTY_TEMPLATE_LAYOUT,
+    [templateLayout],
+  );
+  const { draft, isDirty, isSaving, patchDraft, save } = useConfigSectionDraft<BookTemplateLayout>({
+    sectionKey: 'layout',
+    source,
+    persistFn: async (d) => {
+      if (!bookId) throw new Error('No current book');
+      log.info('persistFn', 'saving template layout', { bookId });
+      assertPersisted(await updateBook(bookId, { template_layout: d }), 'template_layout');
+      log.info('persistFn', 'template layout saved', { bookId });
+    },
+  });
+
   if (!book) return null;
 
   const openModal = (slot: LayoutSlot) => {
@@ -97,13 +120,8 @@ export function ConfigLayoutSettings() {
 
   const handleSelect = (layoutId: string) => {
     if (!modalTarget) return;
-    log.info('handleSelect', 'layout chosen', { slot: modalTarget, layoutId });
-    void updateBook(book.id, {
-      template_layout: {
-        ...(templateLayout ?? { spread: '', left_page: '', right_page: '' }),
-        [modalTarget]: layoutId,
-      } as BookTemplateLayout,
-    });
+    log.debug('handleSelect', 'patch draft', { slot: modalTarget, layoutId });
+    patchDraft((prev) => ({ ...prev, [modalTarget]: layoutId }));
     setModalOpen(false);
     setModalTarget(null);
   };
@@ -113,36 +131,35 @@ export function ConfigLayoutSettings() {
     setModalTarget(null);
   };
 
-  const pageNumbering = templateLayout?.page_numbering ?? DEFAULT_PAGE_NUMBERING;
+  const pageNumbering = draft.page_numbering ?? DEFAULT_PAGE_NUMBERING;
 
   const handlePageNumberingChange = (updates: Partial<PageNumberingSettings>) => {
-    const current = templateLayout?.page_numbering ?? DEFAULT_PAGE_NUMBERING;
-    const updated = { ...current, ...updates };
-    log.info('handlePageNumberingChange', 'updating', { keys: Object.keys(updates) });
-    void updateBook(book.id, {
-      template_layout: {
-        ...(templateLayout ?? { spread: '', left_page: '', right_page: '' }),
-        page_numbering: updated,
-      } as BookTemplateLayout,
-    });
+    log.debug('handlePageNumberingChange', 'patch draft', { keys: Object.keys(updates) });
+    patchDraft((prev) => ({
+      ...prev,
+      page_numbering: { ...(prev.page_numbering ?? DEFAULT_PAGE_NUMBERING), ...updates },
+    }));
   };
 
   const findLayout = (layouts: TemplateLayout[], id: string | null | undefined) =>
     id ? (layouts.find((l) => l.id === id) ?? null) : null;
 
-  const spreadSelected = findLayout(spreadLayouts, templateLayout?.spread);
-  const leftSelected = findLayout(singlePageLayouts, templateLayout?.left_page);
-  const rightSelected = findLayout(singlePageLayouts, templateLayout?.right_page);
+  const spreadSelected = findLayout(spreadLayouts, draft.spread);
+  const leftSelected = findLayout(singlePageLayouts, draft.left_page);
+  const rightSelected = findLayout(singlePageLayouts, draft.right_page);
 
   const modalLayouts = modalTarget === 'spread' ? spreadLayouts : singlePageLayouts;
-  const modalSelectedId = modalTarget ? (templateLayout?.[modalTarget] ?? null) : null;
+  const modalSelectedId = modalTarget ? (draft[modalTarget] ?? null) : null;
   const modalTitle = modalTarget ? `Select ${SLOT_LABELS[modalTarget]}` : '';
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
-      <div className="flex h-14 shrink-0 items-center border-b px-4">
-        <h3 className="text-sm font-semibold">Layout Settings</h3>
-      </div>
+      <ConfigSectionHeader
+        title="Layout Settings"
+        isDirty={isDirty}
+        isSaving={isSaving}
+        onSave={save}
+      />
 
       <div className="flex flex-col gap-8 overflow-y-auto p-6">
         {/* Double Page (Spread) */}

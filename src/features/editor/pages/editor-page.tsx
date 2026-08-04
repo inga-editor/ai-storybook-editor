@@ -42,6 +42,7 @@ import { TooltipProvider } from '@/components/ui/tooltip';
 import { InteractionLayerProvider } from '../contexts';
 import { EditHistoryBridge } from '../components/edit-history-bridge';
 import { useCollabUiActive, useCollabHolding, useCollabSavePhase, useEditSessionStatusStore } from '@/stores/edit-session-status-store';
+import { useConfigDirtyGuardActions } from '@/stores/config-dirty-guard-store';
 import type { CreativeSpaceType, PipelineStep, Language, SaveStatus } from '@/types/editor';
 import { createLogger } from '@/utils/logger';
 import { useImageTaskNotifications } from '../hooks/use-image-task-notifications';
@@ -87,6 +88,11 @@ export function EditorPage() {
   useAutoSave();
   // Flush on page hidden (tab switch / minimize / reload / close)
   useFlushOnHidden();
+
+  // Config-space dirty guard: interceptors for leaving the active config section
+  // (space switch, step switch, in-app close-book). `guard === null` outside the
+  // config space ⇒ requestNavigation runs `proceed()` synchronously (zero-cost).
+  const { requestNavigation } = useConfigDirtyGuardActions();
 
   // Editor settings
   const { setCurrentStep, resetSettings, rememberLanguageForBook, rememberStepForBook } =
@@ -236,7 +242,7 @@ export function EditorPage() {
   // flush (useFlushOnHidden), the History space's own on-mount save, or the manual
   // "Unsaved" header click (handleManualSave). Pure UI state change here.
   const handleCreativeSpaceChange = (target: CreativeSpaceType) => {
-    setActiveCreativeSpace(target);
+    requestNavigation(() => setActiveCreativeSpace(target));
   };
 
   // Persist current unsaved changes into the working-draft snapshot on demand,
@@ -260,11 +266,15 @@ export function EditorPage() {
   };
 
   const handleStepChange = (targetStep: PipelineStep) => {
-    log.debug('handleStepChange', 'flush before step switch', { to: targetStep });
-    autoSaveSnapshot();
-    setCurrentStep(targetStep);
-    setActiveCreativeSpace(getDefaultCreativeSpace(targetStep) as CreativeSpaceType);
-    handleStepChangePersist(targetStep);
+    // Step switch also leaves the current space (setActiveCreativeSpace) — guard it so a
+    // dirty config draft prompts the modal first (config-dirty-guard passes through clean).
+    requestNavigation(() => {
+      log.debug('handleStepChange', 'flush before step switch', { to: targetStep });
+      autoSaveSnapshot();
+      setCurrentStep(targetStep);
+      setActiveCreativeSpace(getDefaultCreativeSpace(targetStep) as CreativeSpaceType);
+      handleStepChangePersist(targetStep);
+    });
   };
 
   const handleLanguageChange = (newLang: Language, prevLang: Language) => {
@@ -277,8 +287,11 @@ export function EditorPage() {
     await useBookStore.getState().updateBook(bookId, { title: newTitle });
   };
 
+  // In-app close-book / back to library (menu-popover "Home"). Guard so a dirty config
+  // draft prompts the modal before leaving /editor/:id; the modal resolves (save/discard)
+  // BEFORE navigate() runs, so ConfigCreativeSpace is still mounted while blocked.
   const handleNavigateHome = () => {
-    navigate('/');
+    requestNavigation(() => navigate('/'));
   };
 
   // Clone is UI-only for now: the endpoint has not been designed (spec §3.6.3 / §4.1) — what a

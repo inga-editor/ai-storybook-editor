@@ -9,13 +9,13 @@ import {
   DEFAULT_INFERENCE_PARAMS,
   PREVIEW_TEXTS,
 } from '@/constants/config-constants';
-import {
-  useBookActions,
-  useBookNarrator,
-  useCurrentBook,
-} from '@/stores/book-store';
+import { useCurrentBook } from '@/stores/book-store';
 import { useVoicesStore } from '@/stores/voices-store';
-import type { NarratorInferenceParams, NarratorLanguageEntry } from '@/types/editor';
+import type {
+  NarratorInferenceParams,
+  NarratorLanguageEntry,
+  NarratorSettings,
+} from '@/types/editor';
 import { createLogger } from '@/utils/logger';
 
 import { buildNextNarratorWithMediaUrl } from './narrator-helpers';
@@ -82,7 +82,7 @@ function buildApiSettings(
  * field-by-field when narrator is null or a field is missing/non-numeric.
  */
 function resolveInferenceParams(
-  narrator: ReturnType<typeof useBookNarrator>,
+  narrator: NarratorSettings | null,
 ): NarratorInferenceParams {
   if (!narrator) return { ...DEFAULT_INFERENCE_PARAMS };
   return {
@@ -109,10 +109,18 @@ function resolveInferenceParams(
   };
 }
 
-export function useNarratorPreview(): NarratorPreviewApi {
+export interface UseNarratorPreviewOptions {
+  /** Draft narrator params (voice_id + inference) — preview runs against these. */
+  narrator: NarratorSettings | null;
+  /** Cache the returned media_url into the section draft (persisted on Save). */
+  onNarratorPatch: (recipe: (prev: NarratorSettings) => NarratorSettings) => void;
+}
+
+export function useNarratorPreview({
+  narrator,
+  onNarratorPatch,
+}: UseNarratorPreviewOptions): NarratorPreviewApi {
   const book = useCurrentBook();
-  const narrator = useBookNarrator();
-  const { updateBook } = useBookActions();
 
   const [playingLangCode, setPlayingLangCode] = useState<string | null>(null);
   const [generatingLangCode, setGeneratingLangCode] = useState<string | null>(
@@ -281,12 +289,9 @@ export function useNarratorPreview(): NarratorPreviewApi {
           durationMs: result.data.durationMs,
         });
 
-        const nextNarrator = buildNextNarratorWithMediaUrl(
-          narrator,
-          langCode,
-          audioUrl,
-        );
-        await updateBook(book.id, { narrator: nextNarrator });
+        // Cache media_url onto the LATEST draft (producer form) so a concurrent
+        // inference edit made during the async call is not clobbered.
+        onNarratorPatch((prev) => buildNextNarratorWithMediaUrl(prev, langCode, audioUrl));
         setPlayingLangCode(langCode);
       } catch (err) {
         // callNarrateScript handles known errors; this catches truly unexpected.
@@ -306,7 +311,7 @@ export function useNarratorPreview(): NarratorPreviewApi {
         setGeneratingLangCode((cur) => (cur === langCode ? null : cur));
       }
     },
-    [book, narrator, updateBook],
+    [book, narrator, onNarratorPatch],
   );
 
   return {

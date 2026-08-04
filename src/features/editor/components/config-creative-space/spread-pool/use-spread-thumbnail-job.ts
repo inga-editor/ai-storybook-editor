@@ -26,7 +26,6 @@ import {
 } from '@/apis/jobs-api';
 import { resolveBleedCanvasSize } from '@/utils/canvas-math-utils';
 import { useAuthStore } from '@/stores/auth-store';
-import { useSnapshotStore } from '@/stores/snapshot-store';
 import { useSnapshotActions } from '@/stores/snapshot-store/selectors';
 import { createLogger } from '@/utils/logger';
 
@@ -53,6 +52,13 @@ interface UseSpreadThumbnailJobArgs {
   snapshotId: string | null;
   dimension: number | null;
   spreadCount: number;
+  /**
+   * Persist any pending section draft BEFORE enqueue (⚡rev 2026-08-04, explicit save).
+   * `useConfigDirtyGuardActions().ensureSaved` — dirty → auto-save; returns `false` when
+   * the save failed so the caller ABORTS the enqueue (job renders from the DB snapshot,
+   * never from stale in-memory draft). Replaces the former internal `flushSnapshot`.
+   */
+  ensureSaved: () => Promise<boolean>;
 }
 
 export function useSpreadThumbnailJob({
@@ -60,8 +66,9 @@ export function useSpreadThumbnailJob({
   snapshotId,
   dimension,
   spreadCount,
+  ensureSaved,
 }: UseSpreadThumbnailJobArgs): UseSpreadThumbnailJob {
-  const { fetchSnapshot, flushSnapshot } = useSnapshotActions();
+  const { fetchSnapshot } = useSnapshotActions();
 
   // Active job for this book (types-filtered so actor/remix/export jobs never match).
   const job = useActiveJob({ types: [...SPREAD_THUMBNAIL_TYPES], bookId });
@@ -142,18 +149,19 @@ export function useSpreadThumbnailJob({
       canvasH: canvas.height,
       spreadCount,
     });
-    setIsStarting(true); // immediate button feedback — before the flush/enqueue round-trips
+    setIsStarting(true); // immediate button feedback — before the save/enqueue round-trips
     void (async () => {
       try {
-        // The user committed to generating — flush pending BATCHED pool/title edits
-        // FIRST (the job renders from the DB snapshot, and this also drains every dirty
-        // source before the job's server-side `thumbnail_url` leaf-writes start, so no
-        // stale whole-snapshot flush can clobber them mid-job). Still-dirty after the
-        // flush = upsert failed → abort the enqueue rather than render stale data.
-        await flushSnapshot();
-        if (useSnapshotStore.getState().sync.isDirty) {
-          log.error('startGenerate', 'pre-enqueue flush failed — abort', { bookId });
+        // The user committed to generating — persist the pending section draft FIRST
+        // (⚡rev 2026-08-04): the job renders from the DB snapshot, and ensureSaved also
+        // drains every dirty source before the job's server-side `thumbnail_url` leaf-
+        // writes start, so no stale whole-snapshot flush can clobber them mid-job.
+        // Save failed → abort the enqueue rather than render stale data.
+        const ok = await ensureSaved();
+        if (!ok) {
+          log.error('startGenerate', 'pre-enqueue save failed — abort', { bookId });
           toast.error('Chưa lưu được thay đổi — vui lòng thử lại.');
+          setIsStarting(false);
           return;
         }
         const data = await enqueueSpreadThumbnails({ snapshot_id: snapshotId, canvas });
@@ -212,7 +220,7 @@ export function useSpreadThumbnailJob({
         setIsStarting(false);
       }
     })();
-  }, [snapshotId, spreadCount, dimension, bookId, flushSnapshot]);
+  }, [snapshotId, spreadCount, dimension, bookId, ensureSaved]);
 
   return { isRunning, progress, thumbnailOverrides, startGenerate };
 }

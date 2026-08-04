@@ -16,10 +16,20 @@ import { ConfigCastingSlotSettings } from './config-casting-slot-settings';
 import { ConfigDistributionSettings } from './config-distribution-settings';
 import { ConfigMusicsSoundsSettings } from './musics-sounds/config-musics-sounds-settings';
 import { ConfigSpreadPoolSettings } from './spread-pool/config-spread-pool-settings';
-import type { ConfigSection } from '@/constants/config-constants';
+import { UnsavedChangesModal, useBeforeUnloadWhenDirty } from './explicit-save';
+import { CONFIG_SECTIONS, type ConfigSection } from '@/constants/config-constants';
+import {
+  useConfigDirtyGuardActions,
+  useConfigGuardPending,
+  useConfigGuardResolving,
+} from '@/stores/config-dirty-guard-store';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('Editor', 'ConfigCreativeSpace');
+
+function sectionLabel(section: ConfigSection): string {
+  return CONFIG_SECTIONS.find((s) => s.key === section)?.label ?? section;
+}
 
 function PlaceholderPanel({ label }: { label: string }) {
   return (
@@ -32,10 +42,24 @@ function PlaceholderPanel({ label }: { label: string }) {
 export function ConfigCreativeSpace() {
   const [activeSection, setActiveSection] = React.useState<ConfigSection>('general');
 
-  const handleSectionChange = React.useCallback((section: ConfigSection) => {
-    log.info('handleSectionChange', 'navigated', { section });
-    setActiveSection(section);
-  }, []);
+  const { requestNavigation, resolveSave, resolveDiscard, resolveStay } =
+    useConfigDirtyGuardActions();
+  const pending = useConfigGuardPending();
+  const resolving = useConfigGuardResolving();
+
+  // Reload / close-tab guard: single listener, checks dirty at runtime (see hook).
+  useBeforeUnloadWhenDirty();
+
+  const handleSectionChange = React.useCallback(
+    (section: ConfigSection) => {
+      // Guard passes through synchronously when the active section is clean / unregistered.
+      requestNavigation(() => {
+        log.info('handleSectionChange', 'navigated', { from: activeSection, to: section });
+        setActiveSection(section);
+      });
+    },
+    [requestNavigation, activeSection],
+  );
 
   const renderPanel = () => {
     switch (activeSection) {
@@ -62,6 +86,15 @@ export function ConfigCreativeSpace() {
       <main className="flex flex-1 flex-col overflow-hidden">
         {renderPanel()}
       </main>
+      {pending && (
+        <UnsavedChangesModal
+          sectionLabel={sectionLabel(activeSection)}
+          isSaving={resolving}
+          onSave={resolveSave}
+          onDiscard={resolveDiscard}
+          onStay={resolveStay}
+        />
+      )}
     </div>
   );
 }

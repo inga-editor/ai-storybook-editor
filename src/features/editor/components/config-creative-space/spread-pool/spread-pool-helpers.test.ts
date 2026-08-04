@@ -9,8 +9,11 @@ import {
   mergeTitle,
   resolveTitleText,
   originalTitleText,
+  projectPoolFields,
+  diffPoolDraft,
 } from './spread-pool-helpers';
 import type { BranchSetting, Section } from '@/types/illustration-types';
+import type { BaseSpread } from '@/types/spread-types';
 
 function section(over: Partial<Section>): Section {
   return { id: 's', title: '', start_spread_id: '', end_spread_id: '', ...over };
@@ -117,5 +120,137 @@ describe('isPoolToggleLocked', () => {
   it("prefers 'branch' over 'section' when both apply", () => {
     const sections = [section({ start_spread_id: 'sp1', end_spread_id: 'sp1' })];
     expect(isPoolToggleLocked({ id: 'sp1', branch_setting: BRANCH }, sections)).toBe('branch');
+  });
+});
+
+describe('projectPoolFields', () => {
+  function spread(id: string, over: Partial<BaseSpread> = {}): BaseSpread {
+    return { id, pages: [], images: [], textboxes: [], ...over };
+  }
+
+  it('extracts pool + title from spreads into a draft object', () => {
+    const spreads = [
+      spread('sp1', { pool: { is_true: true, is_default: false }, title: { en_US: { text: 'Hello' } } }),
+      spread('sp2', { pool: undefined, title: undefined }),
+      spread('sp3'), // neither pool nor title
+    ];
+    const draft = projectPoolFields(spreads);
+    expect(draft).toEqual({
+      sp1: { pool: { is_true: true, is_default: false }, title: { en_US: { text: 'Hello' } } },
+      sp2: { pool: null, title: null },
+      sp3: { pool: null, title: null },
+    });
+  });
+
+  it('always includes both pool and title keys (even if null)', () => {
+    const spreads = [spread('sp1')];
+    const draft = projectPoolFields(spreads);
+    expect(draft.sp1).toHaveProperty('pool');
+    expect(draft.sp1).toHaveProperty('title');
+    expect(draft.sp1.pool).toBeNull();
+    expect(draft.sp1.title).toBeNull();
+  });
+
+  it('empty spreads → empty draft', () => {
+    expect(projectPoolFields([])).toEqual({});
+  });
+
+  it('does not include thumbnail_url (BE leaf-write stays out)', () => {
+    const spreads = [spread('sp1', { thumbnail_url: 'https://cdn.example.com/thumb.webp' })];
+    const draft = projectPoolFields(spreads);
+    expect(draft.sp1).not.toHaveProperty('thumbnail_url');
+  });
+});
+
+describe('diffPoolDraft', () => {
+  function spread(id: string, over: Partial<BaseSpread> = {}): BaseSpread {
+    return { id, pages: [], images: [], textboxes: [], ...over };
+  }
+
+  it('returns empty array when draft matches source', () => {
+    const spreads = [
+      spread('sp1', { pool: { is_true: true, is_default: false }, title: { en_US: { text: 'Hello' } } }),
+    ];
+    const source = projectPoolFields(spreads);
+    const draft = projectPoolFields(spreads); // identical copy
+    expect(diffPoolDraft(draft, source)).toEqual([]);
+  });
+
+  it('detects pool changes', () => {
+    const spreads = [spread('sp1', { pool: { is_true: true, is_default: false } })];
+    const source = projectPoolFields(spreads);
+    const draft = { sp1: { pool: { is_true: false, is_default: false }, title: null } };
+    const diffs = diffPoolDraft(draft, source);
+    expect(diffs).toHaveLength(1);
+    expect(diffs[0].spreadId).toBe('sp1');
+    expect(diffs[0].patch).toEqual({ pool: { is_true: false, is_default: false } });
+  });
+
+  it('detects title changes', () => {
+    const spreads = [spread('sp1', { title: { en_US: { text: 'Hello' } } })];
+    const source = projectPoolFields(spreads);
+    const draft = { sp1: { pool: null, title: { en_US: { text: 'World' } } } };
+    const diffs = diffPoolDraft(draft, source);
+    expect(diffs).toHaveLength(1);
+    expect(diffs[0].patch).toEqual({ title: { en_US: { text: 'World' } } });
+  });
+
+  it('detects both pool and title changes in one spread', () => {
+    const spreads = [spread('sp1', { pool: { is_true: true, is_default: false }, title: { en_US: { text: 'Old' } } })];
+    const source = projectPoolFields(spreads);
+    const draft = { sp1: { pool: { is_true: false, is_default: true }, title: { en_US: { text: 'New' } } } };
+    const diffs = diffPoolDraft(draft, source);
+    expect(diffs).toHaveLength(1);
+    expect(diffs[0].patch).toEqual({
+      pool: { is_true: false, is_default: true },
+      title: { en_US: { text: 'New' } },
+    });
+  });
+
+  it('prunes deleted spreads: ids gone from source are skipped', () => {
+    const spreads = [spread('sp1', { title: { en_US: { text: 'Hello' } } })];
+    const source = projectPoolFields(spreads);
+    // Draft has a spread that no longer exists in source
+    const draft = {
+      sp1: { pool: null, title: { en_US: { text: 'Hello' } } },
+      sp2: { pool: null, title: { en_US: { text: 'Orphaned' } } }, // deleted
+    };
+    const diffs = diffPoolDraft(draft, source);
+    // sp2 is not in source, so it's pruned
+    expect(diffs).toEqual([]);
+  });
+
+  it('only emits NON-NULL values in patch', () => {
+    const spreads = [
+      spread('sp1', { pool: { is_true: true, is_default: false } }),
+      spread('sp2', { pool: undefined, title: { en_US: { text: 'Has title' } } }),
+    ];
+    const source = projectPoolFields(spreads);
+    const draft = {
+      sp1: { pool: { is_true: false, is_default: false }, title: undefined }, // pool changed
+      sp2: { pool: undefined, title: undefined }, // both undefined (cleared)
+    };
+    const diffs = diffPoolDraft(draft, source);
+    // sp1: pool changed (emitted)
+    // sp2: title went from "Has title" to null (not emitted — only non-null values)
+    expect(diffs).toHaveLength(1);
+    expect(diffs[0].spreadId).toBe('sp1');
+    expect(diffs[0].patch).toEqual({ pool: { is_true: false, is_default: false } });
+  });
+
+  it('preserves order of changed spreads', () => {
+    const spreads = [
+      spread('sp1', { title: { en_US: { text: 'First' } } }),
+      spread('sp2', { title: { en_US: { text: 'Second' } } }),
+      spread('sp3', { title: { en_US: { text: 'Third' } } }),
+    ];
+    const source = projectPoolFields(spreads);
+    const draft = {
+      sp1: { pool: null, title: { en_US: { text: 'Changed' } } },
+      sp2: { pool: null, title: { en_US: { text: 'Second' } } }, // unchanged
+      sp3: { pool: null, title: { en_US: { text: 'Changed' } } },
+    };
+    const diffs = diffPoolDraft(draft, source);
+    expect(diffs.map((d) => d.spreadId)).toEqual(['sp1', 'sp3']);
   });
 });

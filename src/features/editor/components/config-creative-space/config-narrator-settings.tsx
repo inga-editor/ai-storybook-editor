@@ -1,6 +1,6 @@
 // config-narrator-settings.tsx
 // Root panel: ElevenLabs inference params + per-language voice pickers (5 langs).
-// Orchestrates preview hook (single-active player) and debounces slider-driven updates.
+// Orchestrates preview hook (single-active player); edits update a local draft, persisted on [Save] (spec 15).
 
 import * as React from 'react';
 
@@ -13,11 +13,11 @@ import {
 import {
   useBookActions,
   useBookNarrator,
+  useBookStore,
   useCurrentBook,
 } from '@/stores/book-store';
 import type { NarratorSettings } from '@/types/editor';
 import { createLogger } from '@/utils/logger';
-import { useDebouncedCallback } from '@/utils/use-debounced-callback';
 import { VoiceInferenceParams } from '@/features/voices/components/voice-inference-params';
 import type { VoiceInferenceParamsValue } from '@/features/voices/components/voice-inference-params';
 
@@ -28,41 +28,38 @@ import {
 } from './narrator-helpers';
 import { useNarratorPreview } from './use-narrator-preview';
 import { NarratorLanguageSection } from './narrator/narrator-language-section';
-
-// Sliders are the only "continuous" surface — debounce these to avoid spamming updateBook.
-// Chip-based speed + speaker_boost switch + voice select commit immediately (discrete events).
-const CONTINUOUS_FIELDS: ReadonlyArray<keyof VoiceInferenceParamsValue> = [
-  'stability',
-  'similarity',
-  'exaggeration',
-];
-
-const DEBOUNCE_MS = 300;
+import {
+  ConfigSectionHeader,
+  assertPersisted,
+  useConfigSectionDraft,
+} from './explicit-save';
 
 const log = createLogger('Editor', 'ConfigNarratorSettings');
-
-/** Detect which inference field (if any) changed between two snapshots. */
-function detectChangedField(
-  prev: VoiceInferenceParamsValue,
-  next: VoiceInferenceParamsValue,
-): keyof VoiceInferenceParamsValue | null {
-  const keys: Array<keyof VoiceInferenceParamsValue> = [
-    'speed',
-    'stability',
-    'similarity',
-    'exaggeration',
-    'speaker_boost',
-  ];
-  for (const k of keys) {
-    if (prev[k] !== next[k]) return k;
-  }
-  return null;
-}
 
 export function ConfigNarratorSettings() {
   const book = useCurrentBook();
   const narrator = useBookNarrator();
   const { updateBook } = useBookActions();
+
+  const bookId = book?.id ?? null;
+  const source = React.useMemo<NarratorSettings>(() => narrator ?? DEFAULT_NARRATOR, [narrator]);
+  const { draft, isDirty, isSaving, patchDraft, save } = useConfigSectionDraft<NarratorSettings>({
+    sectionKey: 'narrator',
+    source,
+    persistFn: async (d) => {
+      if (!bookId) throw new Error('No current book');
+      // `volume_scale` is owned by the Musics & Sounds section, not here — preserve
+      // the LIVE store value so saving voice/inference never reverts a volume edit
+      // made in the other section (mirrors Musics & Sounds' merge).
+      const liveVol = useBookStore.getState().currentBook?.narrator?.volume_scale;
+      const next: NarratorSettings =
+        liveVol != null ? { ...d, volume_scale: liveVol } : d;
+      log.info('persistFn', 'saving narrator', { bookId });
+      assertPersisted(await updateBook(bookId, { narrator: next }), 'narrator');
+      log.info('persistFn', 'narrator saved', { bookId });
+    },
+  });
+
   const {
     playingLangCode,
     generatingLangCode,
@@ -70,92 +67,32 @@ export function ConfigNarratorSettings() {
     requestPreview,
     setPlayingLang,
     clearError,
-  } = useNarratorPreview();
+  } = useNarratorPreview({ narrator: draft, onNarratorPatch: patchDraft });
 
-  // Latest narrator snapshot for handlers — avoids stale closures during debounced commits.
-  const narratorRef = React.useRef<NarratorSettings | null>(narrator);
-  React.useEffect(() => {
-    narratorRef.current = narrator;
-  }, [narrator]);
-
-  // Local mirror of inference params. Drives the controlled VoiceInferenceParams so
-  // sliders track drag at 60fps regardless of the network-debounced store commit.
-  // Reconciled from the store when `narrator` changes externally AND no commit is pending.
-  const [localInference, setLocalInference] = React.useState<VoiceInferenceParamsValue>(
-    () => extractInference(narrator),
-  );
-  const pendingCommitRef = React.useRef(false);
-
-  React.useEffect(() => {
-    if (pendingCommitRef.current) return;
-    setLocalInference(extractInference(narrator));
-  }, [narrator]);
-
-  // Debounced commit for slider-driven updates (see CONTINUOUS_FIELDS).
-  const debouncedCommit = useDebouncedCallback((next: NarratorSettings) => {
-    pendingCommitRef.current = false;
-    if (!book) return;
-    log.debug('debouncedCommit', 'flushing narrator update', { bookId: book.id });
-    void updateBook(book.id, { narrator: next });
-  }, DEBOUNCE_MS);
+  // Inference slider values are derived straight from the draft (local state →
+  // sliders track drag at 60fps without a network round-trip / debounce).
+  const localInference = React.useMemo(() => extractInference(draft), [draft]);
 
   const handleInferenceChange = React.useCallback(
     (next: VoiceInferenceParamsValue) => {
-      if (!book) {
-        log.warn('handleInferenceChange', 'no current book');
-        return;
-      }
-      // Seed from DEFAULT_NARRATOR on first interaction so language entries survive future edits.
-      const current = narratorRef.current ?? DEFAULT_NARRATOR;
-      const changedField = detectChangedField(extractInference(current), next);
-      if (!changedField) {
-        log.debug('handleInferenceChange', 'no diff — ignoring');
-        return;
-      }
-
-      // Instant visual update — slider tracks drag without waiting for store.
-      setLocalInference(next);
-
-      // Per Validation S1: do NOT wipe media_url — preserve prior language entries.
-      const merged: NarratorSettings = { ...current, ...next };
-
-      const isContinuous = CONTINUOUS_FIELDS.includes(changedField);
-      log.debug('handleInferenceChange', 'param changed', {
-        field: String(changedField),
-        debounced: isContinuous,
-      });
-
-      if (isContinuous) {
-        pendingCommitRef.current = true;
-        debouncedCommit(merged);
-      } else {
-        pendingCommitRef.current = false;
-        void updateBook(book.id, { narrator: merged });
-      }
+      // Per Validation S1: do NOT wipe media_url — merge only the 5 inference fields.
+      log.debug('handleInferenceChange', 'patch draft');
+      patchDraft((prev) => ({ ...prev, ...next }));
     },
-    [book, debouncedCommit, updateBook],
+    [patchDraft],
   );
 
   const handleInferenceReset = React.useCallback(() => {
-    if (!book) return;
-    // Preserve language entries (media_url kept per Validation S1); reset the 5 inference fields only.
-    const current = narratorRef.current ?? DEFAULT_NARRATOR;
-    const next: NarratorSettings = { ...current, ...DEFAULT_INFERENCE_PARAMS };
-    log.info('handleInferenceReset', 'reset to defaults (media_url preserved)');
-    setLocalInference({ ...DEFAULT_INFERENCE_PARAMS });
-    pendingCommitRef.current = false;
-    void updateBook(book.id, { narrator: next });
-  }, [book, updateBook]);
+    log.debug('handleInferenceReset', 'patch draft — reset inference (media_url preserved)');
+    patchDraft((prev) => ({ ...prev, ...DEFAULT_INFERENCE_PARAMS }));
+  }, [patchDraft]);
 
   const handleVoiceChange = React.useCallback(
     (langCode: string, voiceId: string) => {
-      if (!book) return;
-      const current = narratorRef.current ?? DEFAULT_NARRATOR;
-      const next = buildNextNarratorWithVoiceChange(current, langCode, voiceId);
-      log.info('handleVoiceChange', 'voice set', { langCode });
-      void updateBook(book.id, { narrator: next });
+      log.debug('handleVoiceChange', 'patch draft — voice set', { langCode });
+      patchDraft((prev) => buildNextNarratorWithVoiceChange(prev, langCode, voiceId));
     },
-    [book, updateBook],
+    [patchDraft],
   );
 
   const handleRequestPreview = React.useCallback(
@@ -181,9 +118,12 @@ export function ConfigNarratorSettings() {
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
-      <div className="flex h-14 shrink-0 items-center border-b px-4">
-        <h3 className="text-sm font-semibold">Narrator Settings</h3>
-      </div>
+      <ConfigSectionHeader
+        title="Narrator Settings"
+        isDirty={isDirty}
+        isSaving={isSaving}
+        onSave={save}
+      />
 
       <div className="flex flex-col gap-5 overflow-y-auto p-4">
         <VoiceInferenceParams
@@ -201,7 +141,7 @@ export function ConfigNarratorSettings() {
               key={lang.code}
               langCode={lang.code}
               langLabel={lang.label}
-              entry={getLanguageEntry(narrator, lang.code)}
+              entry={getLanguageEntry(draft, lang.code)}
               isGenerating={generatingLangCode === lang.code}
               isActivePlayer={playingLangCode === lang.code}
               error={
