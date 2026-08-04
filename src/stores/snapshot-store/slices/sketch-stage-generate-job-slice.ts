@@ -33,14 +33,9 @@ import {
 // 2-cell cut reuses the kind-agnostic positional cutter (api 10) — no stage-specific crop route.
 import { callCropSheetRow } from '@/apis/sketch-variant-api';
 import type { ImageApiFailure } from '@/apis/image-api-client';
-// resource-lock-store is a leaf store (loaded before the slices); unit tests mock it.
-import { useResourceLockStore, keyOf } from '@/stores/resource-lock-store';
-// useSaveSessionStore is imported DYNAMICALLY at call-time — a static import would create an
-// eval-time cycle (save-session-store → snapshot-store/index → this slice).
-import {
-  flushSketchStageUnderLock,
-  resolveSketchStageLockTarget,
-} from './collab-sketch-stage-save-helper';
+// Sibling slice-helper — whole sketch-stage persist, now a thin `ensureSaved` seam (unified-item-save
+// phase 3); the engine owns the solo/collab fork + lock lifecycle + baseline rebase.
+import { flushSketchStageUnderLock } from './collab-sketch-stage-save-helper';
 import { buildImageVersionSaveResource } from '@/utils/save-resource-path';
 import { toast } from 'sonner';
 import { createLogger } from '@/utils/logger';
@@ -136,31 +131,14 @@ export const createSketchStageGenerateJobSlice: StateCreator<
     });
   }
 
-  /** Persist the RESULT of a chain (sheet + crops already in the store) — the deliberate
-   *  persist-after EXCEPTION to batch-at-release (AI output must not be lost to a crash / leaving
-   *  the space). COLLAB → gateway whole-stage flush, `releaseIfAcquired:true` (one-shot — the user
-   *  may have browsed away during the long AI call and the held-session already released the
-   *  stage). SOLO → legacy fire-and-forget autoSaveSnapshot. */
+  /** Persist the RESULT of a chain (sheet + crops already in the store) — the deliberate persist-after
+   *  EXCEPTION to batch-at-release (AI output must not be lost to a crash / leaving the space).
+   *  Fire-and-forget, SILENT (background persist — no toast). ⚡ unified-item-save phase 3: the
+   *  solo/collab fork + manual rebase are GONE — the engine's `ensureSaved` (via
+   *  `flushSketchStageUnderLock`) internalizes them (held → save + rebase; browsed away → one-shot;
+   *  solo → whole-snapshot flush). */
   function persistStage(stageKey: string): void {
-    if (useResourceLockStore.getState().collabPersist) {
-      // ⚡ Await the flush + rebase the held-session baseline ON SUCCESS (spec §4.4) so the eventual
-      // release-save doesn't double-write the just-persisted sheet (parity with image-task-slice).
-      // Fire-and-forget; rebaseBaseline no-ops if the session already released or is solo.
-      void (async () => {
-        const saved = await flushSketchStageUnderLock(stageKey, stageOf(stageKey) ?? null, {
-          releaseIfAcquired: true,
-        });
-        if (!saved) return;
-        const bookId = useResourceLockStore.getState().bookId;
-        if (!bookId) return;
-        const { useSaveSessionStore } = await import('@/stores/save-session-store');
-        useSaveSessionStore
-          .getState()
-          .rebaseBaseline(keyOf(bookId, resolveSketchStageLockTarget(stageKey)));
-      })();
-    } else {
-      void get().autoSaveSnapshot();
-    }
+    void flushSketchStageUnderLock(stageKey);
   }
 
   // ── auto-cut (phase 2) — throws on failure so the caller's catch records the error. No DB read.

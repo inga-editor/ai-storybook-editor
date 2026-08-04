@@ -34,6 +34,7 @@ import {
   buildSketchStagePayload,
   flushSketchStageUnderLock,
 } from '@/stores/snapshot-store/slices/collab-sketch-stage-save-helper';
+import { toastSketchSaveOutcome } from '@/stores/snapshot-store/slices/sketch-save-outcome-toast';
 import { useRegisterEditCommit } from '@/stores/edit-session-status-store';
 import { useHeldResourceSession } from '@/features/editor/hooks/use-held-resource-session';
 import { createLogger } from '@/utils/logger';
@@ -127,22 +128,19 @@ export function useStageLockSession(): UseStageLockSessionResult {
 
   /**
    * ⚡ H2 — the ONE gesture that persists eagerly (`handleSelectCrop`). The pick mutates the store
-   * SYNCHRONOUSLY in the same event that adopts the stage, while the held-session captures its
-   * baseline only after acquire()'s network round-trip — if that RTT outlasts the click, the
-   * baseline is cloned ALREADY-PICKED → the release dirty-diff is false → the pick is silently
-   * skipped. This baseline-independent flush closes the race (common path: one redundant
-   * idempotent whole-node write).
+   * SYNCHRONOUSLY in the same event that adopts the stage, so the held-session baseline (captured
+   * after acquire's round-trip) can be cloned ALREADY-PICKED → the release dirty-diff false → pick
+   * lost.
    *
-   * ⚠️ Deliberately NOT `releaseIfAcquired:true` — copied verbatim from the variant space's H2
-   * doc: `adopt()` runs immediately before this, so the held-session is about to own the lock. In
-   * exactly the race window (`myLocks` still empty, acquire in flight) a one-shot release here
-   * would drop the lock the held-session believes it holds → every later release-save 409s →
-   * silently skipped, header still "Saved" = whole-session data loss with false-positive UI.
+   * ⚡ unified-item-save phase 3: routes through the engine's `ensureSaved` (via
+   * `flushSketchStageUnderLock`) — a `saveNow` while held (keeps the lock), or a one-shot in the
+   * narrow in-flight-acquire race (idle auto-save 60s is the net). Caller toasts the outcome.
    */
   const flushStageNow = useCallback((stageKey: string) => {
-    const node = useSnapshotStore.getState().sketch.stages.find((s) => s.key === stageKey) ?? null;
-    log.debug('flushStageNow', 'baseline-independent flush', { stageKey });
-    void flushSketchStageUnderLock(stageKey, node);
+    log.debug('flushStageNow', 'engine ensureSaved (H2 net)', { stageKey });
+    void flushSketchStageUnderLock(stageKey).then((outcome) =>
+      toastSketchSaveOutcome(outcome, resolveSketchStageLockTarget(stageKey)),
+    );
   }, []);
 
   // Memoized handle (referential stability for consumers' useCallback deps). Changes exactly when

@@ -34,6 +34,7 @@ import {
   buildSketchLineupsPayload,
   flushSketchLineupsUnderLock,
 } from '@/stores/snapshot-store/slices/collab-sketch-lineups-save-helper';
+import { toastSketchSaveOutcome } from '@/stores/snapshot-store/slices/sketch-save-outcome-toast';
 import { toastLockedByOther } from '@/utils/collab-save-toasts';
 import { resolveLockHolderName } from '@/stores/snapshot-store/slices/collab-image-save-helper';
 import { useRegisterEditCommit } from '@/stores/edit-session-status-store';
@@ -123,9 +124,16 @@ export function useLineupLockSession(): UseLineupLockSessionResult {
       // idempotent renew of the lock we just took.
       setEngaged(true);
       mutate();
-      // Baseline-independent immediate flush (Insight #3 — never lose the first mutation).
-      const ok = await flushSketchLineupsUnderLock(getNode());
-      if (!ok) log.warn('withLock', 'immediate flush failed (held-session release-save remains)');
+      // Immediate flush (Insight #3 — never lose the first mutation). ⚡ phase 3: routes through the
+      // engine's `ensureSaved` (saveNow while held, or one-shot in the acquire-in-flight race); the
+      // caller toasts the outcome (the seam no longer self-toasts).
+      const outcome = await flushSketchLineupsUnderLock();
+      if (outcome !== 'saved' && outcome !== 'clean') {
+        log.warn('withLock', 'immediate flush not persisted (held-session release-save remains)', {
+          outcome,
+        });
+        toastSketchSaveOutcome(outcome, LINEUP_LOCK_TARGET);
+      }
       return true;
     },
     [getNode],

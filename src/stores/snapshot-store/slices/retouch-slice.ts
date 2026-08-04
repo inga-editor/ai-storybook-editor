@@ -5,10 +5,6 @@ import type { StateCreator } from 'zustand';
 import type { SnapshotStore, RetouchSlice } from '../types';
 import { createLogger } from '@/utils/logger';
 import { loadAudioMetadata } from '@/features/editor/utils/load-audio-metadata';
-import {
-  persistSceneShapeCollab,
-  persistSceneShapeDeleteCollab,
-} from './collab-scene-save-helper';
 import { RETOUCH_OWNED_KEYS } from './collab-owned-subtree';
 
 const log = createLogger('Store', 'RetouchSlice');
@@ -19,8 +15,12 @@ const log = createLogger('Store', 'RetouchSlice');
 // snapshot node — the former per-node fire-and-forget gateway saves (`persistRetouchNodeCollab` /
 // `persistRetouchDeleteCollab` / `persistAnimationsCollectionCollab`) were REMOVED here so the
 // held-session save-on-release is the SINGLE writer for these keys (no double-write / lost-write).
-// EXCEPTION — `shapes` (add/update/deleteRetouchShape) still routes through the SCENE rtype-8 path
-// (`persistSceneShapeCollab`); its re-home onto the retouch path is a later (scene) task.
+// ⚡ unified-item-save phase 3 (2026-08-04): `shapes` (add/update/deleteRetouchShape) is now ALSO a
+// RETOUCH_OWNED_KEY — the former one-shot SCENE rtype-8 gateway writes (`persistSceneShapeCollab*`)
+// were REMOVED here so a dirty shape falls into the per-spread `retouch-spread` held session (rtype
+// 10) like every other owned key. ⚠️ SHIP-COUPLING: this FE re-route MUST deploy TOGETHER with the
+// BE owned-key merge accepting `shapes` in RETOUCH_OWNED_KEYS (addressing.py) — FE-before-BE = the
+// gateway drops the `shapes` key from the rtype-10 patch = lost shape reorder.
 
 export const createRetouchSlice: StateCreator<
   SnapshotStore,
@@ -173,8 +173,8 @@ export const createRetouchSlice: StateCreator<
         state.sync.isDirty = true;
       }
     });
-    // collab: persist the new shape node (create, scope:'node', rtype 8) — no-op solo.
-    void persistSceneShapeCollab(get, spreadId, shape.id, 2);
+    // collab: NO per-node save — `shapes` is a RETOUCH_OWNED_KEY, persisted with the rest of the
+    // retouch sub-tree by the per-spread held session on release / saveNow (phase 3 re-home).
   },
 
   updateRetouchShape: (spreadId, shapeId, updates) => {
@@ -189,8 +189,7 @@ export const createRetouchSlice: StateCreator<
         }
       }
     });
-    // collab: persist the whole shape node (edit, scope:'node', rtype 8) — no-op solo.
-    void persistSceneShapeCollab(get, spreadId, shapeId, 3);
+    // collab: NO per-node save — `shapes` ∈ RETOUCH_OWNED_KEYS, saved with the held-session sub-tree.
   },
 
   deleteRetouchShape: (spreadId, shapeId) => {
@@ -202,8 +201,7 @@ export const createRetouchSlice: StateCreator<
         state.sync.isDirty = true;
       }
     });
-    // collab: persist the removal (delete, scope:'collection', rtype 8) — no-op solo.
-    void persistSceneShapeDeleteCollab(spreadId, shapeId);
+    // collab: NO per-node delete — the shape removal is captured by the held-session sub-tree diff.
   },
 
   // --- Videos ---

@@ -33,6 +33,7 @@ import {
   buildSketchEntityPayload,
   flushSketchEntityUnderLock,
 } from '@/stores/snapshot-store/slices/collab-sketch-variant-save-helper';
+import { toastSketchSaveOutcome } from '@/stores/snapshot-store/slices/sketch-save-outcome-toast';
 import { useRegisterEditCommit } from '@/stores/edit-session-status-store';
 import { useHeldResourceSession } from '@/features/editor/hooks/use-held-resource-session';
 import type { BaseKind } from '@/types/sketch';
@@ -138,41 +139,25 @@ export function useVariantEntityLockSession(): UseVariantEntityLockSessionResult
 
   /**
    * ⚡ H2 — the ONE gesture that still persists eagerly (`handleSelectCrop`; everything else batches
-   * to the release-save). Picking a crop mutates the store SYNCHRONOUSLY in the same event that
-   * adopts the entity, while the held-session only captures its baseline inside `acquire()`'s
-   * `.then()` — i.e. after a network round-trip. If that round-trip has not settled by the time the
-   * pick lands, the baseline is cloned from an ALREADY-PICKED node → the release-time dirty-diff is
-   * false → `releaseAndSave` skips the write (`if (dirty && payload)`) and the pick is lost.
+   * to the release-save). Picking a crop mutates the store SYNCHRONOUSLY in the same event that adopts
+   * the entity, so the held-session baseline (captured after the acquire round-trip) can be cloned
+   * ALREADY-PICKED → the release dirty-diff false → the pick lost.
    *
-   * It is a RACE, not a certainty: reaching a crop card requires clicking the Crop tab first (the
-   * pane's `onPointerDownCapture` adopts there), which starts the acquire a full human click earlier
-   * — so the baseline is normally pre-pick and the release-save would have caught it anyway. The
-   * window only opens when the acquire RTT outlasts that gap. This flush closes it; in the common
-   * path it costs one redundant (idempotent) whole-node write.
-   *
-   * `flushSketchEntityUnderLock` is baseline-independent — it saves exactly the node passed, no diff.
-   *
-   * ⚠️ Deliberately NOT `releaseIfAcquired:true`. That option means "the held-session never owned
-   * this lock, so drop it after saving" — true for the job slice's persist-after (the user may have
-   * browsed away mid-AI-call), but FALSE here: `adopt()` runs immediately before this, so the
-   * held-session is about to own the lock. In exactly the race above (`myLocks` still empty because
-   * the acquire is in flight) this flush would acquire the lock itself and then RELEASE it, while the
-   * held-session — whose own acquire resolves moments later — believes it still holds one. Every
-   * subsequent release-save would then 409 → `lost` → skipped silently, yet the header still settles
-   * to "Saved": whole-session data loss with false-positive UI, strictly worse than the lost pick.
-   * Same call shape as flush-BEFORE-generate, which uses the default for the same reason. Orphan risk
-   * (H1) is near-nil — a peer-held lock 409s BOTH acquires — and TTL-bounded either way.
+   * ⚡ unified-item-save phase 3: this now routes through the engine's `ensureSaved` (via the
+   * `flushSketchEntityUnderLock` seam). When the held session is already established it is a
+   * `saveNow` (keeps the lock, dirty-gated) that lands the pick; in the narrow race where the
+   * held-session acquire is still in flight it is a one-shot acquire→save→release — the idle
+   * auto-save (60s) is the net (spec §4.3). Fire-and-forget; the caller toasts the outcome (the seam
+   * no longer self-toasts).
    */
   const flushEntityNow = useCallback((ref: ActiveLockEntity) => {
-    const node =
-      sketchEntitiesOfKind(useSnapshotStore.getState().sketch, ref.kind).find(
-        (e) => e.key === ref.entityKey,
-      ) ?? null;
-    log.debug('flushEntityNow', 'baseline-independent flush', {
+    log.debug('flushEntityNow', 'engine ensureSaved (H2 net)', {
       kind: ref.kind,
       entityKey: ref.entityKey,
     });
-    void flushSketchEntityUnderLock(ref.kind, ref.entityKey, node);
+    void flushSketchEntityUnderLock(ref.kind, ref.entityKey).then((outcome) =>
+      toastSketchSaveOutcome(outcome, resolveSketchVariantLockTarget(ref.kind, ref.entityKey)),
+    );
   }, []);
 
   // Memoized so the returned handle is referentially stable: consumers put it in useCallback deps,

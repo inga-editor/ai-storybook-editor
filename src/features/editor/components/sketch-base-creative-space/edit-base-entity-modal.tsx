@@ -50,6 +50,7 @@ import {
   buildSketchEntityPayload,
   flushSketchEntityUnderLock,
 } from '@/stores/snapshot-store/slices/collab-sketch-variant-save-helper';
+import { toastSketchSaveOutcome } from '@/stores/snapshot-store/slices/sketch-save-outcome-toast';
 import { useHeldResourceSession } from '@/features/editor/hooks/use-held-resource-session';
 import { useEditSessionStatusStore } from '@/stores/edit-session-status-store';
 import { useInteractionLayer } from '@/features/editor/contexts';
@@ -203,16 +204,15 @@ export function EditBaseEntityModal({ kind, onClose }: EditBaseEntityModalProps)
     }
     log.info('handleSave', 'commit base entity text edits', { kind, changed: keys.length });
     if (useResourceLockStore.getState().collabPersist) {
-      // Grain B: flush each CHANGED entity node (rtype 3/4) through the gateway. Peer-held → 409 →
-      // skip + warn (flush toasts). One-shot (releaseIfAcquired) so no entity lock lingers.
+      // Grain B: persist each CHANGED entity node (rtype 3/4) via the engine's `ensureSaved` seam
+      // (phase 3 — held → save; else one-shot). Peer-held → `blocked` → the caller toasts here (the
+      // seam no longer self-toasts).
       const ess = useEditSessionStatusStore.getState();
       if (keys.length > 0) ess.markSaving();
       try {
         for (const key of keys) {
-          const node =
-            sketchEntitiesOfKind(useSnapshotStore.getState().sketch, kind).find((e) => e.key === key) ??
-            null;
-          await flushSketchEntityUnderLock(kind, key, node, { releaseIfAcquired: true });
+          const outcome = await flushSketchEntityUnderLock(kind, key);
+          toastSketchSaveOutcome(outcome, resolveSketchVariantLockTarget(kind, key));
         }
       } finally {
         if (keys.length > 0) ess.markSaved();

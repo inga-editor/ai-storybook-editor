@@ -31,14 +31,14 @@ vi.mock('@/stores/resource-lock-store', () => ({
 
 // Mock the base-sheet gateway flush (ADR-043 rtype 11) so the collab persist path can be asserted
 // WITHOUT a live lock store. Solo path never calls it (autoSaveSnapshot instead).
-const mockedSheetFlush = vi.hoisted(() => vi.fn(async () => true));
+const mockedSheetFlush = vi.hoisted(() => vi.fn(async () => 'saved'));
 vi.mock('./collab-sketch-base-sheet-save-helper', () => ({
   flushSketchBaseSheetUnderLock: mockedSheetFlush,
 }));
 
 // Mock the per-entity gateway flush (grain B, rtype 3/4) — called after a crops replacement on the
 // LOCKED style (the store re-clones entity base variants → those nodes flush too).
-const mockedEntityFlush = vi.hoisted(() => vi.fn(async () => true));
+const mockedEntityFlush = vi.hoisted(() => vi.fn(async () => 'saved'));
 vi.mock('./collab-sketch-variant-save-helper', () => ({
   flushSketchEntityUnderLock: mockedEntityFlush,
 }));
@@ -120,8 +120,8 @@ describe('SketchBaseGenerateJobSlice', () => {
   beforeEach(() => {
     mockedGenerateCall.mockReset();
     mockedCropCall.mockReset();
-    mockedSheetFlush.mockReset().mockResolvedValue(true);
-    mockedEntityFlush.mockReset().mockResolvedValue(true);
+    mockedSheetFlush.mockReset().mockResolvedValue('saved');
+    mockedEntityFlush.mockReset().mockResolvedValue('saved');
     lockState.collabPersist = false; // default: solo (autoSave path)
     vi.mocked(toast.warning).mockReset();
     ({ store, autoSaveSnapshot } = createTestStore());
@@ -172,10 +172,10 @@ describe('SketchBaseGenerateJobSlice', () => {
     // Assert op finalized (null after success)
     expect(store.getState().baseSheetGenerateOps.characters).toBeUndefined();
 
-    // Assert autoSave called (solo persist path)
-    expect(autoSaveSnapshot).toHaveBeenCalled();
-    // Solo → the gateway sheet flush is NEVER touched.
-    expect(mockedSheetFlush).not.toHaveBeenCalled();
+    // ⚡ phase-3: persist-after ALWAYS routes through the engine seam (the seam picks whole-snapshot
+    // flush in solo internally) — the slice no longer calls autoSaveSnapshot directly.
+    expect(mockedSheetFlush).toHaveBeenCalledWith('characters');
+    expect(autoSaveSnapshot).not.toHaveBeenCalled();
   });
 
   it('collab persist: generate → crop chain flushes the whole SHEET via gateway (NOT autoSave)', async () => {
@@ -205,8 +205,8 @@ describe('SketchBaseGenerateJobSlice', () => {
     expect(style.illustrations[0].media_url).toBe('raw.png');
     expect(style.crops[0].illustrations[0].media_url).toBe('crop-hero.png');
 
-    // Collab → gateway whole-sheet flush (one-shot releaseIfAcquired), NOT the suppressed autoSave.
-    expect(mockedSheetFlush).toHaveBeenCalledWith('characters', expect.any(Object), { releaseIfAcquired: true });
+    // ⚡ phase-3: grain A via the engine seam (no node arg / releaseIfAcquired — engine owns the lifecycle).
+    expect(mockedSheetFlush).toHaveBeenCalledWith('characters');
     expect(autoSaveSnapshot).not.toHaveBeenCalled();
     // Fresh add-style is never locked → no entity clone changed → grain B untouched.
     expect(mockedEntityFlush).not.toHaveBeenCalled();
@@ -253,11 +253,11 @@ describe('SketchBaseGenerateJobSlice', () => {
     expect(hero.variants[0].raw_sheet?.crops[0].illustrations[0].media_url).toBe('crop-hero.png');
     expect(villain.variants[0].raw_sheet?.crops[0].illustrations[0].media_url).toBe('crop-villain.png');
 
-    // …and BOTH entity nodes flushed through the gateway (grain B) after the sheet flush.
+    // …and BOTH entity nodes flushed through the engine seam (grain B) after the sheet flush.
     expect(mockedSheetFlush).toHaveBeenCalled();
     expect(mockedEntityFlush).toHaveBeenCalledTimes(2);
-    expect(mockedEntityFlush).toHaveBeenCalledWith('characters', 'hero', expect.any(Object), { releaseIfAcquired: true });
-    expect(mockedEntityFlush).toHaveBeenCalledWith('characters', 'villain', expect.any(Object), { releaseIfAcquired: true });
+    expect(mockedEntityFlush).toHaveBeenCalledWith('characters', 'hero');
+    expect(mockedEntityFlush).toHaveBeenCalledWith('characters', 'villain');
     expect(autoSaveSnapshot).not.toHaveBeenCalled();
   });
 

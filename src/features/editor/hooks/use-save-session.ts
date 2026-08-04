@@ -58,6 +58,14 @@ export function useSaveSession(args: UseSaveSessionArgs): UseSaveSessionResult {
     [id, bookId, domain, locale],
   );
 
+  // Latest session key in a ref (written inside an effect) — lets `commitOnModalClose` be a STABLE
+  // deps-[] callback (phase 3): it drops into a modal's `onOpenChange(false)` without churning the
+  // modal's identity/memo on every spread switch (which a `serialized` dep would cause).
+  const serializedRef = useRef(serialized);
+  useEffect(() => {
+    serializedRef.current = serialized;
+  });
+
   useEffect(() => {
     if (!serialized || !id || !bookId) return;
     const key = serialized;
@@ -91,17 +99,20 @@ export function useSaveSession(args: UseSaveSessionArgs): UseSaveSessionResult {
     return useSaveSessionStore.getState().ensureSaved(domain, id, locale);
   }, [domain, id, locale]);
 
+  // STABLE (deps []) — reads the key via a ref so wiring it into `onOpenChange(false)` never churns
+  // the modal. Fire-and-forget saveNow: self-guards (no-op when not held / node gone / clean).
   const commitOnModalClose = useCallback((): void => {
-    if (!serialized) return;
+    const key = serializedRef.current;
+    if (!key) return;
     void useSaveSessionStore
       .getState()
-      .saveNow(serialized)
+      .saveNow(key)
       .then((outcome) => {
         if (outcome === 'failed') {
           log.warn('commitOnModalClose', 'save failed on modal close', { outcome });
         }
       });
-  }, [serialized]);
+  }, []);
 
   return { status, saveNow, ensureSaved, commitOnModalClose };
 }

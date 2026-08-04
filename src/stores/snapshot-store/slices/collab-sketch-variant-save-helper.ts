@@ -17,23 +17,16 @@
 //     mutates synchronously with the acquire, so the held-session baseline is captured too late to
 //     ever see it (H2) — see the `releaseIfAcquired` doc below.
 //
-// NO-OP under solo (`collabPersist=false`): the whole-doc autosave owns persistence there,
-// so `flushSketchEntityUnderLock` returns `true` (nothing to do) and the caller keeps its
-// legacy `autoSaveSnapshot`/`flushSnapshot` path byte-identical.
-//
-// resource-lock-store is a LEAF store (loaded before the snapshot slices) so its static import
-// resolves cleanly; this module does NOT import snapshot-store (the caller reads the fresh node
-// and passes it in) → no slice ↔ store cycle.
+// ⚡ unified-item-save phase 3: `flushSketchEntityUnderLock` is now a thin seam that delegates to the
+// save-session engine's `ensureSaved` (the engine owns the solo/collab fork + lock lifecycle + rebase);
+// the pure `resolveSketchVariantLockTarget` / `buildSketchEntityPayload` exports (reused by the policy
+// registry) are unchanged. `useSaveSessionStore` is imported DYNAMICALLY at call time to avoid the
+// eval-time cycle (save-session-store → save-policies → this module).
 
-import {
-  useResourceLockStore,
-  keyOf,
-  type LockTarget,
-  type ResourceType,
-} from '@/stores/resource-lock-store';
+import { type LockTarget, type ResourceType } from '@/stores/resource-lock-store';
 import type { BaseKind } from '@/types/sketch';
-import { toastLockedByOther } from '@/utils/collab-save-toasts';
-import { resolveLockHolderName } from './collab-image-save-helper';
+import { makeEntityId } from '@/stores/save-session-store/entity-id';
+import type { SaveOutcome } from '@/stores/save-session-store/types';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('Store', 'CollabSketchVariantSaveHelper');
@@ -79,101 +72,34 @@ export function buildSketchEntityPayload(node: unknown): {
 }
 
 export interface FlushSketchEntityOptions {
-  /**
-   * One-shot semantics: if THIS call had to `acquire` the lock (it was NOT already held by the
-   * component held-session), release it after the save. Use for persists that run OUTSIDE the
-   * held-session's ownership window — the RESULT of a generate whose entity may have been released
-   * (user browsed away during the long AI call) and every "single-gesture" edit (select-crop) whose
-   * held-session baseline is captured too late to catch the mutation. When the entity IS already
-   * held, the lock is KEPT (the held-session stays the releaser). Default `false` → always keep
-   * (used ONLY by flush-BEFORE-generate, where the caller has just adopted the entity via
-   * `activeLockEntity`, so the held-session is guaranteed to own + eventually release it).
-   */
+  /** @deprecated IGNORED since unified-item-save phase 3 — the engine decides the lock lifecycle
+   *  (held → keep; no session → one-shot acquire→save→release, replacing this flag). Kept only so the
+   *  existing call sites compile unchanged. */
   releaseIfAcquired?: boolean;
 }
 
 /**
- * Persist the WHOLE sketch entity node through the gateway. Baseline-independent (reads the FRESH
- * node the caller passes → saves exactly that, no dirty-diff), so it can't silently drop a mutation
- * whose held-session baseline was captured late.
+ * Persist the WHOLE sketch entity node — ⚡ unified-item-save phase 3: delegates to the save-session
+ * engine's `ensureSaved('sketch-entity', …)`, which internalizes the single solo/collab fork + the
+ * whole lock lifecycle (held → save-while-held + rebase baseline; no live session → one-shot
+ * acquire→save→release; solo → whole-snapshot flush). The engine reads the FRESH node via the policy
+ * registry, so `node` is IGNORED (the caller no longer needs to pass it — kept for signature stability).
  *
- * Lock lifecycle:
- *   • solo (`collabPersist=false`) → no-op, returns `true` (caller owns `autoSaveSnapshot`).
- *   • already held (held-session adopted the entity) → skip acquire, just `save`, KEEP the lock.
- *   • not held → `acquire` first (409 → toast + `false`, caller aborts / falls through); after the
- *     save, release IFF `releaseIfAcquired` (one-shot — never orphans a lock the held-session no
- *     longer owns). With `releaseIfAcquired:false` (flush-before) the caller guarantees the
- *     held-session adopts + releases it, so keeping is safe.
+ * ⚠️ Behavior shift vs the pre-phase-3 helper: the old default (`releaseIfAcquired:false`) KEPT a lock
+ * it had to acquire; the engine's one-shot ALWAYS releases when there is no live session. For a HELD
+ * session (the common variant/base/stage path) this is identical — `ensureSaved` → `saveNow` keeps the
+ * lock. The narrow H2 window (held-session acquire in flight when a select-crop flush lands) now runs
+ * the one-shot, which the idle auto-save (60s) covers as the net (see the space's `flushEntityNow` doc).
  *
- * @param node the FRESH whole entity node (read via getState() at call time — anti stale-closure).
- *             `null` (entity vanished mid-flight) → `false`.
- * @returns `true` when persisted (or solo no-op); `false` on 409 / save-reject / missing node.
+ * @returns the engine `SaveOutcome` — the CALLER maps it to a toast (this helper no longer self-toasts).
  */
 export async function flushSketchEntityUnderLock(
   kind: BaseKind,
   entityKey: string,
-  node: unknown,
-  opts?: FlushSketchEntityOptions,
-): Promise<boolean> {
-  const rl = useResourceLockStore.getState();
-  if (!rl.collabPersist) {
-    log.debug('flushSketchEntityUnderLock', 'solo path — whole-doc autosave owns persistence', { kind });
-    return true; // solo: nothing to do here; caller keeps autoSaveSnapshot
-  }
-  if (node == null) {
-    log.warn('flushSketchEntityUnderLock', 'node missing at save time — skip', { kind, entityKey });
-    return false;
-  }
-  const bookId = rl.bookId;
-  if (!bookId) {
-    log.warn('flushSketchEntityUnderLock', 'no book connected — skip', { kind, entityKey });
-    return false;
-  }
-
-  const target = resolveSketchVariantLockTarget(kind, entityKey);
-  const key = keyOf(bookId, target);
-  let acquiredHere = false;
-
-  try {
-    // Acquire only if the held-session has not already taken it (idempotent renew otherwise).
-    if (!rl.myLocks.has(key)) {
-      const acq = await rl.acquire(target);
-      if (!acq.ok) {
-        log.info('flushSketchEntityUnderLock', 'blocked — another editor holds the entity', { kind, entityKey });
-        toastLockedByOther(resolveLockHolderName(target));
-        return false; // no lock held → nothing to release; caller aborts / falls through
-      }
-      acquiredHere = true;
-    }
-    const res = await rl.save(target, buildSketchEntityPayload(node));
-    if (res.ok) {
-      log.info('flushSketchEntityUnderLock', 'saved', { kind, entityKey, acquiredHere });
-      return true;
-    }
-    log.warn('flushSketchEntityUnderLock', 'save rejected', {
-      kind,
-      entityKey,
-      lost: res.lost,
-      forbidden: res.forbidden,
-    });
-    if (res.forbidden) toastLockedByOther(resolveLockHolderName(target));
-    return false;
-  } catch (err) {
-    log.error('flushSketchEntityUnderLock', 'unexpected error', {
-      kind,
-      entityKey,
-      error: err instanceof Error ? err.message : String(err),
-    });
-    return false;
-  } finally {
-    // One-shot: release ONLY the lock WE acquired here (the held-session never owned it) so it can't
-    // linger to TTL when the held-session already released the entity (user browsed away mid-generate).
-    if (acquiredHere && opts?.releaseIfAcquired) {
-      await rl.release(target);
-      log.debug('flushSketchEntityUnderLock', 'one-shot release (acquired here, not held-session owned)', {
-        kind,
-        entityKey,
-      });
-    }
-  }
+  _node?: unknown,
+  _opts?: FlushSketchEntityOptions,
+): Promise<SaveOutcome> {
+  const { useSaveSessionStore } = await import('@/stores/save-session-store');
+  log.debug('flushSketchEntityUnderLock', 'ensureSaved (engine)', { kind, entityKey });
+  return useSaveSessionStore.getState().ensureSaved('sketch-entity', makeEntityId(kind, entityKey));
 }

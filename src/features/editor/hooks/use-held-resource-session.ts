@@ -40,6 +40,9 @@ export interface UseHeldResourceSessionResult {
   /** Explicit save while STILL holding. Resolves `true` when persisted or already clean, `false`
    *  otherwise (not holding / node gone / rejected) — the original boolean contract. */
   saveNow: () => Promise<boolean>;
+  /** Fire-and-forget saveNow for a spread-level modal close (spec §4.2). STABLE (deps []) so it can
+   *  drop straight into `onOpenChange(false)`; self-guards (no-op when clean / not held). */
+  commitOnModalClose: () => void;
 }
 
 interface Derived {
@@ -92,7 +95,7 @@ export function useHeldResourceSession(
   const { target } = args;
   const derived = target ? deriveDomain(target) : null;
 
-  const { status, saveNow: saveNowOutcome } = useSaveSession({
+  const { status, saveNow: saveNowOutcome, commitOnModalClose } = useSaveSession({
     // Placeholder domain while idle (id null ⇒ no session begins, so the domain is inert).
     domain: derived?.domain ?? 'scene-spread',
     id: derived?.id ?? null,
@@ -108,5 +111,5 @@ export function useHeldResourceSession(
     return outcome === 'saved' || outcome === 'clean';
   }, [saveNowOutcome]);
 
-  return { status, saveNow };
+  return { status, saveNow, commitOnModalClose };
 }

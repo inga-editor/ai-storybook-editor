@@ -99,11 +99,12 @@ describe('sketch save-blocking (T3 — 4 write paths + isolation + no stranded l
 
   it('generate-job flush path (flushSketchBaseSheetUnderLock → store.save) is blocked too', async () => {
     degrade('base.character_sheet');
-    // Simulate the held-session already owning the sheet lock so the helper goes straight to save.
+    // ⚡ phase-3: the helper delegates to the engine's `ensureSaved`; a degraded resource is refused
+    // by the write-blocker → outcome `'blocked'` (was boolean `false` pre-phase-3), no gateway save.
     const key = `${BOOK}|1|11|character_sheet|`;
     useResourceLockStore.setState({ myLocks: new Set([key]) });
     const ok = await flushSketchBaseSheetUnderLock('characters', { styles: [] });
-    expect(ok).toBe(false);
+    expect(ok).toBe('blocked');
     expect(callImageApi.mock.calls.map((c) => c[0])).not.toContain('/api/resource/save');
   });
 

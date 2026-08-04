@@ -28,10 +28,10 @@ interface RetouchEditImageModalProps {
   imageId: string;
   /** Per-space edit-tool availability (matrix gate). Forwarded to EditImageModal. */
   enabledTools?: EditToolKey[];
-  /** Held-session explicit save (per-spread retouch lock). Persists the whole retouch owned sub-tree
-   *  (which includes this image) WHILE the lock is held, then rebases the session baseline. Absent
-   *  ⇒ the commit is only persisted on the session's release-time save-if-dirty. */
-  onCommitSave?: () => Promise<boolean>;
+  /** Held-session commit-on-modal-close (per-spread retouch lock), fire-and-forget: persists the
+   *  whole retouch owned sub-tree (which includes this image) WHILE the lock is held. Self-guards
+   *  (no-op when clean / not held). Absent ⇒ persisted on the session's release-time save-if-dirty. */
+  onCommitSave?: () => void;
   /** Opt-in double-write directive — pass-through to EditImageModal (path resolved by the opener,
    *  Phase 04). Undefined → omitted. */
   saveResource?: SaveResourceDirective;
@@ -56,13 +56,10 @@ export function RetouchEditImageModal({
       log.debug("handleUpdate", "persist illustrations", { spreadId, imageId, count: next.length });
       // Local optimistic mutate (dirties the spread's `images` — a RETOUCH_OWNED_KEY).
       updateRetouchImage(spreadId, imageId, { illustrations: next });
-      // Explicit held-session save NOW (no-op when not holding the spread lock): covers BOTH a commit
-      // and a version-switch, so the change is persisted immediately without waiting for release.
-      if (onCommitSave) {
-        void onCommitSave().then((ok) => {
-          if (!ok) log.warn("handleUpdate", "held-session saveNow returned false", { spreadId, imageId });
-        });
-      }
+      // Held-session commit-on-close (fire-and-forget; no-op when not holding the spread lock):
+      // covers BOTH a commit and a version-switch, so the change is persisted without waiting for
+      // release. The engine warn-logs on a failed save (see useSaveSession.commitOnModalClose).
+      onCommitSave?.();
     },
     [spreadId, imageId, updateRetouchImage, onCommitSave],
   );

@@ -55,7 +55,11 @@ import {
   buildSketchBaseSheetPayload,
   flushSketchBaseSheetUnderLock,
 } from '@/stores/snapshot-store/slices/collab-sketch-base-sheet-save-helper';
-import { flushSketchEntityUnderLock } from '@/stores/snapshot-store/slices/collab-sketch-variant-save-helper';
+import {
+  flushSketchEntityUnderLock,
+  resolveSketchVariantLockTarget,
+} from '@/stores/snapshot-store/slices/collab-sketch-variant-save-helper';
+import { toastSketchSaveOutcome } from '@/stores/snapshot-store/slices/sketch-save-outcome-toast';
 import {
   runLockedSetSave,
   type CollectionSaveOutcome,
@@ -107,15 +111,16 @@ const log = createLogger('Editor', 'SketchBaseSpace');
  * held-session covers rtype 11 (grain A) ONLY, so the lock-style base-variant clone (an EDIT of
  * entities that already exist) persists here. NOT for the Excel import: that one mints new keys and
  * drops removed ones, which a per-node upsert loop cannot express — see `commitImport`.
- * Peer-held entity → the flush 409s → skip + warn
- * (advisory; `flushSketchEntityUnderLock` toasts). `releaseIfAcquired:true` (one-shot) so no entity
- * lock lingers. Reads FRESH nodes via getState() at call time. Collab-only (solo → autoSaveSnapshot).
+ * Peer-held entity → the engine `ensureSaved` returns `blocked` → the CALLER toasts (phase 3 — the
+ * seam no longer self-toasts). The engine owns the lock lifecycle (one-shot when not held). Reads
+ * FRESH nodes via getState() at call time. Solo → the seam's whole-snapshot flush (per entity).
  */
 async function persistBaseEntities(kinds: readonly BaseKind[]): Promise<void> {
   const st = useSnapshotStore.getState();
   for (const kind of kinds) {
     for (const e of sketchEntitiesOfKind(st.sketch, kind)) {
-      await flushSketchEntityUnderLock(kind, e.key, e, { releaseIfAcquired: true });
+      const outcome = await flushSketchEntityUnderLock(kind, e.key);
+      toastSketchSaveOutcome(outcome, resolveSketchVariantLockTarget(kind, e.key));
     }
   }
 }
@@ -289,9 +294,9 @@ export function SketchBaseSpace() {
   // captured AFTER this synchronous mutation → its release-diff would be empty (H2). Default (keep)
   // — acquireSheet has adopted the sheet, so the session owns + eventually releases the lock.
   const persistLockStyle = useCallback(async (kind: BaseKind) => {
-    const sheetNode = sheetOf(useSnapshotStore.getState().sketch.base, kind);
-    await flushSketchBaseSheetUnderLock(kind, sheetNode); // grain A — keep (session owns it)
-    await persistBaseEntities([kind]); // grain B — cloned base variants (peer-held → skip+warn)
+    const outcome = await flushSketchBaseSheetUnderLock(kind); // grain A (rtype 11) via ensureSaved
+    toastSketchSaveOutcome(outcome, resolveSketchBaseSheetLockTarget(kind));
+    await persistBaseEntities([kind]); // grain B — cloned base variants (peer-held → caller toasts)
   }, []);
 
   // ── Handlers ────────────────────────────────────────────────────────────────────────────────

@@ -90,19 +90,21 @@ function nestedCreateParams(
   return actionType === 2 ? { parentId: spreadId, collection } : undefined;
 }
 
-/** Shared post-save outcome handling (DRY across the four scene node-save helpers). `forbidden`
- *  is surfaced (log.warn + toast) — NOT silent (nit N5): a scene write needs illustration access. */
+/** Shared post-save outcome LOGGING (DRY across the scene node-save helpers). ⚡ unified-item-save
+ *  phase 3: the implicit toasts were REMOVED — the caller owns the toast (spec §5). These scene node
+ *  helpers are DORMANT (collab scene not flipped on) and fire-and-forget `void` from the slice
+ *  mutators, so they cannot relay an outcome yet; when the scene space flips collab-on (P05) it must
+ *  thread the outcome to a caller-side `toast` (mirror `toastSketchSaveOutcome`). `_target` retained
+ *  for that future signature. */
 function reportSaveOutcome(
   outcome: ImageSaveOutcome,
-  target: LockTarget,
+  _target: LockTarget,
   ctx: Record<string, unknown>,
 ): void {
   if (outcome === 'skipped') {
     log.info('reportSaveOutcome', 'skipped — locked by another editor', ctx);
-    toastLockedByOther(resolveLockHolderName(target));
   } else if (outcome === 'forbidden') {
     log.warn('reportSaveOutcome', 'forbidden — missing illustration access', ctx);
-    toastForbiddenIllustration();
   } else if (outcome === 'failed') {
     log.warn('reportSaveOutcome', 'collab save failed', ctx);
   }
@@ -338,43 +340,10 @@ export async function persistSceneTextboxDeleteCollab(spreadId: string, textboxI
   await deleteSceneResource(target, { spread_id: spreadId, textbox_id: textboxId });
 }
 
-// --- Scene shape (rtype 8 — no locale) ---------------------------------------
-
-/** NODE-scope save of a scene shape (create 2 | edit 3). NO-OP solo. */
-export async function persistSceneShapeCollab(
-  get: () => SnapshotStore,
-  spreadId: string,
-  shapeId: string,
-  actionType: SceneNodeActionType,
-): Promise<void> {
-  if (!isCollab()) {
-    log.debug('persistSceneShapeCollab', 'solo path — whole-doc autosave owns persistence', { spreadId });
-    return;
-  }
-  const node = readSpread(get(), spreadId)?.shapes?.find((sh) => sh.id === shapeId) ?? null;
-  if (!node) {
-    log.warn('persistSceneShapeCollab', 'shape missing at save time — skip gateway save', { spreadId, shapeId });
-    return;
-  }
-  const target = resolveImageLockTarget('scene_retouch_shape', spreadId, shapeId);
-  log.info('persistSceneShapeCollab', 'collab save', { resourceType: target.resource_type, action: actionType });
-  const outcome = await saveImageResourceUnderLock(
-    target,
-    node,
-    actionType,
-    { spread_id: spreadId, shape_id: shapeId },
-    nestedCreateParams(actionType, spreadId, 'shapes'),
-  );
-  reportSaveOutcome(outcome, target, { spreadId, shapeId });
-}
-
-/** COLLECTION-scope DELETE of a scene shape. NO-OP solo. */
-export async function persistSceneShapeDeleteCollab(spreadId: string, shapeId: string): Promise<void> {
-  if (!isCollab()) {
-    log.debug('persistSceneShapeDeleteCollab', 'solo path — whole-doc autosave owns persistence', { spreadId });
-    return;
-  }
-  const target = resolveImageLockTarget('scene_retouch_shape', spreadId, shapeId);
-  log.info('persistSceneShapeDeleteCollab', 'collab delete', { spreadId, shapeId });
-  await deleteSceneResource(target, { spread_id: spreadId, shape_id: shapeId });
-}
+// --- Scene shape (rtype 8) — RE-HOMED (unified-item-save phase 3) -------------
+//
+// `persistSceneShapeCollab` / `persistSceneShapeDeleteCollab` were REMOVED here (2026-08-04): a scene
+// shape lives under `spreads[].shapes[]`, which is now a RETOUCH_OWNED_KEY (`addressing.py`), so a
+// dirty shape is persisted with the rest of the retouch sub-tree by the per-spread `retouch-spread`
+// held session (rtype 10) — no more one-shot rtype-8 node writes from `retouch-slice`. ⚠️ SHIP-
+// COUPLING: this FE removal deploys TOGETHER with the BE owned-key merge accepting `shapes`.

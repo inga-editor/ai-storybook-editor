@@ -112,8 +112,9 @@ interface SpreadsMainViewProps {
   /** Whether the active spread is currently held by THIS editor's SCENE lock. Gates all in-spread
    *  content editability (grey-out when not held — lock-on-click). */
   spreadEditable: boolean;
-  /** Held-session explicit save (forwarded to the illustration Edit-image modal commit). */
-  onCommitSave?: () => Promise<boolean>;
+  /** Held-session commit-on-modal-close (fire-and-forget) forwarded to every spread-level SCENE
+   *  modal. STABLE from the engine; self-guards (no-op when clean / not held). */
+  onCommitSave?: () => void;
   viewMode: ViewMode;
   zoomLevel: number;
   columnsPerRow: number;
@@ -762,6 +763,10 @@ export function SpreadsMainView({
           enabledModes={SPACE_TOOL_MATRIX.raw.generate}
           onUpdateImage={(updates) => {
             handleGenerateImageUpdate(generateModalImage.id, updates);
+            // Commit-on-close (spec §4.2 — uniform for scene AND retouch): an upload/replace dirties
+            // the held SCENE spread node; fire-and-forget saveNow persists it now (no-op when clean /
+            // not held), mirroring RetouchGenerateImageModal.
+            onCommitSave?.();
           }}
           saveResource={uploadSaveResource}
         />
@@ -783,6 +788,8 @@ export function SpreadsMainView({
         // Phase 04: NO saveResource — Spreads raw Extract exposes Crop/Texts tabs only (client-spawn
         // via onCreateImages/onCreateTexts). The AI Background tab (the only save_resource seam) is
         // "Coming soon" here, so there is no anchor to double-write. Client-spawn stays the persist path.
+        // NO onCommitSave (phase 3, user-confirmed): Extract SPAWNS new versions via onCreateImages/
+        // onCreateTexts — it does not mutate the held spread node, so nothing dirty to commit on close.
         <ExtractImageModal
           open={extractModalOpen}
           onOpenChange={setExtractModalOpen}

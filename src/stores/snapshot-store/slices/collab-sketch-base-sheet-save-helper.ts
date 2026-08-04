@@ -18,24 +18,15 @@
 //     sheet node UNDER an (acquired-if-needed) lock. Base generate is INLINE (05/06 do NOT read the
 //     DB), so there is NO flush-BEFORE-generate — persistence is result-only.
 //
-// NO-OP under solo (`collabPersist=false`): the whole-doc autosave owns persistence there, so
-// `flushSketchBaseSheetUnderLock` returns `true` (nothing to do) and the caller keeps its legacy
-// `autoSaveSnapshot` path byte-identical.
-//
-// resource-lock-store is a LEAF store (loaded before the snapshot slices) so its static import
-// resolves cleanly; this module does NOT import snapshot-store (the caller reads the fresh sheet
-// node and passes it in) → no slice ↔ store cycle.
+// ⚡ unified-item-save phase 3: `flushSketchBaseSheetUnderLock` now delegates to the engine's
+// `ensureSaved` (solo/collab fork + lock lifecycle + rebase internalized; the gateway still owns the
+// rtype-11 upsert / 404-tolerance). The pure resolver/payload exports are unchanged.
+// `useSaveSessionStore` is imported dynamically at call time (cycle break).
 
-import {
-  useResourceLockStore,
-  keyOf,
-  type LockTarget,
-  type ResourceType,
-} from '@/stores/resource-lock-store';
+import { type LockTarget, type ResourceType } from '@/stores/resource-lock-store';
 import type { BaseKind } from '@/types/sketch';
 import { BASE_SHEET_ID } from '@/types/sketch';
-import { toastLockedByOther } from '@/utils/collab-save-toasts';
-import { resolveLockHolderName } from './collab-image-save-helper';
+import type { SaveOutcome } from '@/stores/save-session-store/types';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('Store', 'CollabSketchBaseSheetSaveHelper');
@@ -86,99 +77,28 @@ export function buildSketchBaseSheetPayload(node: unknown): {
 }
 
 export interface FlushSketchBaseSheetOptions {
-  /**
-   * One-shot semantics: if THIS call had to `acquire` the lock (it was NOT already held by the
-   * space held-session), release it after the save. Use for persists that run OUTSIDE the held-
-   * session's ownership window — the RESULT of a generate/recrop whose sheet lock may have been
-   * released (user switched kind during the long AI call). When the sheet IS already held, the
-   * lock is KEPT (the held-session stays the releaser). Default `false` → always keep.
-   */
+  /** @deprecated IGNORED since unified-item-save phase 3 — the engine decides the lock lifecycle
+   *  (held → keep; no session → one-shot). Kept only for call-site compatibility. */
   releaseIfAcquired?: boolean;
 }
 
 /**
- * Persist the WHOLE per-kind base SHEET node through the gateway. Baseline-independent (reads the
- * FRESH sheet node the caller passes → saves exactly that, no dirty-diff), so it can't silently drop
- * a mutation whose held-session baseline was captured late.
+ * Persist the WHOLE per-kind base SHEET node (rtype 11) — ⚡ unified-item-save phase 3: delegates to
+ * the save-session engine's `ensureSaved('sketch-base-sheet', <sheet resource_id>)` (single solo/collab
+ * fork + lock lifecycle; held → save + rebase; no session → one-shot acquire→save→release; solo →
+ * whole-snapshot flush). The engine reads the FRESH sheet node via the policy registry, so `node` is
+ * IGNORED. The gateway's rtype-11 upsert (404-tolerant) is unchanged — it lives in the gateway `save`.
  *
- * Lock lifecycle:
- *   • solo (`collabPersist=false`) → no-op, returns `true` (caller owns `autoSaveSnapshot`).
- *   • already held (space held-session owns the sheet) → skip acquire, just `save`, KEEP the lock.
- *   • not held → `acquire` first (409 → toast + `false`, caller aborts / falls through); after the
- *     save, release IFF `releaseIfAcquired` (one-shot — never orphans a lock the held-session no
- *     longer owns).
- *
- * @param node the FRESH whole sheet node (read via getState() at call time — anti stale-closure).
- *             `null` (sheet vanished mid-flight) → `false`.
- * @returns `true` when persisted (or solo no-op); `false` on 409 / save-reject / missing node.
+ * @returns the engine `SaveOutcome` — the CALLER maps it to a toast (this helper no longer self-toasts).
  */
 export async function flushSketchBaseSheetUnderLock(
   kind: BaseKind,
-  node: unknown,
-  opts?: FlushSketchBaseSheetOptions,
-): Promise<boolean> {
-  const rl = useResourceLockStore.getState();
-  if (!rl.collabPersist) {
-    log.debug('flushSketchBaseSheetUnderLock', 'solo path — whole-doc autosave owns persistence', { kind });
-    return true; // solo: nothing to do here; caller keeps autoSaveSnapshot
-  }
-  if (node == null) {
-    log.warn('flushSketchBaseSheetUnderLock', 'sheet node missing at save time — skip', { kind });
-    return false;
-  }
-  const bookId = rl.bookId;
-  if (!bookId) {
-    log.warn('flushSketchBaseSheetUnderLock', 'no book connected — skip', { kind });
-    return false;
-  }
-
-  const target = resolveSketchBaseSheetLockTarget(kind);
-  const key = keyOf(bookId, target);
-  let acquiredHere = false;
-
-  try {
-    // Acquire only if the held-session has not already taken it (idempotent renew otherwise).
-    if (!rl.myLocks.has(key)) {
-      const acq = await rl.acquire(target);
-      if (!acq.ok) {
-        log.info('flushSketchBaseSheetUnderLock', 'blocked — another editor holds the sheet', { kind });
-        toastLockedByOther(resolveLockHolderName(target));
-        return false; // no lock held → nothing to release; caller aborts / falls through
-      }
-      acquiredHere = true;
-    }
-    const res = await rl.save(target, buildSketchBaseSheetPayload(node));
-    if (res.ok) {
-      log.info('flushSketchBaseSheetUnderLock', 'saved', { kind, acquiredHere });
-      return true;
-    }
-    // ⚡2026-07-28: a 404 no longer means "the sheet node is absent" — the gateway upserts rtype 11
-    // (see ACTION_TYPE_EDIT), so an absent sheet, an absent `sketch.base`, and a book predating the
-    // base workspace all resolve on the first save. A 404 that survives now means a genuinely
-    // unaddressable target (off-allowlist resource_id / missing book snapshot) → report, do not
-    // retry: re-issuing as a create would 404 identically.
-    log.warn('flushSketchBaseSheetUnderLock', 'save rejected', {
-      kind,
-      lost: res.lost,
-      forbidden: res.forbidden,
-      notFound: res.notFound ?? false,
-    });
-    if (res.forbidden) toastLockedByOther(resolveLockHolderName(target));
-    return false;
-  } catch (err) {
-    log.error('flushSketchBaseSheetUnderLock', 'unexpected error', {
-      kind,
-      error: err instanceof Error ? err.message : String(err),
-    });
-    return false;
-  } finally {
-    // One-shot: release ONLY the lock WE acquired here (the held-session never owned it) so it can't
-    // linger to TTL when the held-session already released the sheet (user switched kind mid-generate).
-    if (acquiredHere && opts?.releaseIfAcquired) {
-      await rl.release(target);
-      log.debug('flushSketchBaseSheetUnderLock', 'one-shot release (acquired here, not held-session owned)', {
-        kind,
-      });
-    }
-  }
+  _node?: unknown,
+  _opts?: FlushSketchBaseSheetOptions,
+): Promise<SaveOutcome> {
+  const { useSaveSessionStore } = await import('@/stores/save-session-store');
+  log.debug('flushSketchBaseSheetUnderLock', 'ensureSaved (engine)', { kind });
+  return useSaveSessionStore
+    .getState()
+    .ensureSaved('sketch-base-sheet', SKETCH_KIND_TO_SHEET_RESOURCE_ID[kind]);
 }

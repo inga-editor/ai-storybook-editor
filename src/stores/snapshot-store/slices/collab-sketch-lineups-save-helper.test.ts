@@ -8,38 +8,21 @@ import {
 } from './collab-sketch-lineups-save-helper';
 import type { SketchLineupTab } from '@/types/sketch';
 
-// Mutable lock-store state so each test drives collabPersist / myLocks / acquire·save outcomes.
-const h = vi.hoisted(() => {
-  const state = {
-    collabPersist: false as boolean,
-    bookId: 'book-1' as string | null,
-    myLocks: new Set<string>(),
-    acquire: vi.fn(async (_t: unknown) => ({ ok: true }) as { ok: boolean; holder?: string }),
-    save: vi.fn(async (_t: unknown, _p: unknown) => ({ ok: true }) as { ok: boolean; lost?: boolean; forbidden?: boolean }),
-    release: vi.fn(async (_t: unknown) => {}),
-  };
-  return { state };
-});
-
-vi.mock('@/stores/resource-lock-store', () => ({
-  useResourceLockStore: { getState: () => h.state },
-  keyOf: (bookId: string, t: { step: number; resource_type: number; resource_id: string; locale: string | null }) =>
-    `${bookId}|${t.step}|${t.resource_type}|${t.resource_id}|${t.locale ?? ''}`,
+// ⚡ unified-item-save phase 3: `flushSketchLineupsUnderLock` now delegates to the engine's `ensureSaved`.
+const h = vi.hoisted(() => ({
+  ensureSaved: vi.fn(async (_domain: string, _id: string) => 'saved' as string),
 }));
-vi.mock('@/utils/collab-save-toasts', () => ({ toastLockedByOther: vi.fn() }));
-vi.mock('./collab-image-save-helper', () => ({ resolveLockHolderName: () => 'Peer' }));
+
+vi.mock('@/stores/save-session-store', () => ({
+  useSaveSessionStore: { getState: () => ({ ensureSaved: h.ensureSaved }) },
+}));
 
 const TABS: SketchLineupTab[] = [
   { id: 't1', name: 'Lineup', entries: [{ kind: 'characters', entity_key: 'elara', variant_key: 'base' }] },
 ];
 
 beforeEach(() => {
-  h.state.collabPersist = false;
-  h.state.bookId = 'book-1';
-  h.state.myLocks = new Set();
-  h.state.acquire.mockReset().mockResolvedValue({ ok: true });
-  h.state.save.mockReset().mockResolvedValue({ ok: true });
-  h.state.release.mockReset().mockResolvedValue(undefined);
+  h.ensureSaved.mockReset().mockResolvedValue('saved');
 });
 
 describe('resolveLineupsLockTarget', () => {
@@ -66,75 +49,23 @@ describe('buildSketchLineupsPayload', () => {
   });
 });
 
-describe('flushSketchLineupsUnderLock', () => {
-  it('solo (collabPersist=false) → no-op true, never touches the gateway', async () => {
-    const ok = await flushSketchLineupsUnderLock(TABS);
-    expect(ok).toBe(true);
-    expect(h.state.acquire).not.toHaveBeenCalled();
-    expect(h.state.save).not.toHaveBeenCalled();
+describe('flushSketchLineupsUnderLock (delegates to ensureSaved)', () => {
+  it('delegates to ensureSaved("sketch-lineups", "lineups") and returns the outcome', async () => {
+    const outcome = await flushSketchLineupsUnderLock(TABS);
+    expect(outcome).toBe('saved');
+    expect(h.ensureSaved).toHaveBeenCalledTimes(1);
+    expect(h.ensureSaved).toHaveBeenCalledWith('sketch-lineups', 'lineups');
   });
 
-  it('collab + NOT already held → acquires then saves the whole array, KEEPS the lock (default)', async () => {
-    h.state.collabPersist = true;
-    const ok = await flushSketchLineupsUnderLock(TABS);
-    expect(ok).toBe(true);
-    expect(h.state.acquire).toHaveBeenCalledTimes(1);
-    expect(h.state.save).toHaveBeenCalledWith(
-      { step: 1, resource_type: 12, resource_id: 'lineups', locale: null },
-      { action_type: 3, patch: TABS, collection: 'lineups', log: true },
-    );
-    expect(h.state.release).not.toHaveBeenCalled();
+  it('passes the engine outcome straight through (blocked / failed / clean)', async () => {
+    for (const oc of ['blocked', 'failed', 'clean'] as const) {
+      h.ensureSaved.mockResolvedValueOnce(oc);
+      expect(await flushSketchLineupsUnderLock()).toBe(oc);
+    }
   });
 
-  it('collab + already held → skips acquire, just saves, KEEPS the lock', async () => {
-    h.state.collabPersist = true;
-    h.state.myLocks = new Set(['book-1|1|12|lineups|']);
-    const ok = await flushSketchLineupsUnderLock(TABS, { releaseIfAcquired: true });
-    expect(ok).toBe(true);
-    expect(h.state.acquire).not.toHaveBeenCalled();
-    expect(h.state.save).toHaveBeenCalledTimes(1);
-    expect(h.state.release).not.toHaveBeenCalled(); // held-session owns it → never release
-  });
-
-  it('collab + acquire 409 (peer holds) → false, mutation-side save NEVER issued', async () => {
-    h.state.collabPersist = true;
-    h.state.acquire.mockResolvedValueOnce({ ok: false, holder: 'peer-id' });
-    const ok = await flushSketchLineupsUnderLock(TABS);
-    expect(ok).toBe(false);
-    expect(h.state.save).not.toHaveBeenCalled();
-  });
-
-  it('collab + save forbidden → false (+ toast path)', async () => {
-    h.state.collabPersist = true;
-    h.state.save.mockResolvedValueOnce({ ok: false, forbidden: true });
-    const ok = await flushSketchLineupsUnderLock(TABS);
-    expect(ok).toBe(false);
-  });
-
-  it('releaseIfAcquired + NOT held → one-shot: acquires + saves + RELEASES', async () => {
-    h.state.collabPersist = true;
-    const ok = await flushSketchLineupsUnderLock(TABS, { releaseIfAcquired: true });
-    expect(ok).toBe(true);
-    expect(h.state.release).toHaveBeenCalledWith(
-      { step: 1, resource_type: 12, resource_id: 'lineups', locale: null },
-    );
-  });
-
-  it('no bookId while collab → false (defensive)', async () => {
-    h.state.collabPersist = true;
-    h.state.bookId = null;
-    const ok = await flushSketchLineupsUnderLock(TABS);
-    expect(ok).toBe(false);
-    expect(h.state.acquire).not.toHaveBeenCalled();
-  });
-
-  it('an EMPTY tabs array still saves (uncheck-to-empty is a legitimate write)', async () => {
-    h.state.collabPersist = true;
-    const ok = await flushSketchLineupsUnderLock([]);
-    expect(ok).toBe(true);
-    expect(h.state.save).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ patch: [] }),
-    );
+  it('tabs / opts args are IGNORED (engine reads the fresh array via the policy)', async () => {
+    await flushSketchLineupsUnderLock([], { releaseIfAcquired: true });
+    expect(h.ensureSaved).toHaveBeenCalledWith('sketch-lineups', 'lineups');
   });
 });

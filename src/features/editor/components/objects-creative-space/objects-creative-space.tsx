@@ -175,7 +175,8 @@ export function ObjectsCreativeSpace() {
 
   // ── Undo/redo nexus (ADR-045) — the engine now bridges begin/endSession itself (retouch grain,
   // sharing the held baseline clone) on acquire/release/switch/LOST; no space wiring.
-  const { status: retouchLockStatus, saveNow: retouchSaveNow } = useHeldResourceSession({
+  const { status: retouchLockStatus, commitOnModalClose: retouchCommitOnModalClose } =
+    useHeldResourceSession({
     target: retouchLockTarget,
     getNode: getRetouchNode,
     ownedKeys: RETOUCH_OWNED_KEYS,
@@ -726,7 +727,7 @@ export function ObjectsCreativeSpace() {
           onSpreadSelect={handleSpreadSelect}
           onItemSelect={handleItemSelect}
           spreadEditable={spreadEditable}
-          onCommitSave={retouchSaveNow}
+          onCommitSave={retouchCommitOnModalClose}
           zoomLevel={zoomLevel ?? ZOOM.DEFAULT}
           onZoomChange={handleZoomChange}
           expandedAnimation={expandedAnimationRaw}

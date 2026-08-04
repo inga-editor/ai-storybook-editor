@@ -30,7 +30,8 @@ const mockedCut = vi.mocked(callCropSheetRow);
 // Isolate resource-lock (collabPersist toggles solo flushSnapshot vs gateway) + the stage flush helper.
 const h = vi.hoisted(() => ({
   lockState: { collabPersist: false as boolean, bookId: undefined as string | undefined },
-  flushStage: vi.fn(async (_k: string, _n: unknown, _o?: { releaseIfAcquired?: boolean }) => true as boolean),
+  // ⚡ phase-3: flushSketchStageUnderLock now delegates to ensureSaved → returns a SaveOutcome.
+  flushStage: vi.fn(async (_k: string) => 'saved' as string),
   // ⚡ phase-2: variant flush-before-generate is now a single `ensureSaved('sketch-stage', key)`.
   ensureSaved: vi.fn(async (_domain: string, _id: string) => 'saved' as string),
   // ⚡ M1: persist-after rebases the held baseline on a landed save (prevents release double-write).
@@ -182,7 +183,7 @@ describe('startStageBaseSheetGenerate (11 — STATELESS)', () => {
     mockedCut.mockReset();
     h.lockState.collabPersist = false;
     h.lockState.bookId = undefined;
-    h.flushStage.mockReset().mockResolvedValue(true);
+    h.flushStage.mockReset().mockResolvedValue('saved');
     h.rebaseBaseline.mockReset();
     ({ store, flushSnapshot, autoSaveSnapshot } = createTestStore('snap-1', [readyStage()]));
   });
@@ -231,7 +232,8 @@ describe('startStageBaseSheetGenerate (11 — STATELESS)', () => {
       cellCount: 2, // ⚡ stage sheets are 2 cells
       pathPrefix: 'sketches/base/stages/forest',
     });
-    expect(autoSaveSnapshot).toHaveBeenCalled();
+    // ⚡ phase-3: persist-after routes through the engine seam (not a direct autoSaveSnapshot).
+    expect(h.flushStage).toHaveBeenCalledWith('forest');
     expect(store.getState().stageSheetGenerateOp).toBeNull();
   });
 
@@ -263,7 +265,7 @@ describe('startStageBaseSheetGenerate (11 — STATELESS)', () => {
     await tick();
   });
 
-  it('COLLAB: persists the RESULT via the gateway helper with releaseIfAcquired:true', async () => {
+  it('COLLAB: persists the RESULT via the engine seam (engine owns the lock lifecycle)', async () => {
     h.lockState.collabPersist = true;
     mockedBaseGen.mockResolvedValueOnce(okBaseGen('raw.png'));
     mockedCut.mockResolvedValueOnce(okCut(['c1.png', 'c2.png']));
@@ -273,7 +275,8 @@ describe('startStageBaseSheetGenerate (11 — STATELESS)', () => {
     await tick();
     await tick();
 
-    expect(h.flushStage).toHaveBeenCalledWith('forest', expect.any(Object), { releaseIfAcquired: true });
+    // ⚡ phase-3: no node arg, no releaseIfAcquired — the engine reads the fresh node + decides the lifecycle.
+    expect(h.flushStage).toHaveBeenCalledWith('forest');
     expect(autoSaveSnapshot).not.toHaveBeenCalled();
   });
 
@@ -306,7 +309,7 @@ describe('startStageVariantSheetGenerate (12 — SNAPSHOT-READING)', () => {
     mockedCut.mockReset();
     h.lockState.collabPersist = false;
     h.lockState.bookId = undefined;
-    h.flushStage.mockReset().mockResolvedValue(true);
+    h.flushStage.mockReset().mockResolvedValue('saved');
     h.ensureSaved.mockReset().mockResolvedValue('saved');
     h.rebaseBaseline.mockReset();
     ({ store, flushSnapshot } = createTestStore('snap-1', [readyStage()]));
@@ -344,12 +347,12 @@ describe('startStageVariantSheetGenerate (12 — SNAPSHOT-READING)', () => {
 
     expect(h.ensureSaved).toHaveBeenCalledWith('sketch-stage', 'forest');
     expect(h.ensureSaved.mock.invocationCallOrder[0]).toBeLessThan(mockedVariantGen.mock.invocationCallOrder[0]);
-    // flushStage now fires ONLY for the persist-after (result landed), with releaseIfAcquired:true.
-    expect(h.flushStage).toHaveBeenCalledWith('forest', expect.any(Object), { releaseIfAcquired: true });
+    // ⚡ phase-3: flushStage fires ONLY for the persist-after; the engine owns the lock lifecycle.
+    expect(h.flushStage).toHaveBeenCalledWith('forest');
     expect(flushSnapshot).not.toHaveBeenCalled();
   });
 
-  it('M1: persist-after rebases the held-session baseline on a landed save (no release double-write)', async () => {
+  it('persist-after routes through the engine seam (ensureSaved rebases the baseline internally)', async () => {
     h.lockState.collabPersist = true;
     h.lockState.bookId = 'book1';
     mockedVariantGen.mockResolvedValueOnce(okVariantGen('vraw.png'));
@@ -361,7 +364,9 @@ describe('startStageVariantSheetGenerate (12 — SNAPSHOT-READING)', () => {
     await tick();
     await tick();
 
-    expect(h.rebaseBaseline).toHaveBeenCalledWith('book1|1|5|forest|');
+    // ⚡ phase-3: the slice no longer rebases directly — the engine's ensureSaved (behind the seam) does.
+    expect(h.flushStage).toHaveBeenCalledWith('forest');
+    expect(h.rebaseBaseline).not.toHaveBeenCalled();
   });
 
   it('save-before FAILS (peer lock) → generate ABORTED, op kept with error', async () => {
@@ -471,7 +476,7 @@ describe('recropStageBaseSheet / recropStageVariantSheet (cut-only re-runs)', ()
     mockedVariantGen.mockReset();
     mockedCut.mockReset();
     h.lockState.collabPersist = false;
-    h.flushStage.mockReset().mockResolvedValue(true);
+    h.flushStage.mockReset().mockResolvedValue('saved');
     ({ store } = createTestStore('snap-1', [readyStage()]));
   });
 

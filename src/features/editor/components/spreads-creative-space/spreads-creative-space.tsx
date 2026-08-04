@@ -113,7 +113,8 @@ export function SpreadsCreativeSpace() {
 
   // ── Undo/redo nexus (ADR-045) — the engine now bridges begin/endSession itself (illustration-scene
   // grain, sharing the held baseline clone) on acquire/release/switch/unmount/LOST; no space wiring.
-  const { status: sceneLockStatus, saveNow: sceneSaveNow } = useHeldResourceSession({
+  const { status: sceneLockStatus, commitOnModalClose: sceneCommitOnModalClose } =
+    useHeldResourceSession({
     target: sceneLockTarget,
     getNode: getSceneNode,
     ownedKeys: SCENE_OWNED_KEYS,
@@ -188,7 +189,7 @@ export function SpreadsCreativeSpace() {
           onSpreadSelect={handleSpreadSelect}
           onItemSelect={handleItemSelect}
           spreadEditable={spreadEditable}
-          onCommitSave={sceneSaveNow}
+          onCommitSave={sceneCommitOnModalClose}
           viewMode={viewMode ?? 'edit'}
           zoomLevel={zoomLevel ?? ZOOM.DEFAULT}
           columnsPerRow={columnsPerRow ?? COLUMNS.DEFAULT}

@@ -9,22 +9,17 @@
 // ARRAY — the gateway infers `is_collection_scope` from `isinstance(patch, list)`; a dict patch
 // is rejected 400 (rtype 12 has no per-node resolver).
 //
-// NO-OP under solo (`collabPersist=false`): setters already marked sync.isDirty, the whole-doc
-// autosave owns persistence (memory *new-pipeline-space-collab-flow*: never call autoSaveSnapshot
-// from the space).
-//
-// LEAF module: does NOT import snapshot-store (callers read the fresh tabs and pass them in).
+// ⚡ unified-item-save phase 3: `flushSketchLineupsUnderLock` now delegates to the engine's
+// `ensureSaved` (solo/collab fork + lock lifecycle + rebase internalized); the pure resolver/payload
+// exports are unchanged. `useSaveSessionStore` is imported dynamically at call time (cycle break).
 
 import {
-  useResourceLockStore,
-  keyOf,
   type LockTarget,
   type ResourceType,
   type SavePayload,
 } from '@/stores/resource-lock-store';
 import type { SketchLineupTab } from '@/types/sketch';
-import { toastLockedByOther } from '@/utils/collab-save-toasts';
-import { resolveLockHolderName } from './collab-image-save-helper';
+import type { SaveOutcome } from '@/stores/save-session-store/types';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('Store', 'CollabSketchLineupsSaveHelper');
@@ -67,72 +62,23 @@ export function buildSketchLineupsPayload(tabs: SketchLineupTab[]): SavePayload 
 }
 
 export interface FlushSketchLineupsOptions {
-  /** One-shot semantics (mirrors the base-sheet helper): release after the save IFF this call
-   *  had to acquire (the held-session never owned it). Default false → keep. */
+  /** @deprecated IGNORED since unified-item-save phase 3 — the engine decides the lock lifecycle. */
   releaseIfAcquired?: boolean;
 }
 
 /**
- * Persist the WHOLE `sketch.lineups[]` array through the gateway, baseline-independent (the
- * caller reads the FRESH tabs via getState() and passes them) — closes the held-session
- * late-baseline race that would swallow the FIRST save after acquire (plan phase-03 Insight #3).
+ * Persist the WHOLE `sketch.lineups[]` array (rtype 12) — ⚡ unified-item-save phase 3: delegates to
+ * the save-session engine's `ensureSaved('sketch-lineups', …)` (single solo/collab fork + lock
+ * lifecycle; held → save + rebase; no session → one-shot acquire→save→release; solo → whole-snapshot
+ * flush). The engine reads the FRESH tabs array via the policy registry, so `tabs` is IGNORED.
  *
- * Lock lifecycle:
- *   • solo (`collabPersist=false`) → no-op `true` (whole-doc autosave owns persistence).
- *   • already held (space session owns rtype 12) → skip acquire, save, KEEP the lock.
- *   • not held → acquire first (409 → toast + `false`); release after IFF `releaseIfAcquired`.
+ * @returns the engine `SaveOutcome` — the CALLER maps it to a toast (this helper no longer self-toasts).
  */
 export async function flushSketchLineupsUnderLock(
-  tabs: SketchLineupTab[],
-  opts?: FlushSketchLineupsOptions,
-): Promise<boolean> {
-  const rl = useResourceLockStore.getState();
-  if (!rl.collabPersist) {
-    log.debug('flushSketchLineupsUnderLock', 'solo path — whole-doc autosave owns persistence', {
-      tabCount: tabs.length,
-    });
-    return true;
-  }
-  const bookId = rl.bookId;
-  if (!bookId) {
-    log.warn('flushSketchLineupsUnderLock', 'no book connected — skip', { tabCount: tabs.length });
-    return false;
-  }
-
-  const target = resolveLineupsLockTarget();
-  const key = keyOf(bookId, target);
-  let acquiredHere = false;
-
-  try {
-    if (!rl.myLocks.has(key)) {
-      const acq = await rl.acquire(target);
-      if (!acq.ok) {
-        log.info('flushSketchLineupsUnderLock', 'blocked — another editor holds the lineups');
-        toastLockedByOther(resolveLockHolderName(target));
-        return false;
-      }
-      acquiredHere = true;
-    }
-    const res = await rl.save(target, buildSketchLineupsPayload(tabs));
-    if (res.ok) {
-      log.info('flushSketchLineupsUnderLock', 'saved', { tabCount: tabs.length, acquiredHere });
-      return true;
-    }
-    log.warn('flushSketchLineupsUnderLock', 'save rejected', {
-      lost: res.lost,
-      forbidden: res.forbidden,
-    });
-    if (res.forbidden) toastLockedByOther(resolveLockHolderName(target));
-    return false;
-  } catch (err) {
-    log.error('flushSketchLineupsUnderLock', 'unexpected error', {
-      error: err instanceof Error ? err.message : String(err),
-    });
-    return false;
-  } finally {
-    if (acquiredHere && opts?.releaseIfAcquired) {
-      await rl.release(target);
-      log.debug('flushSketchLineupsUnderLock', 'one-shot release (acquired here)');
-    }
-  }
+  _tabs?: SketchLineupTab[],
+  _opts?: FlushSketchLineupsOptions,
+): Promise<SaveOutcome> {
+  const { useSaveSessionStore } = await import('@/stores/save-session-store');
+  log.debug('flushSketchLineupsUnderLock', 'ensureSaved (engine)');
+  return useSaveSessionStore.getState().ensureSaved('sketch-lineups', LINEUP_RESOURCE_ID);
 }

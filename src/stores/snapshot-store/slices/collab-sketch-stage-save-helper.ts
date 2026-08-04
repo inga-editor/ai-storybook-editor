@@ -14,12 +14,12 @@
 //   • `handleSelectCrop` (space root) — single-gesture pick whose held-session baseline is
 //     captured too late to see it (H2) → direct flush, `releaseIfAcquired` default FALSE.
 //
-// NO-OP under solo (`collabPersist=false`): the whole-doc autosave owns persistence there.
-// This module does NOT import snapshot-store (caller reads the fresh node) → no cycle.
+// ⚡ unified-item-save phase 3: `flushSketchStageUnderLock` now delegates to the engine's `ensureSaved`
+// (solo/collab fork + lock lifecycle + rebase internalized); the pure resolver/payload exports are
+// unchanged. `useSaveSessionStore` is imported dynamically at call time (cycle break).
 
-import { useResourceLockStore, keyOf, type LockTarget } from '@/stores/resource-lock-store';
-import { toastLockedByOther } from '@/utils/collab-save-toasts';
-import { resolveLockHolderName } from './collab-image-save-helper';
+import { type LockTarget } from '@/stores/resource-lock-store';
+import type { SaveOutcome } from '@/stores/save-session-store/types';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('Store', 'CollabSketchStageSaveHelper');
@@ -50,90 +50,25 @@ export function buildSketchStagePayload(node: unknown): {
 }
 
 export interface FlushSketchStageOptions {
-  /**
-   * ⚠️ One-shot semantics — copy of the variant helper's contract, same hazard: if THIS call had
-   * to `acquire` (the held-session did NOT own the stage), release after the save. Use ONLY for
-   * persists that may run OUTSIDE the held-session's ownership window (persist-after a long AI
-   * call the user browsed away from; the H2 select-crop gesture). When the stage IS already held,
-   * the lock is KEPT — the held-session stays the sole releaser. Default `false` (flush-BEFORE-
-   * generate: the caller just adopted the stage, so the held-session owns + will release it).
-   * Setting `true` where the held-session still owns the stage would be harmless; setting it
-   * where a WHOLE-SESSION release is expected would false-"Saved" — never flip the default.
-   */
+  /** @deprecated IGNORED since unified-item-save phase 3 — the engine decides the lock lifecycle
+   *  (held → keep; no session → one-shot). Kept only for call-site compatibility. */
   releaseIfAcquired?: boolean;
 }
 
 /**
- * Persist the WHOLE stage node through the gateway. Baseline-independent (saves exactly the
- * fresh node the caller passes — no dirty-diff), so a late-baseline mutation can't be dropped.
+ * Persist the WHOLE stage node — ⚡ unified-item-save phase 3: delegates to the save-session engine's
+ * `ensureSaved('sketch-stage', stageKey)` (single solo/collab fork + lock lifecycle; held → save +
+ * rebase; no session → one-shot acquire→save→release; solo → whole-snapshot flush). The engine reads
+ * the FRESH node via the policy registry, so `node` is IGNORED. See the variant helper for the H2 note.
  *
- * Lock lifecycle (mirror flushSketchEntityUnderLock):
- *   • solo → no-op, `true` (caller keeps autoSaveSnapshot).
- *   • already held → skip acquire, `save`, KEEP the lock.
- *   • not held → `acquire` (409 → toast + `false`); after the save, release IFF
- *     `releaseIfAcquired` (one-shot — never orphans a lock).
- *
- * @param node the FRESH whole stage node (read via getState() at call time). `null` → `false`.
- * @returns `true` when persisted (or solo no-op); `false` on 409 / save-reject / missing node.
+ * @returns the engine `SaveOutcome` — the CALLER maps it to a toast (this helper no longer self-toasts).
  */
 export async function flushSketchStageUnderLock(
   stageKey: string,
-  node: unknown,
-  opts?: FlushSketchStageOptions,
-): Promise<boolean> {
-  const rl = useResourceLockStore.getState();
-  if (!rl.collabPersist) {
-    log.debug('flushSketchStageUnderLock', 'solo path — whole-doc autosave owns persistence', { stageKey });
-    return true;
-  }
-  if (node == null) {
-    log.warn('flushSketchStageUnderLock', 'node missing at save time — skip', { stageKey });
-    return false;
-  }
-  const bookId = rl.bookId;
-  if (!bookId) {
-    log.warn('flushSketchStageUnderLock', 'no book connected — skip', { stageKey });
-    return false;
-  }
-
-  const target = resolveSketchStageLockTarget(stageKey);
-  const key = keyOf(bookId, target);
-  let acquiredHere = false;
-
-  try {
-    if (!rl.myLocks.has(key)) {
-      const acq = await rl.acquire(target);
-      if (!acq.ok) {
-        log.info('flushSketchStageUnderLock', 'blocked — another editor holds the stage', { stageKey });
-        toastLockedByOther(resolveLockHolderName(target));
-        return false;
-      }
-      acquiredHere = true;
-    }
-    const res = await rl.save(target, buildSketchStagePayload(node));
-    if (res.ok) {
-      log.info('flushSketchStageUnderLock', 'saved', { stageKey, acquiredHere });
-      return true;
-    }
-    log.warn('flushSketchStageUnderLock', 'save rejected', {
-      stageKey,
-      lost: res.lost,
-      forbidden: res.forbidden,
-    });
-    if (res.forbidden) toastLockedByOther(resolveLockHolderName(target));
-    return false;
-  } catch (err) {
-    log.error('flushSketchStageUnderLock', 'unexpected error', {
-      stageKey,
-      error: err instanceof Error ? err.message : String(err),
-    });
-    return false;
-  } finally {
-    if (acquiredHere && opts?.releaseIfAcquired) {
-      await rl.release(target);
-      log.debug('flushSketchStageUnderLock', 'one-shot release (acquired here, not held-session owned)', {
-        stageKey,
-      });
-    }
-  }
+  _node?: unknown,
+  _opts?: FlushSketchStageOptions,
+): Promise<SaveOutcome> {
+  const { useSaveSessionStore } = await import('@/stores/save-session-store');
+  log.debug('flushSketchStageUnderLock', 'ensureSaved (engine)', { stageKey });
+  return useSaveSessionStore.getState().ensureSaved('sketch-stage', stageKey);
 }

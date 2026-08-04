@@ -146,8 +146,9 @@ interface ObjectsMainViewProps {
   /** Whether the active spread is currently held by THIS editor's retouch lock. Gates canvas item
    *  editability (grey-out when not held — lock-on-click). */
   spreadEditable: boolean;
-  /** Held-session explicit save (forwarded to the retouch Edit-image modal commit). */
-  onCommitSave?: () => Promise<boolean>;
+  /** Held-session commit-on-modal-close (fire-and-forget) forwarded to every spread-level retouch
+   *  modal. STABLE from the engine; self-guards (no-op when clean / not held). */
+  onCommitSave?: () => void;
   zoomLevel: number;
   onZoomChange: (level: number) => void;
   // === Animation overlay props (all optional — forwarded to CanvasSpreadView) ===
@@ -1102,16 +1103,9 @@ export function ObjectsMainView({
     [cloneRawImage]
   );
 
-  // Persist the held retouch sub-tree when a spread-level modal closes. saveNow()
-  // self-guards — it no-ops when the lock isn't held, the node was deleted, or nothing
-  // changed (dequal vs baseline) — so firing on every close is safe regardless of
-  // whether the user actually edited anything (no per-modal dirty tracking needed).
-  const commitOnModalClose = useCallback(() => {
-    if (!onCommitSave) return;
-    void onCommitSave().then((ok) => {
-      if (!ok) log.warn("commitOnModalClose", "save-on-close skipped/rejected", {});
-    });
-  }, [onCommitSave]);
+  // NOTE (phase 3): the local `commitOnModalClose` wrapper was removed — `onCommitSave` IS now the
+  // engine's stable `commitOnModalClose` (fire-and-forget saveNow that self-guards on clean/not-held),
+  // so the spread-level modals below call `onCommitSave?.()` directly on close.
 
   const renderRetouchTextToolbar = useCallback(
     (context: TextToolbarContext<BaseSpread>) => (
@@ -1332,7 +1326,13 @@ export function ObjectsMainView({
           props={props}
           isSpreadEditable={spreadEditable}
           onSubmit={handleSlotSubmit}
-          onClose={closeSlot}
+          onClose={() => {
+            closeSlot();
+            // Commit-on-close (spec §4.2 — uniform for every spread-level modal). A slot write
+            // dirties the held retouch node like any canvas mutation; this fire-and-forget saveNow
+            // persists it now (no-op when clean / not held), the release/auto-save is the net.
+            onCommitSave?.();
+          }}
         />
       )}
 
@@ -1366,6 +1366,9 @@ export function ObjectsMainView({
         // client-minted image id (`col:illustration/spread/key:images/find:id=<newImageId>`), which
         // the BE nested-create does not yet accept for retouch layers. Client-spawn (onCreateImages
         // → buildExtractImages) stays the persist path until that create-node contract lands.
+        // NO onCommitSave (phase 3, user-confirmed): Extract SPAWNS a new illustration version via
+        // onCreateImages — it does not mutate the held spread node, so there is no dirty to commit
+        // on close (a commitOnModalClose here would be a pure no-op). Kept non-committing on purpose.
         <ExtractImageModal
           open={modals.extract.open}
           onOpenChange={modals.closeExtract}
@@ -1394,7 +1397,7 @@ export function ObjectsMainView({
           isOpen={translateModalOpen}
           onClose={() => {
             setTranslateModalOpen(false);
-            commitOnModalClose();
+            onCommitSave?.();
           }}
           spreadId={selectedSpreadId}
           textboxes={selectedSpread.textboxes ?? []}
@@ -1411,7 +1414,7 @@ export function ObjectsMainView({
           isOpen={narrationSpreadModalOpen}
           onClose={() => {
             setNarrationSpreadModalOpen(false);
-            commitOnModalClose();
+            onCommitSave?.();
           }}
           spreadId={selectedSpreadId}
           textboxes={selectedSpread.textboxes ?? []}
@@ -1429,7 +1432,7 @@ export function ObjectsMainView({
           isOpen={annotationModalOpen}
           onClose={() => {
             setAnnotationModalOpen(false);
-            commitOnModalClose();
+            onCommitSave?.();
           }}
           spreadId={selectedSpreadId}
           images={annotationImages}

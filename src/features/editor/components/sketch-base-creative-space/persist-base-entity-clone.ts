@@ -2,12 +2,16 @@
 // style. The store setter (setSketchBaseCropIllustrations) re-clones the edited crop into the
 // entity's variants[base].raw_sheet (dual-write, live-follow); the sheet held-session release-save
 // only covers grain A (rtype 11), so the changed ENTITY node (rtype 3/4) must flush explicitly
-// here or the clone silently never saves in collab. SOLO → flushSketchEntityUnderLock no-ops and
-// the whole-doc isDirty autosave persists both nodes. Peer-held entity → the helper skips + toasts
-// (advisory — same contract as the lock-style flush in sketch-base-creative-space).
+// here or the clone silently never saves in collab. ⚡ phase 3: the flush seam now routes through the
+// engine's `ensureSaved` (held → save; else one-shot; solo → whole-snapshot flush). Peer-held entity
+// → `blocked` → the CALLER toasts (the seam no longer self-toasts).
 
 import { useSnapshotStore } from '@/stores/snapshot-store';
-import { flushSketchEntityUnderLock } from '@/stores/snapshot-store/slices/collab-sketch-variant-save-helper';
+import {
+  flushSketchEntityUnderLock,
+  resolveSketchVariantLockTarget,
+} from '@/stores/snapshot-store/slices/collab-sketch-variant-save-helper';
+import { toastSketchSaveOutcome } from '@/stores/snapshot-store/slices/sketch-save-outcome-toast';
 import { sheetOf, sketchEntitiesOfKind, type BaseKind } from '@/types/sketch';
 import { createLogger } from '@/utils/logger';
 
@@ -43,5 +47,6 @@ export async function persistBaseEntityCloneIfLocked(
     styleIndex,
     entityKey,
   });
-  await flushSketchEntityUnderLock(kind, entity.key, entity, { releaseIfAcquired: true });
+  const outcome = await flushSketchEntityUnderLock(kind, entity.key);
+  toastSketchSaveOutcome(outcome, resolveSketchVariantLockTarget(kind, entity.key));
 }

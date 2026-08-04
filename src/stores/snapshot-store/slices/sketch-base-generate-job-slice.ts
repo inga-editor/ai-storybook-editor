@@ -34,9 +34,8 @@ import {
 // Base crop reuses the shared positional cutter (api 10) — 07 `crop-base-sheet` removed 2026-07-15.
 import { callCropSheetRow } from '@/apis/sketch-variant-api';
 import type { ImageApiFailure } from '@/apis/image-api-client';
-// Collab (ADR-043 sketch-base, rtype 11): persist the WHOLE base.{kind}_sheet node through the
-// gateway held-session instead of the suppressed owner-direct autoSave. Solo → autoSave (below).
-import { useResourceLockStore } from '@/stores/resource-lock-store';
+// Persist the WHOLE base.{kind}_sheet node (rtype 11) via the engine's `ensureSaved` seam
+// (unified-item-save phase 3 — the engine owns the solo/collab fork + lock lifecycle + rebase).
 import { flushSketchBaseSheetUnderLock } from './collab-sketch-base-sheet-save-helper';
 // Grain B (rtype 3/4): a crops replacement on the LOCKED style re-clones every entity's base
 // variant (sketch-slice cloneLockedStyleCropsToBaseVariants) → those entity nodes flush here too.
@@ -128,28 +127,20 @@ export const createSketchBaseGenerateJobSlice: StateCreator<
     });
   }
 
-  // Persist the RESULT of a generate/recrop (raw + crops landed in the store). COLLAB (ADR-043,
-  // rtype 11) → gateway whole-SHEET flush (`releaseIfAcquired:true` one-shot: if the space held-
-  // session still owns the sheet it KEEPS the lock; if the user switched kind during the long AI
-  // call it acquires+releases so no lock lingers). SOLO (incl. the case where the space unmounted →
-  // collabPersist flipped false) → the legacy owner-direct autoSaveSnapshot. Reads the FRESH sheet
-  // node via getState() at call time (base generate is INLINE — no flush-BEFORE-generate).
+  // Persist the RESULT of a generate/recrop (raw + crops landed in the store). ⚡ unified-item-save
+  // phase 3: the solo/collab fork is GONE — the flush seams delegate to the engine's `ensureSaved`
+  // (held → save + rebase; browsed-away → one-shot acquire→save→release; solo → whole-snapshot flush).
+  // Background persist — SILENT (no toast). Grain A = the whole SHEET node (rtype 11). Grain B = each
+  // entity's base-variant clone (rtype 3/4), refreshed only when the LOCKED style's crops landed —
+  // `cropsLanded` gates the failed/cancelled paths (clones unchanged → no N-entity writes).
+  // ⚠️ SOLO cost: each seam's solo branch is a whole-snapshot flush, so grain B loops N flushes in
+  // solo — acceptable (solo base generate is rare — space unmounted; flush is idempotent).
   async function persistBaseSheet(kind: BaseKind, styleIndex: number, cropsLanded: boolean): Promise<void> {
-    if (useResourceLockStore.getState().collabPersist) {
-      const node = sheetOf(get().sketch.base, kind);
-      await flushSketchBaseSheetUnderLock(kind, node, { releaseIfAcquired: true });
-      // New crops landed on the LOCKED style → the store re-cloned every entity's base variant
-      // (grain B, rtype 3/4) — flush those entity nodes too, or the clones silently never save
-      // (the sheet session only covers rtype 11). Peer-held entity → helper skips + toasts.
-      // `cropsLanded` gates the failed/cancelled paths (raw may have landed, crops did not →
-      // clones unchanged → no N-entity writes / peer refetch noise).
-      if (cropsLanded && sheetOf(get().sketch.base, kind).styles[styleIndex]?.is_selected) {
-        for (const e of sketchEntitiesOfKind(get().sketch, kind)) {
-          await flushSketchEntityUnderLock(kind, e.key, e, { releaseIfAcquired: true });
-        }
+    await flushSketchBaseSheetUnderLock(kind);
+    if (cropsLanded && sheetOf(get().sketch.base, kind).styles[styleIndex]?.is_selected) {
+      for (const e of sketchEntitiesOfKind(get().sketch, kind)) {
+        await flushSketchEntityUnderLock(kind, e.key);
       }
-    } else {
-      void get().autoSaveSnapshot();
     }
   }
 

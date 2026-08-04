@@ -28,7 +28,8 @@ const mockedCut = vi.mocked(callCropSheetRow);
 // slice DIRECTLY (bypassing snapshot-store/index), so the real modules would close the slice ↔ store cycle.
 const h = vi.hoisted(() => ({
   lockState: { collabPersist: false as boolean, bookId: undefined as string | undefined },
-  flushEntity: vi.fn(async (_k: string, _e: string, _n: unknown) => true as boolean),
+  // ⚡ phase-3: flushSketchEntityUnderLock now delegates to ensureSaved → returns a SaveOutcome.
+  flushEntity: vi.fn(async (_k: string, _e: string) => 'saved' as string),
   // ⚡ phase-2: flush-before-generate is now a single `ensureSaved` (engine internalizes solo/collab).
   ensureSaved: vi.fn(async (_domain: string, _id: string) => 'saved' as string),
   // ⚡ M1: persist-after rebases the held baseline on a landed save (prevents release double-write).
@@ -157,7 +158,7 @@ describe('SketchVariantGenerateJobSlice', () => {
     mockedCut.mockReset();
     h.lockState.collabPersist = false; // default: solo path (legacy flushSnapshot)
     h.lockState.bookId = undefined;
-    h.flushEntity.mockReset().mockResolvedValue(true);
+    h.flushEntity.mockReset().mockResolvedValue('saved');
     h.ensureSaved.mockReset().mockResolvedValue('saved');
     h.rebaseBaseline.mockReset();
     ({ store, autoSaveSnapshot } = createTestStore());
@@ -236,7 +237,7 @@ describe('SketchVariantGenerateJobSlice', () => {
     expect(store.getState().variantSheetGenerateOps[KEY]).toBeUndefined();
   });
 
-  it('(a5) M1: persist-after rebases the held-session baseline on a landed save (no release double-write)', async () => {
+  it('(a5) persist-after routes through the engine seam (ensureSaved rebases the baseline internally)', async () => {
     h.lockState.collabPersist = true;
     h.lockState.bookId = 'book1';
     mockedGen.mockResolvedValueOnce(okGen('raw.png'));
@@ -248,9 +249,11 @@ describe('SketchVariantGenerateJobSlice', () => {
     await tick();
     await tick();
 
-    // The landed persist-after (flushEntity → true) re-anchors the held sketch-entity baseline so the
-    // eventual release-save does not re-write the just-persisted raw sheet.
-    expect(h.rebaseBaseline).toHaveBeenCalledWith('book1|1|3|kid|');
+    // ⚡ phase-3: persist-after is a single `flushSketchEntityUnderLock(kind, key)` → engine `ensureSaved`
+    // (which rebases the held baseline itself). The slice no longer rebases directly, and never passes
+    // a node / releaseIfAcquired — the engine owns the lock lifecycle.
+    expect(h.flushEntity).toHaveBeenCalledWith('characters', 'kid');
+    expect(h.rebaseBaseline).not.toHaveBeenCalled();
   });
 
   it('(b) meta.id == null → toasts + does NOT call generate + keeps the errored op', async () => {
@@ -319,8 +322,8 @@ describe('SketchVariantGenerateJobSlice', () => {
       cellCount: 4,
       pathPrefix: 'sketches/variants/characters/kid/hero',
     });
-    // Durability autosave fired.
-    expect(autoSaveSnapshot).toHaveBeenCalled();
+    // Durability persist fired (phase-3: via the engine seam, not a direct autoSaveSnapshot).
+    expect(h.flushEntity).toHaveBeenCalledWith('characters', 'kid');
     expect(store.getState().variantSheetGenerateOps[KEY]).toBeUndefined();
   });
 
@@ -653,7 +656,7 @@ describe('SketchVariantGenerateJobSlice', () => {
       expect(crops[0].illustrations[0].media_url).toBe('old.png');
     });
 
-    it('(l) persist-after ALWAYS fires, even on failure: SOLO → autoSaveSnapshot (not the gateway)', async () => {
+    it('(l) persist-after ALWAYS fires, even on cut failure — via the engine seam (phase-3)', async () => {
       store.getState().setSketchVariantRawSheetIllustrations(
         'characters',
         'kid',
@@ -668,11 +671,13 @@ describe('SketchVariantGenerateJobSlice', () => {
       await tick();
       await tick();
 
-      expect(autoSaveSnapshot).toHaveBeenCalled();
-      expect(h.flushEntity).not.toHaveBeenCalled();
+      // ⚡ phase-3: the solo/collab fork is internal to the engine seam — persist-after is always the
+      // same `flushSketchEntityUnderLock(kind, key)` call (the engine picks whole-snapshot flush in solo).
+      expect(h.flushEntity).toHaveBeenCalledWith('characters', 'kid');
+      expect(autoSaveSnapshot).not.toHaveBeenCalled();
     });
 
-    it('(m) persist-after COLLAB: flushSketchEntityUnderLock called with releaseIfAcquired:true', async () => {
+    it('(m) persist-after COLLAB: flushSketchEntityUnderLock called (engine owns the lock lifecycle)', async () => {
       h.lockState.collabPersist = true;
       store.getState().setSketchVariantRawSheetIllustrations(
         'characters',
@@ -686,9 +691,8 @@ describe('SketchVariantGenerateJobSlice', () => {
       await tick();
       await tick();
 
-      expect(h.flushEntity).toHaveBeenCalledWith('characters', 'kid', expect.any(Object), {
-        releaseIfAcquired: true,
-      });
+      // No node arg, no releaseIfAcquired — the engine reads the fresh node + decides the lifecycle.
+      expect(h.flushEntity).toHaveBeenCalledWith('characters', 'kid');
       expect(autoSaveSnapshot).not.toHaveBeenCalled();
       expect(store.getState().variantSheetGenerateOps[KEY]).toBeUndefined();
     });

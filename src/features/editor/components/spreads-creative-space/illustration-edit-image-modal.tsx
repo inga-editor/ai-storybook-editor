@@ -22,11 +22,11 @@ interface IllustrationEditImageModalProps {
   imageId: string;
   /** Per-space edit-tool availability (matrix gate). Forwarded to EditImageModal. */
   enabledTools?: EditToolKey[];
-  /** Held-session explicit save (per-spread SCENE lock). Persists the whole SCENE owned sub-tree
-   *  (which includes this raw_image) WHILE the lock is held, then rebases the session baseline.
-   *  Absent ⇒ the commit is only persisted on the session's release-time save-if-dirty (ADR-044,
+  /** Held-session commit-on-modal-close (per-spread SCENE lock), fire-and-forget: persists the whole
+   *  SCENE owned sub-tree (which includes this raw_image) WHILE the lock is held. Self-guards (no-op
+   *  when clean / not held). Absent ⇒ persisted on the session's release-time save-if-dirty (ADR-044,
    *  mirror of RetouchEditImageModal). */
-  onCommitSave?: () => Promise<boolean>;
+  onCommitSave?: () => void;
   /** Opt-in double-write directive — pass-through to EditImageModal (path resolved by the opener,
    *  Phase 04). Undefined → omitted. */
   saveResource?: SaveResourceDirective;
@@ -51,13 +51,9 @@ export function IllustrationEditImageModal({
       log.debug("handleUpdate", "persist illustrations", { spreadId, imageId, count: next.length });
       // Local optimistic mutate (dirties raw_images — a SCENE_OWNED_KEY).
       updateRawImage(spreadId, imageId, { illustrations: next });
-      // Explicit held-session save NOW (no-op when not holding the spread lock): persists the edit
-      // immediately without waiting for release.
-      if (onCommitSave) {
-        void onCommitSave().then((ok) => {
-          if (!ok) log.warn("handleUpdate", "held-session saveNow returned false", { spreadId, imageId });
-        });
-      }
+      // Held-session commit-on-close (fire-and-forget; no-op when not holding the spread lock):
+      // persists the edit without waiting for release.
+      onCommitSave?.();
     },
     [spreadId, imageId, updateRawImage, onCommitSave],
   );

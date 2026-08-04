@@ -52,20 +52,13 @@ import {
   callCropSheetRow,
 } from '@/apis/sketch-variant-api';
 import type { ImageApiFailure } from '@/apis/image-api-client';
-// resource-lock-store is a leaf store loaded before the slices in snapshot-store/index, so this
-// static import resolves cleanly in the app (no cycle back to snapshot-store). The isolated slice
-// unit tests import this module directly (bypassing index) and mock it.
-import { useResourceLockStore, keyOf } from '@/stores/resource-lock-store';
 // makeEntityId comes from the PURE entity-id submodule (no imports) to avoid the save-session-store
 // barrel; useSaveSessionStore is imported DYNAMICALLY at call-time (save-session-store →
 // snapshot-store/index → this slice would be an eval-time cycle if static).
 import { makeEntityId } from '@/stores/save-session-store/entity-id';
-// Sibling slice-helper (same dir) — whole sketch-entity gateway flush that KEEPS the lock held so
-// the component held-session stays the sole releaser (ADR-047). Reads no store (caller passes node).
-import {
-  flushSketchEntityUnderLock,
-  resolveSketchVariantLockTarget,
-} from './collab-sketch-variant-save-helper';
+// Sibling slice-helper (same dir) — whole sketch-entity persist, now a thin `ensureSaved` seam
+// (unified-item-save phase 3); the engine owns the solo/collab fork + lock lifecycle.
+import { flushSketchEntityUnderLock } from './collab-sketch-variant-save-helper';
 import { buildImageVersionSaveResource } from '@/utils/save-resource-path';
 import { toast } from 'sonner';
 import { createLogger } from '@/utils/logger';
@@ -148,12 +141,6 @@ export const createSketchVariantGenerateJobSlice: StateCreator<
       ?.variants.find((v) => v.key === ref.variantKey);
   }
 
-  /** Resolve the live WHOLE entity node (the gateway save grain — step 1, whole-node). Read FRESH
-   *  at call time (anti stale-closure) so the flush persists the latest text/crops. */
-  function entityNodeOf(ref: VariantRef): unknown | null {
-    return sketchEntitiesOfKind(get().sketch, ref.kind).find((e) => e.key === ref.entityKey) ?? null;
-  }
-
   /** Effective raw sheet url: selected version → newest → null (mirrors the base slice). */
   function effectiveRawUrl(ref: VariantRef): string | null {
     const illustrations = variantOf(ref)?.raw_sheet?.illustrations ?? [];
@@ -162,34 +149,13 @@ export const createSketchVariantGenerateJobSlice: StateCreator<
 
   /** Persist the RESULT of a generate/recrop chain (raw sheet + crops already landed in the store).
    *  ⚡ PERSIST-AFTER is the deliberate EXCEPTION to this space's batch-at-release model (ADR-043 Rev
-   *  2026-07-16): cheap gestures (text / pick / crop edit) wait for the release-save, but AI output
-   *  must never be lost to a crash / leaving the space mid-chain. Fire-and-forget.
-   *  COLLAB → gateway whole-entity flush; `releaseIfAcquired:true` (one-shot) because the user MAY
-   *  have browsed to another entity during the long AI call → the held-session already released THIS
-   *  entity and re-acquiring + keeping would orphan the lock (H1). Still held (didn't browse) → the
-   *  lock is KEPT for the held-session (the sole releaser). SOLO (incl. the space unmounted →
-   *  collabPersist flipped false) → the legacy owner-direct autoSaveSnapshot. */
+   *  2026-07-16): cheap gestures wait for the release-save, but AI output must never be lost to a
+   *  crash / leaving the space mid-chain. Fire-and-forget, SILENT (background persist — no toast).
+   *  ⚡ unified-item-save phase 3: the solo/collab fork + the manual rebase are GONE — the engine's
+   *  `ensureSaved` (via `flushSketchEntityUnderLock`) internalizes them (held → save-while-held +
+   *  rebase baseline; browsed away → one-shot acquire→save→release; solo → whole-snapshot flush). */
   function persistVariantEntity(ref: VariantRef): void {
-    if (useResourceLockStore.getState().collabPersist) {
-      // ⚡ Await the flush + rebase the held-session baseline ON SUCCESS (spec §4.4), so the eventual
-      // release-save doesn't double-write the just-persisted raw sheet (parity with image-task-slice).
-      // Fire-and-forget from the caller. rebaseBaseline no-ops if the session already released (browsed
-      // away → one-shot flush) or is solo; only a landed save (saved===true) rebases.
-      void (async () => {
-        const saved = await flushSketchEntityUnderLock(ref.kind, ref.entityKey, entityNodeOf(ref), {
-          releaseIfAcquired: true,
-        });
-        if (!saved) return;
-        const bookId = useResourceLockStore.getState().bookId;
-        if (!bookId) return;
-        const { useSaveSessionStore } = await import('@/stores/save-session-store');
-        useSaveSessionStore
-          .getState()
-          .rebaseBaseline(keyOf(bookId, resolveSketchVariantLockTarget(ref.kind, ref.entityKey)));
-      })();
-    } else {
-      void get().autoSaveSnapshot();
-    }
+    void flushSketchEntityUnderLock(ref.kind, ref.entityKey);
   }
 
   // ── internal producers (immer) — called at await boundaries. All address ONE map entry, so a

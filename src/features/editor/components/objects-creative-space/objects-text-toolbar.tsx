@@ -44,9 +44,9 @@ const log = createLogger("Editor", "ObjectsTextToolbar");
 
 interface ObjectsTextToolbarProps<TSpread extends BaseSpread> {
   context: TextToolbarContext<TSpread>;
-  /** Held-session commit (retouch saveNow). Fired when the narration modal closes so the
-   *  per-mutation audio bubbles are persisted as one save. No-op when not held / not dirty. */
-  onCommitSave?: () => Promise<boolean>;
+  /** Held-session commit-on-modal-close (retouch), fire-and-forget. Fired when the narration modal
+   *  closes so the per-mutation audio bubbles are persisted as one save. No-op when not held / clean. */
+  onCommitSave?: () => void;
 }
 
 export function ObjectsTextToolbar<TSpread extends BaseSpread>({
@@ -312,13 +312,8 @@ export function ObjectsTextToolbar<TSpread extends BaseSpread>({
             isOpen={isGenerateModalOpen}
             onClose={() => {
               setIsGenerateModalOpen(false);
-              if (onCommitSave)
-                void onCommitSave().then((ok) => {
-                  if (!ok)
-                    log.warn("narrationClose", "save-on-close skipped/rejected", {
-                      itemId: item.id,
-                    });
-                });
+              // Held-session commit-on-close (fire-and-forget; no-op when not held / clean).
+              onCommitSave?.();
             }}
             textboxTitle={item.title}
             textboxText={content?.text ?? ""}

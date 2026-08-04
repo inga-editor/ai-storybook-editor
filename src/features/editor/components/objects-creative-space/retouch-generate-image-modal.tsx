@@ -23,10 +23,10 @@ interface RetouchGenerateImageModalProps {
   onOpenChange: (open: boolean) => void;
   spreadId: string;
   imageId: string;
-  /** Held-session explicit save (per-spread retouch lock) — persists the uploaded/replaced image
-   *  immediately while the lock is held, so an upload isn't lost if the user never switches spreads.
+  /** Held-session commit-on-modal-close (per-spread retouch lock), fire-and-forget — persists the
+   *  uploaded/replaced image while the lock is held. Self-guards (no-op when clean / not held).
    *  Absent ⇒ persisted on the session's release-time save-if-dirty. */
-  onCommitSave?: () => Promise<boolean>;
+  onCommitSave?: () => void;
   /** Opt-in double-write directive — pass-through to GenerateImageModal (Upload mode; path resolved
    *  by the opener, Phase 04). Undefined → omitted. */
   saveResource?: SaveResourceDirective;
@@ -51,12 +51,8 @@ export function RetouchGenerateImageModal({
         keys: Object.keys(updates),
       });
       updateRetouchImage(spreadId, imageId, updates);
-      // Explicit held-session save NOW (no-op when not holding the spread lock).
-      if (onCommitSave) {
-        void onCommitSave().then((ok) => {
-          if (!ok) log.warn("handleUpdate", "held-session saveNow returned false", { spreadId, imageId });
-        });
-      }
+      // Held-session commit-on-close (fire-and-forget; no-op when not holding the spread lock).
+      onCommitSave?.();
     },
     [spreadId, imageId, updateRetouchImage, onCommitSave],
   );
