@@ -372,6 +372,12 @@ export function PreviewCreativeSpace() {
           <PlayableSpreadView
             spreads={playableSpreads}
             sections={sections}
+            // Controlled selection (ADR-021): parent is the single source of
+            // truth. `effectiveSpreadId` membership-checks the current source's
+            // spread list and falls back to its first spread, so a source
+            // switch (Original ↔ Remix) can never strand the view on a spread
+            // the new source filtered out (e.g. an unchecked pool spread).
+            selectedSpreadId={effectiveSpreadId}
             onSpreadSelect={setUserSelectedSpreadId}
             pageNumbering={templateLayout?.page_numbering}
             sourceKey={payload?.sessionId}
