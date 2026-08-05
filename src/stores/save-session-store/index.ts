@@ -30,6 +30,7 @@ import { useEditSessionStatusStore } from '@/stores/edit-session-status-store';
 import { beginHistory, endHistory } from './history-bridge';
 import { SAVE_POLICIES, projectNode } from './save-policies';
 import { ensureSweepRunning, maybeStopSweep } from './idle-sweep';
+import { ensureHeaderMirrorRunning, maybeStopHeaderMirror } from './lockless-header-mirror';
 import type { BeginOptions, SaveDomain, SaveOutcome, SessionEntry } from './types';
 
 const log = createLogger('Store', 'SaveSessionStore');
@@ -149,6 +150,7 @@ export const useSaveSessionStore = create<SaveSessionState>()((set, get) => {
     endHistory(entry.domain, entry.target);
     // A lost session is no longer savable; stop the sweep if it was the only one left.
     maybeStopSweep(get);
+    maybeStopHeaderMirror(get);
   };
 
   return {
@@ -191,7 +193,10 @@ export const useSaveSessionStore = create<SaveSessionState>()((set, get) => {
           manageHeaderStatus: manage,
           onLost: opts.onLost, // captured but never fired — a lockless session can't lose a lock
         });
-        if (manage) useEditSessionStatusStore.getState().beginHold();
+        // NO beginHold here: a lockless session is 'held' for as long as the item is merely
+        // SELECTED (no interact gate), so hold-driven "Unsaved" would show permanently. The header
+        // hold is instead mirrored from REAL dirtiness (see lockless-header-mirror).
+        ensureHeaderMirrorRunning(get, (l) => useSaveSessionStore.subscribe(l));
         beginHistory(domain, target, base); // undo bridge still driven by the session engine
         ensureSweepRunning(get); // idle sweep + flush-on-hidden cover held sessions (locked or not)
         log.debug('begin', 'lockless session — skip acquire', { domain });
@@ -267,6 +272,7 @@ export const useSaveSessionStore = create<SaveSessionState>()((set, get) => {
         rl.unregisterOnLost(key);
         dropEntry(key);
         maybeStopSweep(get);
+        maybeStopHeaderMirror(get);
         log.debug('end', 'no held lock — cleanup only', { key, status: entry.status });
         return;
       }
@@ -284,10 +290,9 @@ export const useSaveSessionStore = create<SaveSessionState>()((set, get) => {
         const manage = entry.manageHeaderStatus;
         const ess = useEditSessionStatusStore.getState();
         log.info('end', 'lockless save-on-leave', { key, dirty, nodeGone: rawNode == null });
-        if (manage) {
-          ess.endHold();
-          if (dirty) ess.markSaving();
-        }
+        // NO endHold here: the engine never began a hold for a lockless session — the mirrored
+        // hold (lockless-header-mirror) releases itself on this dropEntry's store notification.
+        if (manage && dirty) ess.markSaving();
         if (dirty) {
           const payload = policy.buildPayload(projected, entry.id);
           // Fire-and-forget (mirror the held cleanup): settle the header on resolve; warn on failure.
@@ -316,6 +321,7 @@ export const useSaveSessionStore = create<SaveSessionState>()((set, get) => {
         endHistory(entry.domain, entry.target);
         dropEntry(key);
         maybeStopSweep(get);
+        maybeStopHeaderMirror(get);
         return;
       }
 
@@ -347,6 +353,7 @@ export const useSaveSessionStore = create<SaveSessionState>()((set, get) => {
       dropEntry(key);
       // Last session gone → stop the idle sweep (no per-session timer to leak).
       maybeStopSweep(get);
+      maybeStopHeaderMirror(get);
     },
 
     saveNow: async (key) => {
@@ -367,11 +374,22 @@ export const useSaveSessionStore = create<SaveSessionState>()((set, get) => {
         return 'clean'; // parity: old saveNow not-dirty → true (already persisted)
       }
       log.info('saveNow', 'explicit save while held', { key });
-      const res = await persistUnderFork(entry, policy.buildPayload(projected, entry.id), false, true);
-      if (res.ok) {
-        patchEntry(key, { baseline: structuredClone(projected), lastSavedAt: Date.now() });
-        return 'saved';
+      // Lockless + header-managed → drive the Saving…→Saved transient here (a locked session's
+      // label stays "Unsaved" while holding, so marking it would be invisible noise). The dirty
+      // flip after the baseline rebase releases the mirrored hold → header settles to "Saved".
+      const locklessManaged = policy.locking === 'none' && entry.manageHeaderStatus;
+      const ess = useEditSessionStatusStore.getState();
+      if (locklessManaged) ess.markSaving();
+      let res: PersistResult = { ok: false };
+      try {
+        res = await persistUnderFork(entry, policy.buildPayload(projected, entry.id), false, true);
+        // Rebase BEFORE markSaved (finally): the rebase flips dirty → the header mirror releases
+        // its hold in the same task, so the label lands on "Saved" with no "Unsaved" flash frame.
+        if (res.ok) patchEntry(key, { baseline: structuredClone(projected), lastSavedAt: Date.now() });
+      } finally {
+        if (locklessManaged) ess.markSaved();
       }
+      if (res.ok) return 'saved';
       log.warn('saveNow', 'save rejected', { key, blocked: res.blocked });
       return res.blocked ? 'blocked' : 'failed';
     },

@@ -224,11 +224,14 @@ export function EditorPage() {
   }
 
   // Derived save status — session-driven inside a collab space, else snapshot-derived.
+  // "Saving…" outranks the hold: a lockless saveNow marks saving WHILE its dirty-mirrored hold is
+  // still up (it releases on the baseline rebase), and surfacing the in-flight save over "Unsaved"
+  // is the honest label in the locked spaces' idle sweep too.
   const baseSaveStatus: SaveStatus = collabUiActive
-    ? collabHolding
-      ? 'dirty' // holding a lock = actively editing → "Unsaved"
-      : collabSavePhase === 'saving'
-        ? 'auto-saving' // release-save in flight → "Saving..."
+    ? collabSavePhase === 'saving'
+      ? 'auto-saving' // save in flight (release-save / lockless saveNow / idle sweep) → "Saving..."
+      : collabHolding
+        ? 'dirty' // holding = locked-space edit OR dirty-mirrored lockless session → "Unsaved"
         : 'saved' // idle/settled → "Saved" (never "Auto-saved" in collab spaces)
     : deriveSaveStatus(sync);
   // Degraded override (ADR-047): only upgrades "Unsaved" — an idle "Saved" stays truthful

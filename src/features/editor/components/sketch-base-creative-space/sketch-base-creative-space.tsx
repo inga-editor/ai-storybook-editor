@@ -210,8 +210,9 @@ export function SketchBaseSpace() {
     [effectiveSelected],
   );
 
-  // The session drives the SHARED header label (manageHeaderStatus: true — base default). Hold
-  // lifetime = "Unsaved"; release-save (switch kind / leave) → Saving…→Saved. Crop-edit
+  // The session drives the SHARED header label (manageHeaderStatus: true — base default). Label is
+  // DIRTY-driven (lockless-header-mirror): clean = "Saved", edit → "Unsaved", save/leave →
+  // Saving…→Saved. Crop-edit
   // (setSketchBaseCropIllustrations) has NO immediate flush → the release-save is its ONLY persist
   // path (baseline captured at begin, BEFORE the modal edit → dirty on release). onBlocked/onLost
   // dropped: a lockless session can't be blocked or lost.

@@ -61,6 +61,7 @@ vi.mock('@/stores/edit-history-store/item-key', () => ({
 import { useSaveSessionStore } from './index';
 import { maybeStopSweep } from './idle-sweep';
 import { __resetHistoryBridge } from './history-bridge';
+import { __resetLocklessHeaderMirror } from './lockless-header-mirror';
 
 // illustration-entity is LOCKLESS this phase — the representative lock-exempt domain under test.
 const ENTITY_ID = 'character/hero';
@@ -72,6 +73,7 @@ const store = () => useSaveSessionStore.getState();
 
 beforeEach(() => {
   __resetHistoryBridge();
+  __resetLocklessHeaderMirror();
   useSaveSessionStore.setState({ sessions: new Map() });
   h.lock.bookId = 'book1';
   h.lock.collabPersist = true;
@@ -118,9 +120,11 @@ describe('begin — lockless (no acquire, synchronous held)', () => {
     expect(h.lock.addMyLock).not.toHaveBeenCalled();
     expect(h.lock.registerOnLost).not.toHaveBeenCalled();
     expect(await p).toBe('held');
-    // Undo bridge + header hold still driven by the session engine.
+    // Undo bridge still driven by the session engine; the header hold is NOT — a lockless session
+    // is held while merely selected, so begin-time beginHold would show a permanent "Unsaved".
+    // The hold is dirty-mirrored instead (see lockless-header-mirror.test.ts).
     expect(h.hist.beginSession).toHaveBeenCalledTimes(1);
-    expect(h.ess.beginHold).toHaveBeenCalledTimes(1);
+    expect(h.ess.beginHold).not.toHaveBeenCalled();
   });
 
   // Criterion 2: baseline captured BEFORE begin returns — a mutation right after the call is dirty.
@@ -160,6 +164,11 @@ describe('end — lockless (save-only, no unlock)', () => {
     expect(h.lock.removeMyLock).not.toHaveBeenCalled();
     expect(h.hist.endSession).toHaveBeenCalledTimes(1);
     expect(useSaveSessionStore.getState().sessions.has(KEY)).toBe(false);
+    // Header: no endHold (the engine never began a hold — the mirror owns it); the save-on-leave
+    // still settles the label Saving…→Saved.
+    expect(h.ess.endHold).not.toHaveBeenCalled();
+    expect(h.ess.markSaving).toHaveBeenCalledTimes(1);
+    expect(h.ess.markSaved).toHaveBeenCalledTimes(1);
   });
 
   // Criterion 4: clean end → no persist call of any kind.
@@ -170,6 +179,33 @@ describe('end — lockless (save-only, no unlock)', () => {
     expect(h.lock.releaseAndSave).not.toHaveBeenCalled();
     expect(h.lock.release).not.toHaveBeenCalled();
     expect(useSaveSessionStore.getState().sessions.has(KEY)).toBe(false);
+  });
+});
+
+describe('saveNow — lockless Saving… transient', () => {
+  // The header-managed lockless saveNow drives markSaving→markSaved itself (a locked session's
+  // label stays "Unsaved" while holding, so only the lockless path marks).
+  it('dirty saveNow marks Saving…→Saved around the persist', async () => {
+    await store().begin('illustration-entity', ENTITY_ID);
+    h.snapshot.characters[0].name = 'B';
+    const outcome = await store().saveNow(KEY);
+    expect(outcome).toBe('saved');
+    expect(h.ess.markSaving).toHaveBeenCalledTimes(1);
+    expect(h.ess.markSaved).toHaveBeenCalledTimes(1);
+    // markSaving strictly before markSaved (transient, not a settled flicker).
+    expect(h.ess.markSaving.mock.invocationCallOrder[0]).toBeLessThan(
+      h.ess.markSaved.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('failed saveNow still settles the phase (finally) and stays dirty', async () => {
+    await store().begin('illustration-entity', ENTITY_ID);
+    h.snapshot.characters[0].name = 'B';
+    h.lock.save.mockResolvedValue({ ok: false });
+    const outcome = await store().saveNow(KEY);
+    expect(outcome).toBe('failed');
+    expect(h.ess.markSaved).toHaveBeenCalledTimes(1); // finally ran — phase never sticks at 'saving'
+    expect(useSaveSessionStore.getState().isDirty(KEY)).toBe(true); // no rebase on failure
   });
 });
 
