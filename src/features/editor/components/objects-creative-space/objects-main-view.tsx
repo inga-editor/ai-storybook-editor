@@ -149,6 +149,9 @@ interface ObjectsMainViewProps {
   /** Held-session commit-on-modal-close (fire-and-forget) forwarded to every spread-level retouch
    *  modal. STABLE from the engine; self-guards (no-op when clean / not held). */
   onCommitSave?: () => void;
+  /** First-click lock gate (`useLockFirstAction`): header modal buttons (Translate / Narration /
+   *  Annotations) route their open through this so the first click acquires the retouch lock. */
+  runWithLock?: (action: () => void) => void;
   zoomLevel: number;
   onZoomChange: (level: number) => void;
   // === Animation overlay props (all optional — forwarded to CanvasSpreadView) ===
@@ -170,6 +173,7 @@ export function ObjectsMainView({
   onItemSelect,
   spreadEditable,
   onCommitSave,
+  runWithLock,
   zoomLevel,
   onZoomChange,
   expandedAnimation,
@@ -406,6 +410,20 @@ export function ObjectsMainView({
     [retouchSpreads, actions, spreadEditable]
   );
 
+  // First-click lock gate: the 3 header modals mutate the spread on apply, so their SESSION must be
+  // held before the modal opens (baseline captured at acquire). With `runWithLock` the first click
+  // acquires the lock and the modal opens on HELD; without it (legacy caller) the buttons stay
+  // disabled until the lock is held some other way.
+  const openModalWithLock = useCallback(
+    (open: () => void) => {
+      if (runWithLock) runWithLock(open);
+      else open();
+    },
+    [runWithLock]
+  );
+  const modalButtonsDisabled =
+    !selectedSpreadId || !selectedSpread || (!runWithLock && !spreadEditable);
+
   const translateLeftAction = useMemo(
     () => (
       <Button
@@ -413,16 +431,16 @@ export function ObjectsMainView({
         size="sm"
         onClick={() => {
           log.info("translateButton", "click", { spreadId: selectedSpreadId });
-          setTranslateModalOpen(true);
+          openModalWithLock(() => setTranslateModalOpen(true));
         }}
-        disabled={!selectedSpreadId || !selectedSpread || !spreadEditable}
+        disabled={modalButtonsDisabled}
         aria-label="Translate spread"
       >
         <Languages className="h-4 w-4 mr-1.5" />
         Translate
       </Button>
     ),
-    [selectedSpreadId, selectedSpread, spreadEditable]
+    [selectedSpreadId, modalButtonsDisabled, openModalWithLock]
   );
 
   const narrationLeftAction = useMemo(
@@ -432,16 +450,16 @@ export function ObjectsMainView({
         size="sm"
         onClick={() => {
           log.info("narrationButton", "click", { spreadId: selectedSpreadId });
-          setNarrationSpreadModalOpen(true);
+          openModalWithLock(() => setNarrationSpreadModalOpen(true));
         }}
-        disabled={!selectedSpreadId || !selectedSpread || !spreadEditable}
+        disabled={modalButtonsDisabled}
         aria-label="Enhance narration"
       >
         <Mic className="h-4 w-4 mr-1.5" />
         Narration
       </Button>
     ),
-    [selectedSpreadId, selectedSpread, spreadEditable]
+    [selectedSpreadId, modalButtonsDisabled, openModalWithLock]
   );
 
   const annotationLeftAction = useMemo(
@@ -451,16 +469,16 @@ export function ObjectsMainView({
         size="sm"
         onClick={() => {
           log.info("annotationButton", "click", { spreadId: selectedSpreadId });
-          setAnnotationModalOpen(true);
+          openModalWithLock(() => setAnnotationModalOpen(true));
         }}
-        disabled={!selectedSpreadId || !selectedSpread || !spreadEditable}
+        disabled={modalButtonsDisabled}
         aria-label="Enhance image annotations"
       >
         <MessageSquare className="h-4 w-4 mr-1.5" />
         Annotations
       </Button>
     ),
-    [selectedSpreadId, selectedSpread, spreadEditable]
+    [selectedSpreadId, modalButtonsDisabled, openModalWithLock]
   );
 
   const combinedLeftActions = useMemo(

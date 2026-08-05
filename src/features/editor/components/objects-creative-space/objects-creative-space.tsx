@@ -162,14 +162,27 @@ export function ObjectsCreativeSpace() {
     [lockedSpreadId, actions, resetSelection],
   );
 
+  // First-click lock gate: acquire the retouch lock without an item selection (sidebar add-element,
+  // header modal buttons). The queued action runs once the session is HELD.
+  const handleRequestLock = useCallback(() => {
+    if (!selectedSpreadId) return;
+    log.info("handleRequestLock", "acquire retouch lock (first-click gate)", { selectedSpreadId });
+    setLockedSpreadId(selectedSpreadId);
+  }, [selectedSpreadId]);
+
   // ── Undo/redo nexus (ADR-045) — the engine now bridges begin/endSession itself (retouch grain,
   // sharing the held baseline clone) on acquire/release/switch/LOST; no space wiring.
-  const { status: retouchLockStatus, commitOnModalClose: retouchCommitOnModalClose } =
-    useSaveSession({
-      ...deriveSaveTarget(retouchLockTarget),
-      onBlocked: handleRetouchLockBlocked,
-      onLost: handleRetouchLockLost,
-    });
+  const {
+    status: retouchLockStatus,
+    commitOnModalClose: retouchCommitOnModalClose,
+    runWithLock,
+  } = useSaveSession({
+    ...deriveSaveTarget(retouchLockTarget),
+    onBlocked: handleRetouchLockBlocked,
+    onLost: handleRetouchLockLost,
+    requestLock: handleRequestLock,
+    gateResetKey: selectedSpreadId ?? null,
+  });
 
   // The active spread is editable only while THIS editor holds its retouch lock (grey-out otherwise).
   const spreadEditable = retouchLockStatus === "held" && lockedSpreadId === selectedSpreadId;
@@ -701,6 +714,7 @@ export function ObjectsCreativeSpace() {
         selectedItemId={selectedItemId}
         onItemSelect={handleItemSelect}
         isEditable={spreadEditable}
+        runWithLock={runWithLock}
       />
 
       <div className="relative flex-1 min-w-0 overflow-hidden">
@@ -714,6 +728,7 @@ export function ObjectsCreativeSpace() {
           onItemSelect={handleItemSelect}
           spreadEditable={spreadEditable}
           onCommitSave={retouchCommitOnModalClose}
+          runWithLock={runWithLock}
           zoomLevel={zoomLevel ?? ZOOM.DEFAULT}
           onZoomChange={handleZoomChange}
           expandedAnimation={expandedAnimationRaw}

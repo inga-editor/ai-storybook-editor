@@ -15,6 +15,7 @@ import { useResourceLockStore, keyOf, type SessionStatus } from '@/stores/resour
 import { useSaveSessionStore, SAVE_POLICIES } from '@/stores/save-session-store';
 import { useSessionStatus } from '@/stores/save-session-store/selectors';
 import type { SaveDomain, SaveOutcome } from '@/stores/save-session-store';
+import { useLockFirstAction } from './use-lock-first-action';
 
 const log = createLogger('Editor', 'useSaveSession');
 
@@ -29,6 +30,13 @@ export interface UseSaveSessionArgs {
   onLost?: (baseline: unknown) => void;
   /** Drive the shared header save-label (default true). false only for a session with its own label. */
   manageHeaderStatus?: boolean;
+  /** First-click lock gate wiring: ask the owning space to acquire the lock (its lock-on-interact
+   *  path, e.g. `setLockedSpreadId(selectedSpreadId)`). Required for `runWithLock` to defer —
+   *  without it a not-held `runWithLock` call only warns. */
+  requestLock?: () => void;
+  /** Key the deferred `runWithLock` action is valid for (the space's SELECTED item id — NOT the
+   *  session key, which flips null→id during the acquire itself). A change drops the pending action. */
+  gateResetKey?: string | null;
 }
 
 export interface UseSaveSessionResult {
@@ -40,6 +48,11 @@ export interface UseSaveSessionResult {
   /** Fire-and-forget saveNow for spread-level modal close (spec §4.2). No-op when clean/not held.
    *  Declared in phase 1; wired into modals in phase 3. */
   commitOnModalClose: () => void;
+  /** First-click lock gate (spec §4.1): run `action` synchronously when the session is HELD, else
+   *  queue it (one slot, last click wins), call `requestLock`, and run it when the session reaches
+   *  HELD. Dropped on blocked/lost or when `gateResetKey` changes. Actions MUST only mutate under a
+   *  held session — running earlier would bake the change into the baseline (silently unsaved). */
+  runWithLock: (action: () => void) => void;
 }
 
 export function useSaveSession(args: UseSaveSessionArgs): UseSaveSessionResult {
@@ -114,5 +127,24 @@ export function useSaveSession(args: UseSaveSessionArgs): UseSaveSessionResult {
       });
   }, []);
 
-  return { status, saveNow, ensureSaved, commitOnModalClose };
+  // First-click lock gate (composed from the shared primitive). requestLock resolves through cbRef
+  // so the gate's runner identity stays stable; a missing wiring degrades to a warn (action would
+  // otherwise queue forever).
+  const requestLockStable = useCallback((): void => {
+    const requestLock = cbRef.current.requestLock;
+    if (requestLock) {
+      requestLock();
+    } else {
+      log.warn('runWithLock', 'requestLock not wired — deferred action will never run', {});
+    }
+  }, []);
+
+  const runWithLock = useLockFirstAction({
+    isHeld: status === 'held',
+    lockStatus: status,
+    requestLock: requestLockStable,
+    resetKey: args.gateResetKey ?? null,
+  });
+
+  return { status, saveNow, ensureSaved, commitOnModalClose, runWithLock };
 }

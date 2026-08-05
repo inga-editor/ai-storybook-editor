@@ -101,14 +101,27 @@ export function SpreadsCreativeSpace() {
     [lockedSpreadId, actions],
   );
 
+  // First-click lock gate: acquire the SCENE lock without an item selection (sidebar add-element,
+  // header modal buttons). The queued action runs once the session is HELD.
+  const handleRequestLock = useCallback(() => {
+    if (!effectiveSpreadId) return;
+    log.info("handleRequestLock", "acquire scene lock (first-click gate)", { effectiveSpreadId });
+    setLockedSpreadId(effectiveSpreadId);
+  }, [effectiveSpreadId]);
+
   // ── Undo/redo nexus (ADR-045) — the engine now bridges begin/endSession itself (illustration-scene
   // grain, sharing the held baseline clone) on acquire/release/switch/unmount/LOST; no space wiring.
-  const { status: sceneLockStatus, commitOnModalClose: sceneCommitOnModalClose } =
-    useSaveSession({
-      ...deriveSaveTarget(sceneLockTarget),
-      onBlocked: handleSceneLockBlocked,
-      onLost: handleSceneLockLost,
-    });
+  const {
+    status: sceneLockStatus,
+    commitOnModalClose: sceneCommitOnModalClose,
+    runWithLock,
+  } = useSaveSession({
+    ...deriveSaveTarget(sceneLockTarget),
+    onBlocked: handleSceneLockBlocked,
+    onLost: handleSceneLockLost,
+    requestLock: handleRequestLock,
+    gateResetKey: effectiveSpreadId ?? null,
+  });
 
   // The active spread is editable only while THIS editor holds its SCENE lock (grey-out otherwise).
   const spreadEditable = sceneLockStatus === "held" && lockedSpreadId === effectiveSpreadId;
@@ -165,6 +178,7 @@ export function SpreadsCreativeSpace() {
         selectedItemId={selectedItemId}
         onItemSelect={handleItemSelect}
         isEditable={spreadEditable}
+        runWithLock={runWithLock}
       />
       <div className="relative flex-1 min-w-0 overflow-hidden">
         {/* Edit affordance is global now — the header owns undo/redo + the Unsaved/Saved status

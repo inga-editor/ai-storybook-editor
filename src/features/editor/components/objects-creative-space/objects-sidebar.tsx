@@ -23,6 +23,7 @@ import { FALLBACK_SHAPE, mapTypographyToTextbox } from "@/constants/book-default
 import { DEFAULT_TYPOGRAPHY } from "@/constants/config-constants";
 import { AUDIO_DEFAULTS } from "@/constants/spread-constants";
 import { createLogger } from "@/utils/logger";
+import { toastLockRequired } from "@/utils/collab-save-toasts";
 import { useLanguageCode } from "@/stores/editor-settings-store";
 import {
   ObjectListItem,
@@ -76,10 +77,16 @@ interface ObjectsSidebarProps {
   selectedSpreadId: string;
   selectedItemId: SelectedItem | null;
   onItemSelect: (item: SelectedItem | null) => void;
-  /** Whether this editor holds the spread's retouch lock (ADR-044 lock-on-click). When false, ALL
-   *  object-list edit affordances (add / visibility toggle / reorder / rename / composite / remove
-   *  variant) are disabled + greyed — never hidden (memory: never hide disabled UI). Default true. */
+  /** Whether this editor holds the spread's retouch lock (ADR-044 lock-on-click). Item SELECTION is
+   *  always allowed — it is the lock-acquiring interaction (parent acquires on onItemSelect). When
+   *  false, mutating affordances (visibility toggle / reorder / rename / remove variant) are gated
+   *  per-handler with a lock-required toast, matching SpreadsSidebar. Add-element instead AUTO-acquires
+   *  via runWithLock and defers the add until the lock is held (mutating before acquire would bake
+   *  the new element into the session baseline → never marked dirty → silently unsaved). Default true. */
   isEditable?: boolean;
+  /** First-click lock gate (`useLockFirstAction` in the parent space): runs the action immediately
+   *  when the retouch lock is held, else acquires the lock and defers the action until HELD. */
+  runWithLock?: (action: () => void) => void;
 }
 
 // === Main Component ===
@@ -89,6 +96,7 @@ export function ObjectsSidebar({
   selectedItemId,
   onItemSelect,
   isEditable = true,
+  runWithLock,
 }: ObjectsSidebarProps) {
   const spread = useRetouchSpreadById(selectedSpreadId);
   const actions = useSnapshotActions();
@@ -194,6 +202,12 @@ export function ObjectsSidebar({
 
   const handleRemoveFromComposite = useCallback(
     (compositeId: string, variantId: string) => {
+      // Lock-on-click gate: in-spread edit → require the retouch lock.
+      if (!isEditable) {
+        log.debug("handleRemoveFromComposite", "blocked — spread not held", { compositeId });
+        toastLockRequired();
+        return;
+      }
       const composite = spread?.composites?.find((c) => c.id === compositeId);
       if (!composite) {
         log.warn("handleRemoveFromComposite", "composite not found", {
@@ -227,11 +241,17 @@ export function ObjectsSidebar({
         variantId
       );
     },
-    [spread, actions, selectedSpreadId]
+    [spread, actions, selectedSpreadId, isEditable]
   );
 
   const handleVisibilityToggle = useCallback(
     (entry: ObjectListEntry) => {
+      // Lock-on-click gate: in-spread edit → require the retouch lock.
+      if (!isEditable) {
+        log.debug("handleVisibilityToggle", "blocked — spread not held", { id: entry.id });
+        toastLockRequired();
+        return;
+      }
       const newVisible = !entry.editorVisible;
       log.debug("handleVisibilityToggle", "toggling visibility", {
         id: entry.id,
@@ -282,11 +302,19 @@ export function ObjectsSidebar({
           break;
       }
     },
-    [actions, selectedSpreadId]
+    [actions, selectedSpreadId, isEditable]
   );
 
   const handleLayerVisibilityToggle = useCallback(
     (group: LayerGroup) => {
+      // Lock-on-click gate: in-spread edit → require the retouch lock.
+      if (!isEditable) {
+        log.debug("handleLayerVisibilityToggle", "blocked — spread not held", {
+          layer: group.layer.label,
+        });
+        toastLockRequired();
+        return;
+      }
       const layerEntries = allEntries.filter((e) => {
         const eLayer = getLayerForType(e.type);
         return eLayer?.label === group.layer.label;
@@ -344,11 +372,17 @@ export function ObjectsSidebar({
         }
       }
     },
-    [allEntries, actions, selectedSpreadId]
+    [allEntries, actions, selectedSpreadId, isEditable]
   );
 
   const handlePlayerVisibilityToggle = useCallback(
     (entry: ObjectListEntry) => {
+      // Lock-on-click gate: in-spread edit → require the retouch lock.
+      if (!isEditable) {
+        log.debug("handlePlayerVisibilityToggle", "blocked — spread not held", { id: entry.id });
+        toastLockRequired();
+        return;
+      }
       const newVisible = !entry.playerVisible;
       log.debug("handlePlayerVisibilityToggle", "toggling player_visible", {
         id: entry.id,
@@ -398,11 +432,17 @@ export function ObjectsSidebar({
           break;
       }
     },
-    [actions, selectedSpreadId]
+    [actions, selectedSpreadId, isEditable]
   );
 
   const handleEditStart = useCallback((entry: ObjectListEntry) => {
     if (entry.type === "textbox") return; // textbox title is auto-derived
+    // Lock-on-click gate: rename / composite edit is an in-spread edit → require the retouch lock.
+    if (!isEditable) {
+      log.debug("handleEditStart", "blocked — spread not held", { id: entry.id });
+      toastLockRequired();
+      return;
+    }
     // Composite groups don't rename inline — pencil opens the edit modal so the
     // user can also adjust variants/editions, not just the title.
     if (entry.type === "composite") {
@@ -412,10 +452,17 @@ export function ObjectsSidebar({
     }
     setEditingItemId(entry.id);
     setEditValue(entry.title);
-  }, []);
+  }, [isEditable]);
 
   const handleRenameConfirm = useCallback(() => {
     if (!editingItemId || !editValue.trim()) {
+      setEditingItemId(null);
+      return;
+    }
+    // Defense-in-depth: a lock loss while the inline editor is open must not persist.
+    if (!isEditable) {
+      log.debug("handleRenameConfirm", "blocked — spread not held", { editingItemId });
+      toastLockRequired();
       setEditingItemId(null);
       return;
     }
@@ -456,7 +503,7 @@ export function ObjectsSidebar({
         break;
     }
     setEditingItemId(null);
-  }, [editingItemId, editValue, allEntries, actions, selectedSpreadId]);
+  }, [editingItemId, editValue, allEntries, actions, selectedSpreadId, isEditable]);
 
   // === Layer-scoped DnD handlers ===
 
@@ -480,6 +527,15 @@ export function ObjectsSidebar({
         dragIndex === targetIndex ||
         dragLayerLabel !== group.layer.label
       ) {
+        setDragIndex(null);
+        setDragLayerLabel(null);
+        return;
+      }
+
+      // Lock-on-click gate: reorder is an in-spread edit → require the retouch lock.
+      if (!isEditable) {
+        log.debug("handleLayerDrop", "blocked — spread not held", { layer: group.layer.label });
+        toastLockRequired();
         setDragIndex(null);
         setDragLayerLabel(null);
         return;
@@ -550,7 +606,7 @@ export function ObjectsSidebar({
       setDragIndex(null);
       setDragLayerLabel(null);
     },
-    [dragIndex, dragLayerLabel, actions, selectedSpreadId]
+    [dragIndex, dragLayerLabel, actions, selectedSpreadId, isEditable]
   );
 
   const handleDragEnd = useCallback(() => {
@@ -558,14 +614,16 @@ export function ObjectsSidebar({
     setDragLayerLabel(null);
   }, []);
 
-  // Add element with z-index within its layer range
-  const handleAddElement = useCallback(
+  // Add element with z-index within its layer range. NOT lock-gated itself — callers must only
+  // invoke it while the retouch lock is HELD (mutating earlier bakes the element into the session
+  // baseline → clean diff → silently unsaved).
+  const performAddElement = useCallback(
     (type: ObjectElementType) => {
-      log.info("handleAddElement", "adding", { type });
+      log.info("performAddElement", "adding", { type });
 
       // Composite is created via dedicated modal (Phase 3) — short-circuit.
       if (type === "composite") {
-        log.debug("handleAddElement", "open create-composite modal");
+        log.debug("performAddElement", "open create-composite modal");
         setIsCreateCompositeOpen(true);
         return;
       }
@@ -680,25 +738,50 @@ export function ObjectsSidebar({
     [actions, selectedSpreadId, allEntries, editorLangCode, bookShape, bookTypography, onItemSelect]
   );
 
+  // Eager-acquire on "+" click (popover open): start acquiring immediately so the lock is already
+  // HELD by the time the user picks an element type. The queued action is a no-op — the actual add
+  // still routes through runWithLock below (which runs sync once held / re-queues while acquiring).
+  const handleAddOpenChange = useCallback(
+    (open: boolean) => {
+      setIsAddOpen(open);
+      if (open && !isEditable) runWithLock?.(() => {});
+    },
+    [isEditable, runWithLock]
+  );
+
+  // First-click lock gate: adding before acquire would bake the element into the session baseline
+  // (silently unsaved) — the gate defers the add until the lock is HELD.
+  const handleAddElement = useCallback(
+    (type: ObjectElementType) => {
+      if (runWithLock) {
+        runWithLock(() => performAddElement(type));
+        return;
+      }
+      // No lock-gate wiring (legacy caller) — keep the explicit toast gate.
+      if (!isEditable) {
+        log.debug("handleAddElement", "blocked — spread not held", { type });
+        toastLockRequired();
+        return;
+      }
+      performAddElement(type);
+    },
+    [isEditable, performAddElement, runWithLock]
+  );
+
   if (!spread) return null;
 
   return (
     <>
     <nav
-      className={[
-        "w-[280px] flex flex-col h-full border-r bg-background",
-        // Lock-on-click: greyed + non-interactive when this editor does not hold the spread lock.
-        isEditable ? "" : "opacity-60 pointer-events-none select-none",
-      ].join(" ")}
+      className="w-[280px] flex flex-col h-full border-r bg-background"
       role="listbox"
       aria-label="Objects list"
-      aria-disabled={!isEditable}
     >
       {/* Header with Add element popover */}
       <div className="flex items-center h-14 px-3 border-b gap-2">
         <span className="flex-1 font-semibold text-sm">Objects</span>
 
-        <Popover open={isAddOpen} onOpenChange={setIsAddOpen}>
+        <Popover open={isAddOpen} onOpenChange={handleAddOpenChange}>
           <PopoverTrigger asChild>
             <button
               type="button"

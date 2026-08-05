@@ -49,6 +49,10 @@ interface SpreadsSidebarProps {
    *  in-spread edit here (add / rename / reorder); when false the sidebar is display-only (greyed,
    *  never hidden). */
   isEditable: boolean;
+  /** First-click lock gate (`runWithLock` from `useSaveSession`): runs the action immediately when
+   *  the SCENE lock is held, else acquires the lock and defers the action until HELD. Add-element
+   *  routes through this so the "+" flow auto-locks instead of toasting. */
+  runWithLock?: (action: () => void) => void;
 }
 
 // === Inline sub-components ===
@@ -135,6 +139,7 @@ export function SpreadsSidebar({
   selectedItemId,
   onItemSelect,
   isEditable,
+  runWithLock,
 }: SpreadsSidebarProps) {
   // Defensive: guard against illustration being undefined during store init
   const spread = useSnapshotStore(
@@ -330,16 +335,11 @@ export function SpreadsSidebar({
     setDragLayerLabel(null);
   }, []);
 
-  const handleAddElement = useCallback(
+  // NOT lock-gated itself — callers must only invoke it while the SCENE lock is HELD (mutating
+  // earlier bakes the element into the session baseline → clean diff → silently unsaved).
+  const performAddElement = useCallback(
     (type: SpreadElementType) => {
-      // Lock-on-click gate: adding an element is an in-spread edit → require the SCENE lock.
-      if (!isEditable) {
-        log.debug("handleAddElement", "blocked — spread not held", { type });
-        toastLockRequired();
-        setIsAddOpen(false);
-        return;
-      }
-      log.info("handleAddElement", "adding", { type });
+      log.info("performAddElement", "adding", { type });
 
       if (type === "raw_image") {
         const newId = crypto.randomUUID();
@@ -367,7 +367,38 @@ export function SpreadsSidebar({
 
       setIsAddOpen(false);
     },
-    [actions, selectedSpreadId, langCode, bookShape, bookTypography, onItemSelect, isEditable]
+    [actions, selectedSpreadId, langCode, bookShape, bookTypography, onItemSelect]
+  );
+
+  // First-click lock gate: route the add through runWithLock so the first click acquires the SCENE
+  // lock and the add runs once HELD (legacy toast gate only when no gate is wired).
+  const handleAddElement = useCallback(
+    (type: SpreadElementType) => {
+      if (runWithLock) {
+        runWithLock(() => performAddElement(type));
+        return;
+      }
+      if (!isEditable) {
+        log.debug("handleAddElement", "blocked — spread not held", { type });
+        toastLockRequired();
+        setIsAddOpen(false);
+        return;
+      }
+      performAddElement(type);
+    },
+    [isEditable, performAddElement, runWithLock]
+  );
+
+  // Eager-acquire on "+" click (popover open): start acquiring immediately so the lock is already
+  // HELD by the time the user picks an element type (no-op action just warms the lock).
+  const handleAddOpenChange = useCallback(
+    (open: boolean) => {
+      // Without a gate the popover stays lock-gated (legacy behavior).
+      if (!runWithLock && !isEditable) return;
+      setIsAddOpen(open);
+      if (open && !isEditable) runWithLock?.(() => {});
+    },
+    [isEditable, runWithLock]
   );
 
   // Filter toggles
@@ -426,19 +457,21 @@ export function SpreadsSidebar({
         <span className="flex-1 font-semibold text-sm">Elements</span>
 
         {/* Add element — 2-state (never hidden): disabled + greyed when the spread is not held. */}
-        <Popover open={isAddOpen} onOpenChange={(o) => isEditable && setIsAddOpen(o)}>
+        <Popover open={isAddOpen} onOpenChange={handleAddOpenChange}>
           <PopoverTrigger asChild>
             <button
               type="button"
               className={cn(
                 "p-1 rounded transition-colors",
-                isEditable
+                isEditable || runWithLock
                   ? "hover:bg-muted"
                   : "opacity-40 cursor-not-allowed"
               )}
               aria-label="Add element"
-              disabled={!isEditable}
-              title={isEditable ? "Add element" : "Click this spread to edit"}
+              // First-click gate: with runWithLock wired the "+" is always clickable — the click
+              // itself acquires the SCENE lock (legacy disable only without the gate).
+              disabled={!isEditable && !runWithLock}
+              title={isEditable || runWithLock ? "Add element" : "Click this spread to edit"}
             >
               <Plus className="w-4 h-4" />
             </button>
