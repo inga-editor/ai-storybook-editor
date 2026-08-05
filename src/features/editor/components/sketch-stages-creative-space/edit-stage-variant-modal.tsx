@@ -4,11 +4,13 @@
 // generates (11 base / 12 variant). ⚡ NO height (stage has none — unlike the char/prop modal);
 // `description` is an Excel seed and NOT edited here (partial-merge preserves it).
 //
-// Save ONLY writes the two fields to the store — no persist (batch-at-release): the text lands
-// with the whole stage node at the held-session release-save. The variant generate's own
-// flush-BEFORE reads the fresh node, so text edited and never released still reaches the AI.
+// Save = DIRECT save (user decision 2026-08-05, mirrors edit-variant-modal): commit the draft to
+// the store, then persist the stage node immediately via the engine seam
+// (`flushSketchStageUnderLock` → ensureSaved). "Saving…" while in flight; close on saved/clean,
+// stay open + toast on blocked/failed (the store already holds the edit — the idle sweep retries).
 
 import { useCallback, useMemo, useRef, useState } from 'react';
+import { Loader2 } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -22,6 +24,11 @@ import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { useSnapshotActions } from '@/stores/snapshot-store/selectors';
 import { useSnapshotStore } from '@/stores/snapshot-store';
+import {
+  flushSketchStageUnderLock,
+  resolveSketchStageLockTarget,
+} from '@/stores/snapshot-store/slices/collab-sketch-stage-save-helper';
+import { toastSketchSaveOutcome } from '@/stores/snapshot-store/slices/sketch-save-outcome-toast';
 import { useInteractionLayer } from '@/features/editor/contexts';
 import { createLogger } from '@/utils/logger';
 
@@ -56,6 +63,7 @@ export function EditStageVariantModal({ stageKey, variantKey, onClose }: EditSta
   }, [stageKey, variantKey]);
 
   const [draft, setDraft] = useState<StageTextDraft>(seed);
+  const [isSaving, setIsSaving] = useState(false);
 
   const mention = `@${stageKey}/${variantKey}`;
 
@@ -66,23 +74,36 @@ export function EditStageVariantModal({ stageKey, variantKey, onClose }: EditSta
     setDraft((prev) => ({ ...prev, [field]: value }));
   }, []);
 
-  const handleSave = useCallback(() => {
-    if (isDirty) {
-      log.info('handleSave', 'commit stage variant text edit', { stageKey, variantKey });
-      // Partial merge — `description` intentionally omitted (Excel seed, preserved as stored).
-      updateSketchStageVariantText(stageKey, variantKey, {
-        visual_design: draft.visual_design,
-        art_language: draft.art_language,
-      });
-      // No persist here — held under the stage lock, lands at the release-save.
+  const handleSave = useCallback(async () => {
+    if (isSaving) return;
+    if (!isDirty) {
+      onClose();
+      return;
     }
-    onClose();
-  }, [isDirty, stageKey, variantKey, draft, updateSketchStageVariantText, onClose]);
+    log.info('handleSave', 'commit stage variant text edit + direct save', { stageKey, variantKey });
+    // Partial merge — `description` intentionally omitted (Excel seed, preserved as stored).
+    updateSketchStageVariantText(stageKey, variantKey, {
+      visual_design: draft.visual_design,
+      art_language: draft.art_language,
+    });
+    // DIRECT save: persist the stage node now via the engine seam. Close only on saved/clean; on
+    // blocked/failed keep the modal open (toast raised) — the idle sweep remains the retry net.
+    setIsSaving(true);
+    try {
+      const outcome = await flushSketchStageUnderLock(stageKey);
+      toastSketchSaveOutcome(outcome, resolveSketchStageLockTarget(stageKey));
+      if (outcome === 'saved' || outcome === 'clean') onClose();
+      else log.warn('handleSave', 'direct save not persisted — modal stays open', { outcome });
+    } finally {
+      setIsSaving(false);
+    }
+  }, [isSaving, isDirty, stageKey, variantKey, draft, updateSketchStageVariantText, onClose]);
 
   const guardClose = useCallback(() => {
+    if (isSaving) return; // save in flight — let it settle
     if (isDirty && !window.confirm('Huỷ thay đổi chưa lưu?')) return;
     onClose();
-  }, [isDirty, onClose]);
+  }, [isSaving, isDirty, onClose]);
 
   useInteractionLayer('modal', {
     id: 'edit-stage-variant-modal',
@@ -137,11 +158,22 @@ export function EditStageVariantModal({ stageKey, variantKey, onClose }: EditSta
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={guardClose}>
+          <Button variant="outline" onClick={guardClose} disabled={isSaving}>
             Cancel
           </Button>
-          <Button onClick={handleSave} disabled={!isDirty} aria-disabled={!isDirty}>
-            Save
+          <Button
+            onClick={handleSave}
+            disabled={!isDirty || isSaving}
+            aria-disabled={!isDirty || isSaving}
+          >
+            {isSaving ? (
+              <>
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                Saving…
+              </>
+            ) : (
+              'Save'
+            )}
           </Button>
         </DialogFooter>
       </DialogContent>

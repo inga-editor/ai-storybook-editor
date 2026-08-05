@@ -5,13 +5,15 @@
 // in the DB but is NOT edited here (the store action is a partial merge, so leaving it out preserves
 // its value).
 //
-// Save ONLY writes the two fields to the store — it does NOT persist (batch-at-release, ADR-043 Rev
-// 2026-07-16): the text lands with the whole entity node at the held-session release-save. The
-// generate endpoint reads snapshot.sketch from the DB (snapshot-reading), but that is covered by the
-// job slice's own flush-BEFORE-generate, which reads the FRESH node — so text edited and never
-// released still reaches the AI. This modal never calls autoSaveSnapshot (suppressed under collab).
+// Save = DIRECT save (user decision 2026-08-05): commit the draft to the store, then persist the
+// entity node immediately via the engine seam (`flushSketchEntityUnderLock` → ensureSaved), exactly
+// like the crop-pick net. The button shows "Saving…" while the request is in flight; on success the
+// modal closes, on blocked/failed it stays open with a toast (the store already holds the edit, so
+// the idle sweep still retries later). This modal never calls autoSaveSnapshot (suppressed under
+// collab).
 
 import { useCallback, useMemo, useRef, useState } from 'react';
+import { Loader2 } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -31,6 +33,11 @@ import {
 } from '@/features/editor/components/shared-components/height-cm-draft';
 import { useSnapshotActions } from '@/stores/snapshot-store/selectors';
 import { useSnapshotStore } from '@/stores/snapshot-store';
+import {
+  flushSketchEntityUnderLock,
+  resolveSketchVariantLockTarget,
+} from '@/stores/snapshot-store/slices/collab-sketch-variant-save-helper';
+import { toastSketchSaveOutcome } from '@/stores/snapshot-store/slices/sketch-save-outcome-toast';
 import { useInteractionLayer } from '@/features/editor/contexts';
 import type { BaseKind } from '@/types/sketch';
 import { sketchEntitiesOfKind } from '@/types/sketch';
@@ -69,6 +76,7 @@ export function EditVariantModal({ kind, entityKey, variantKey, onClose }: EditV
   }, [kind, entityKey, variantKey]);
 
   const [draft, setDraft] = useState<VariantTextDraft>(seed);
+  const [isSaving, setIsSaving] = useState(false);
 
   const mention = `@${entityKey}/${variantKey}`;
 
@@ -83,30 +91,47 @@ export function EditVariantModal({ kind, entityKey, variantKey, onClose }: EditV
     setDraft((prev) => ({ ...prev, [field]: value }));
   }, []);
 
-  const handleSave = useCallback(() => {
-    if (!heightValid) {
-      log.debug('handleSave', 'blocked — invalid height draft', { kind, entityKey, variantKey });
+  const handleSave = useCallback(async () => {
+    if (!heightValid || isSaving) {
+      log.debug('handleSave', 'blocked — invalid height draft or save in flight', {
+        kind,
+        entityKey,
+        variantKey,
+        isSaving,
+      });
       return;
     }
-    if (isDirty) {
-      log.info('handleSave', 'commit variant text edit', { kind, entityKey, variantKey });
-      // Partial merge — `description` intentionally omitted so its stored value persists.
-      // height: "" → an explicit null (clear), else the parsed integer cm.
-      updateSketchVariantText(kind, entityKey, variantKey, {
-        height: heightDraftToPayload(draft.height),
-        visual_design: draft.visual_design,
-        art_language: draft.art_language,
-      });
-      // No persist here — the edit is held under the entity lock and lands at the release-save
-      // (batch-at-release). Generate's own flush-before reads this fresh text, so ✨ never draws stale.
+    if (!isDirty) {
+      onClose();
+      return;
     }
-    onClose();
-  }, [heightValid, isDirty, kind, entityKey, variantKey, draft, updateSketchVariantText, onClose]);
+    log.info('handleSave', 'commit variant text edit + direct save', { kind, entityKey, variantKey });
+    // Partial merge — `description` intentionally omitted so its stored value persists.
+    // height: "" → an explicit null (clear), else the parsed integer cm.
+    updateSketchVariantText(kind, entityKey, variantKey, {
+      height: heightDraftToPayload(draft.height),
+      visual_design: draft.visual_design,
+      art_language: draft.art_language,
+    });
+    // DIRECT save (user decision 2026-08-05): persist the entity node now via the engine seam.
+    // Close only on saved/clean; on blocked/failed keep the modal open (toast raised) — the edit is
+    // already in the store, so the idle sweep / save-on-leave remain the retry net either way.
+    setIsSaving(true);
+    try {
+      const outcome = await flushSketchEntityUnderLock(kind, entityKey);
+      toastSketchSaveOutcome(outcome, resolveSketchVariantLockTarget(kind, entityKey));
+      if (outcome === 'saved' || outcome === 'clean') onClose();
+      else log.warn('handleSave', 'direct save not persisted — modal stays open', { outcome });
+    } finally {
+      setIsSaving(false);
+    }
+  }, [heightValid, isSaving, isDirty, kind, entityKey, variantKey, draft, updateSketchVariantText, onClose]);
 
   const guardClose = useCallback(() => {
+    if (isSaving) return; // save in flight — let it settle
     if (isDirty && !window.confirm('Huỷ thay đổi chưa lưu?')) return;
     onClose();
-  }, [isDirty, onClose]);
+  }, [isSaving, isDirty, onClose]);
 
   useInteractionLayer('modal', {
     id: 'edit-variant-modal',
@@ -163,15 +188,22 @@ export function EditVariantModal({ kind, entityKey, variantKey, onClose }: EditV
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={guardClose}>
+          <Button variant="outline" onClick={guardClose} disabled={isSaving}>
             Cancel
           </Button>
           <Button
             onClick={handleSave}
-            disabled={!isDirty || !heightValid}
-            aria-disabled={!isDirty || !heightValid}
+            disabled={!isDirty || !heightValid || isSaving}
+            aria-disabled={!isDirty || !heightValid || isSaving}
           >
-            Save
+            {isSaving ? (
+              <>
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                Saving…
+              </>
+            ) : (
+              'Save'
+            )}
           </Button>
         </DialogFooter>
       </DialogContent>

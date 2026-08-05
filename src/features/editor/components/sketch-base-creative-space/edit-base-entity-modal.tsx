@@ -15,7 +15,7 @@
 // peer can block; controlled inputs so nothing to gate).
 
 import { useCallback, useMemo, useRef, useState } from 'react';
-import { AlertCircle } from 'lucide-react';
+import { AlertCircle, Loader2 } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -98,6 +98,7 @@ export function EditBaseEntityModal({ kind, onClose }: EditBaseEntityModalProps)
     return copy;
   });
   const [activeKey, setActiveKey] = useState<string>(() => entityKeys[0] ?? '');
+  const [isSaving, setIsSaving] = useState(false);
 
   // titleCase of the kind noun — a binary ternary would label the alter tab "Prop".
   const cfg = titleCase(nounForKind(kind));
@@ -140,6 +141,7 @@ export function EditBaseEntityModal({ kind, onClose }: EditBaseEntityModalProps)
   }, []);
 
   const handleSave = useCallback(async () => {
+    if (isSaving) return;
     if (!allHeightsValid) {
       log.debug('handleSave', 'blocked — invalid height draft on a changed tab', { kind });
       return;
@@ -159,28 +161,39 @@ export function EditBaseEntityModal({ kind, onClose }: EditBaseEntityModalProps)
     if (useResourceLockStore.getState().collabPersist) {
       // Grain B (rtype 14): the drafts are committed to the store above — now persist the WHOLE
       // collection in ONE column-root save (`alter_characters` → `characters`). Degraded collection
-      // → `blocked` → the caller toasts here (the seam no longer self-toasts).
+      // → `blocked` → the caller toasts here (the seam no longer self-toasts). The button shows
+      // "Saving…" while the request is in flight (user-reported 2026-08-05: without it the click
+      // looked ignored); close only on saved/clean — on blocked/failed the modal stays open with
+      // the toast (the edits are already in the store, so the idle sweep remains the retry net).
       const ess = useEditSessionStatusStore.getState();
       if (keys.length > 0) {
         const collection = BASE_KIND_TO_COLLECTION[kind];
+        setIsSaving(true);
         ess.markSaving();
+        let outcome: Awaited<ReturnType<typeof saveEntityCollection>> = 'failed';
         try {
-          const outcome = await saveEntityCollection(collection);
+          outcome = await saveEntityCollection(collection);
           toastSketchSaveOutcome(outcome, resolveEntityCollectionLockTarget(collection));
         } finally {
           ess.markSaved();
+          setIsSaving(false);
+        }
+        if (outcome !== 'saved' && outcome !== 'clean') {
+          log.warn('handleSave', 'direct save not persisted — modal stays open', { outcome });
+          return;
         }
       }
     } else if (keys.length > 0) {
       void autoSaveSnapshot();
     }
     onClose();
-  }, [allHeightsValid, changedKeys, drafts, kind, updateSketchBaseEntityText, autoSaveSnapshot, onClose]);
+  }, [isSaving, allHeightsValid, changedKeys, drafts, kind, updateSketchBaseEntityText, autoSaveSnapshot, onClose]);
 
   const guardClose = useCallback(() => {
+    if (isSaving) return; // save in flight — let it settle
     if (isDirty && !window.confirm('Huỷ thay đổi chưa lưu?')) return;
     onClose();
-  }, [isDirty, onClose]);
+  }, [isSaving, isDirty, onClose]);
 
   useInteractionLayer('modal', {
     id: 'edit-base-entity-modal',
@@ -263,11 +276,22 @@ export function EditBaseEntityModal({ kind, onClose }: EditBaseEntityModalProps)
         )}
 
         <DialogFooter>
-          <Button variant="outline" onClick={guardClose}>
+          <Button variant="outline" onClick={guardClose} disabled={isSaving}>
             Cancel
           </Button>
-          <Button onClick={handleSave} disabled={!canSave} aria-disabled={!canSave}>
-            Save
+          <Button
+            onClick={handleSave}
+            disabled={!canSave || isSaving}
+            aria-disabled={!canSave || isSaving}
+          >
+            {isSaving ? (
+              <>
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                Saving…
+              </>
+            ) : (
+              'Save'
+            )}
           </Button>
         </DialogFooter>
       </DialogContent>
