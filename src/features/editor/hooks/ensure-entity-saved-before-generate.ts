@@ -9,6 +9,7 @@
 // ABORTS the generate unless this returns true (a user-facing toast is raised here on block/fail).
 // Shared by the 3 variant-item components (DRY — identical gate in each space).
 
+import { useCallback, useState } from 'react';
 import { toast } from 'sonner';
 import { createLogger } from '@/utils/logger';
 import { useSaveSessionStore, makeEntityId } from '@/stores/save-session-store';
@@ -46,4 +47,26 @@ export async function ensureEntitySavedBeforeGenerate(
   });
   toast.error("Couldn't save before generating — please try again.");
   return false;
+}
+
+/**
+ * React surface over the gate: exposes `isEnsureSaving` so the Generate button can flip to its
+ * busy state THE MOMENT it is clicked — the save round-trip runs BEFORE `startGenerateTask` sets
+ * `isProcessing`, and without this the button reads as dead for the whole save (user-reported,
+ * 2026-08-05). Render `isProcessing || isEnsureSaving` as one busy flag.
+ */
+export function useEnsureEntitySavedBeforeGenerate(
+  kind: IllustrationEntityKind,
+  entityKey: string,
+): { isEnsureSaving: boolean; ensureSavedBeforeGenerate: () => Promise<boolean> } {
+  const [isEnsureSaving, setIsEnsureSaving] = useState(false);
+  const ensureSavedBeforeGenerate = useCallback(async (): Promise<boolean> => {
+    setIsEnsureSaving(true);
+    try {
+      return await ensureEntitySavedBeforeGenerate(kind, entityKey);
+    } finally {
+      setIsEnsureSaving(false);
+    }
+  }, [kind, entityKey]);
+  return { isEnsureSaving, ensureSavedBeforeGenerate };
 }

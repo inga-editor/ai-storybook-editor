@@ -39,7 +39,7 @@ import {
   useImageTasksForChild,
 } from '@/stores/snapshot-store/selectors';
 import { useReferenceImagePicker } from '@/features/editor/hooks/use-reference-image-picker';
-import { ensureEntitySavedBeforeGenerate } from '@/features/editor/hooks/ensure-entity-saved-before-generate';
+import { useEnsureEntitySavedBeforeGenerate } from '@/features/editor/hooks/ensure-entity-saved-before-generate';
 import type { CharacterAppearance, CharacterVariant } from '@/types/character-types';
 import { useCurrentBook } from '@/stores/book-store';
 import { uploadImageToStorage } from '@/apis/storage-api';
@@ -148,6 +148,10 @@ export function VariantItem({ characterKey, variantData, isExpanded, onToggle, e
   const book = useCurrentBook();
   const artStyleId = book?.artstyle_id ?? null;
   const { isProcessing } = useImageTasksForChild(characterKey, variantData.key);
+  // Pre-generate save gate runs BEFORE the task exists — fold its round-trip into the busy state
+  // so the Generate click flips to "Generating" immediately (no dead-button window).
+  const { isEnsureSaving, ensureSavedBeforeGenerate } = useEnsureEntitySavedBeforeGenerate('character', characterKey);
+  const isBusy = isProcessing || isEnsureSaving;
 
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const [isUploading, setIsUploading] = useState(false);
@@ -197,12 +201,12 @@ export function VariantItem({ characterKey, variantData, isExpanded, onToggle, e
 
   // Non-base variants cannot generate without base illustration; all variants need a book art style.
   // Collab: also disabled unless this editor holds the entity lock (`editable`).
-  const isGenerateDisabled = !editable || isProcessing || !visualDescription.trim() || !artStyleId || (!isBase && !baseVariantImageUrl);
+  const isGenerateDisabled = !editable || isBusy || !visualDescription.trim() || !artStyleId || (!isBase && !baseVariantImageUrl);
 
   const handleGenerate = async () => {
     if (!editable) return; // collab gate
     const trimmedPrompt = visualDescription.trim();
-    if (!trimmedPrompt || isProcessing) return;
+    if (!trimmedPrompt || isBusy) return;
     // Null-guard: require book.artstyle_id (UUID) — contract rejects empty art style with 400.
     if (!artStyleId) {
       log.warn('handleGenerate', 'blocked — missing artStyleId', { characterKey, variantKey: variantData.key });
@@ -214,7 +218,7 @@ export function VariantItem({ characterKey, variantData, isExpanded, onToggle, e
 
     // GATE (spec §4.2): persist the entity BEFORE generate so the BE save_resource directive can
     // anchor the result. Aborts (with a toast) on a peer lock / save failure — never burns an AI call.
-    if (!(await ensureEntitySavedBeforeGenerate('character', characterKey))) return;
+    if (!(await ensureSavedBeforeGenerate())) return;
 
     const referenceImages = generateRefs.images.length > 0
       ? generateRefs.images.map(({ base64Data, mimeType }) => ({ base64Data, mimeType }))
@@ -261,7 +265,7 @@ export function VariantItem({ characterKey, variantData, isExpanded, onToggle, e
   const handleEditImage = () => {
     if (!editable) return; // collab gate
     const trimmed = editPromptText.trim();
-    if (!trimmed || !selectedIllustration || isProcessing) return;
+    if (!trimmed || !selectedIllustration || isBusy) return;
     log.info('handleEditImage', 'start', { characterKey, variantKey: variantData.key, refCount: editRefs.images.length });
     setIsEditPopoverOpen(false);
     const referenceImages = editRefs.images.length > 0
@@ -426,7 +430,7 @@ export function VariantItem({ characterKey, variantData, isExpanded, onToggle, e
             sortedIllustrations={sortedIllustrations}
             selectedIllustrationIndex={selectedIllustrationIndex}
             selectedIllustration={selectedIllustration}
-            isProcessing={isProcessing}
+            isProcessing={isBusy}
             isEditPopoverOpen={isEditPopoverOpen}
             editPromptText={editPromptText}
             editRefImages={editRefs.images}
@@ -454,7 +458,7 @@ export function VariantItem({ characterKey, variantData, isExpanded, onToggle, e
             <input ref={generateRefs.inputRef} type="file" accept="image/png,image/jpeg,image/webp" multiple onChange={generateRefs.handleFilesSelected} className="hidden" />
             <div className="flex items-center gap-2 mb-2">
               <Label className="text-xs text-muted-foreground">VISUAL DESCRIPTION</Label>
-              <Button size="sm" variant="ghost" className="h-6 w-6 p-0" onClick={generateRefs.openPicker} disabled={isProcessing || !editable} aria-label="Attach reference image">
+              <Button size="sm" variant="ghost" className="h-6 w-6 p-0" onClick={generateRefs.openPicker} disabled={isBusy || !editable} aria-label="Attach reference image">
                 <Paperclip className="h-4 w-4" />
               </Button>
               {generateRefs.images.length > 0 && (
@@ -478,7 +482,7 @@ export function VariantItem({ characterKey, variantData, isExpanded, onToggle, e
               onChange={handleDescriptionChange}
               placeholder="Describe the visual appearance..."
               className="min-h-[80px]"
-              disabled={isProcessing || !editable}
+              disabled={isBusy || !editable}
               aria-label="Visual description prompt"
             />
           </div>
@@ -486,7 +490,7 @@ export function VariantItem({ characterKey, variantData, isExpanded, onToggle, e
           {/* Generate button */}
           <div className="flex flex-col items-center gap-1">
             <Button onClick={handleGenerate} disabled={isGenerateDisabled} title={!artStyleId ? 'Select an art style first' : undefined} className="w-40" aria-disabled={isGenerateDisabled}>
-              {isProcessing ? (
+              {isBusy ? (
                 <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Generating</>
               ) : (
                 <><Sparkles className="h-4 w-4 mr-2" />Generate</>

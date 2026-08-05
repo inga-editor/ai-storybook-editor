@@ -40,7 +40,7 @@ import { Label } from "@/components/ui/label";
 import { useSnapshotActions, usePropByKey, useImageTasksForChild } from "@/stores/snapshot-store";
 import { useAssetCategories } from "@/stores/asset-category-store";
 import { useReferenceImagePicker } from "@/features/editor/hooks/use-reference-image-picker";
-import { ensureEntitySavedBeforeGenerate } from "@/features/editor/hooks/ensure-entity-saved-before-generate";
+import { useEnsureEntitySavedBeforeGenerate } from "@/features/editor/hooks/ensure-entity-saved-before-generate";
 import { useCurrentBook } from '@/stores/book-store';
 import type { PropVariant } from "@/types/prop-types";
 import { uploadImageToStorage } from "@/apis/storage-api";
@@ -73,6 +73,10 @@ export function VariantItem({
   const book = useCurrentBook();
   const artStyleId = book?.artstyle_id ?? null;
   const { isProcessing } = useImageTasksForChild(propKey, variantData.key);
+  // Pre-generate save gate runs BEFORE the task exists — fold its round-trip into the busy state
+  // so the Generate click flips to "Generating" immediately (no dead-button window).
+  const { isEnsureSaving, ensureSavedBeforeGenerate } = useEnsureEntitySavedBeforeGenerate("prop", propKey);
+  const isBusy = isProcessing || isEnsureSaving;
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [isRenaming, setIsRenaming] = useState(false);
@@ -131,7 +135,7 @@ export function VariantItem({
   const handleEditImage = () => {
     if (!editable) return; // collab gate
     const trimmed = editPromptText.trim();
-    if (!trimmed || !selectedIllustration || isProcessing) return;
+    if (!trimmed || !selectedIllustration || isBusy) return;
 
     log.info("handleEditImage", "start", {
       propKey,
@@ -170,12 +174,12 @@ export function VariantItem({
     : undefined;
 
   // Non-base states cannot generate without base illustration; all states need a book art style.
-  const isGenerateDisabled = !editable || isProcessing || !visualDescription.trim() || !artStyleId || (!isBase && !basePropImageUrl);
+  const isGenerateDisabled = !editable || isBusy || !visualDescription.trim() || !artStyleId || (!isBase && !basePropImageUrl);
 
   const handleGenerate = async () => {
     if (!editable) return; // collab gate
     const trimmedPrompt = visualDescription.trim();
-    if (!trimmedPrompt || isProcessing) return;
+    if (!trimmedPrompt || isBusy) return;
 
     // Null-guard: require book.artstyle_id (UUID) — contract rejects empty art style with 400.
     if (!artStyleId) {
@@ -192,7 +196,7 @@ export function VariantItem({
 
     // GATE (spec §4.2): persist the entity BEFORE generate so the BE save_resource directive can
     // anchor the result. Aborts (with a toast) on a peer lock / save failure — never burns an AI call.
-    if (!(await ensureEntitySavedBeforeGenerate('prop', propKey))) return;
+    if (!(await ensureSavedBeforeGenerate())) return;
 
     const referenceImages =
       generateRefs.images.length > 0
@@ -488,10 +492,10 @@ export function VariantItem({
                     src={selectedIllustration.media_url}
                     alt={variantData.name}
                     className="absolute inset-0 h-full w-full rounded-md"
-                    disabled={isProcessing}
+                    disabled={isBusy}
                   />
                   {/* Generating overlay */}
-                  {isProcessing && (
+                  {isBusy && (
                     <div className="absolute inset-0 bg-white/80 rounded-md flex items-center justify-center z-20">
                       <div className="text-center">
                         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto mb-2" />
@@ -512,13 +516,13 @@ export function VariantItem({
                       referenceImages={editRefs.images}
                       onAttachClick={editRefs.openPicker}
                       onRemoveReference={editRefs.removeImage}
-                      disabled={isProcessing || !editable}
+                      disabled={isBusy || !editable}
                     />
                     <Button
                       size="sm"
                       variant="secondary"
                       onClick={handleDownload}
-                      disabled={isProcessing}
+                      disabled={isBusy}
                       aria-label="Download image"
                     >
                       <Download className="h-4 w-4" />
@@ -599,7 +603,7 @@ export function VariantItem({
                 variant="ghost"
                 className="h-6 w-6 p-0"
                 onClick={generateRefs.openPicker}
-                disabled={isProcessing || !editable}
+                disabled={isBusy || !editable}
                 aria-label="Attach reference image"
               >
                 <Paperclip className="h-4 w-4" />
@@ -634,7 +638,7 @@ export function VariantItem({
               onChange={handleDescriptionChange}
               placeholder="Describe the visual appearance..."
               className="min-h-[80px]"
-              disabled={isProcessing || !editable}
+              disabled={isBusy || !editable}
             />
           </div>
 
@@ -646,7 +650,7 @@ export function VariantItem({
               title={!artStyleId ? "Select an art style first" : undefined}
               className="w-40"
             >
-              {isProcessing ? (
+              {isBusy ? (
                 <>
                   <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                   Generating
