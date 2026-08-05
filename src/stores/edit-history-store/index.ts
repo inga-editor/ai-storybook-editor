@@ -54,6 +54,10 @@ export const useEditHistoryStore = create<EditHistoryState>()(
         if (h.past.length > MAX_HISTORY) {
           h.past.splice(0, h.past.length - MAX_HISTORY); // drop oldest
         }
+        // Edit-following focus (dual-session, ADR-044 addendum 2026-08-05): with TWO sessions
+        // open on one spread (scene rtype 6 ∥ retouch rtype 10), Ctrl+Z must target the stack
+        // the user LAST edited — not whichever acquire happened to resolve last at beginSession.
+        s.activeKey = key;
       });
       log.debug('capture', 'pushed checkpoint', { key, label });
     },
@@ -119,7 +123,11 @@ export const useEditHistoryStore = create<EditHistoryState>()(
       log.info('endSession', 'close session', { key });
       set((s) => {
         delete s.histories[key];
-        if (s.activeKey === key) s.activeKey = null;
+        // Dual-session: ending the active session must not orphan a STILL-OPEN sibling (e.g.
+        // the retouch session releases while the scene session is held) — fall back to any
+        // remaining open session so its undo stack stays reachable.
+        if (s.activeKey === key)
+          s.activeKey = (Object.keys(s.histories)[0] as ItemKey | undefined) ?? null;
       });
     },
 

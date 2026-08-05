@@ -16,6 +16,7 @@
 // lock flow that lives outside a save session.
 
 import { useCallback, useEffect, useRef } from "react";
+import type { MutableRefObject } from "react";
 import type { SessionStatus } from "@/stores/resource-lock-store";
 import { createLogger } from "@/utils/logger";
 
@@ -30,6 +31,11 @@ interface UseLockFirstActionArgs {
   requestLock: () => void;
   /** Pending action is only valid for this key (spread id) — a change clears it. */
   resetKey: string | null;
+  /** Imperative drop channel: the hook writes a pending-clearing fn into this ref. Needed because
+   *  the rendered `lockStatus` can MISS the 'blocked' frame — a 409's onBlocked handler nulls the
+   *  space's lock target in the SAME React batch, so status renders straight back to 'idle' and the
+   *  status-based drop above never fires, leaving a stale action to flush on the NEXT acquire. */
+  cancelRef?: MutableRefObject<() => void>;
 }
 
 export function useLockFirstAction({
@@ -37,9 +43,22 @@ export function useLockFirstAction({
   lockStatus,
   requestLock,
   resetKey,
+  cancelRef,
 }: UseLockFirstActionArgs): (action: () => void) => void {
   // Ref, not state: read/written in handlers + effects only, never rendered (React 19 rule).
   const pendingActionRef = useRef<(() => void) | null>(null);
+
+  // Populate the imperative drop channel (called by the session's onBlocked/onLost wrappers —
+  // render-batching-proof, unlike the status-based drop below).
+  useEffect(() => {
+    if (!cancelRef) return;
+    cancelRef.current = () => {
+      if (pendingActionRef.current != null) {
+        log.debug("cancelPending", "drop deferred action (imperative)", {});
+        pendingActionRef.current = null;
+      }
+    };
+  }, [cancelRef]);
 
   // Latest requestLock without re-memoizing the returned runner.
   const requestLockRef = useRef(requestLock);

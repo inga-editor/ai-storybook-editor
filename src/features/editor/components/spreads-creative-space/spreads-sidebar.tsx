@@ -53,6 +53,13 @@ interface SpreadsSidebarProps {
    *  the SCENE lock is held, else acquires the lock and defers the action until HELD. Add-element
    *  routes through this so the "+" flow auto-locks instead of toasting. */
   runWithLock?: (action: () => void) => void;
+  /** Whether THIS editor holds the spread's RETOUCH (rtype 10) lock — the partition `shapes`
+   *  persists through (ADR-044 addendum 2026-08-05, dual-session). Shape rows gate on this,
+   *  not on `isEditable`. */
+  isShapeEditable: boolean;
+  /** First-interaction gate of the RETOUCH session — shape add/rename route through it (mutating
+   *  before that session is HELD bakes into its baseline → silently unsaved). */
+  runWithRetouchLock?: (action: () => void) => void;
 }
 
 // === Inline sub-components ===
@@ -140,6 +147,8 @@ export function SpreadsSidebar({
   onItemSelect,
   isEditable,
   runWithLock,
+  isShapeEditable,
+  runWithRetouchLock,
 }: SpreadsSidebarProps) {
   // Defensive: guard against illustration being undefined during store init
   const spread = useSnapshotStore(
@@ -195,30 +204,36 @@ export function SpreadsSidebar({
   const handleEditStart = useCallback((entry: ElementListEntry) => {
     // Textbox title is auto-derived — renaming not supported
     if (entry.type === "raw_textbox") return;
-    // Lock-on-click gate: renaming is an in-spread edit → require the SCENE lock.
-    if (!isEditable) {
-      log.debug("handleEditStart", "blocked — spread not held", { id: entry.id });
+    // Lock gate per partition (dual-session): shape rename runs under the RETOUCH lock, other
+    // entries under the SCENE lock. With a first-interaction gate wired, starting the inline
+    // editor is always allowed — the CONFIRM routes through the gate and acquires the lock.
+    const canStart =
+      entry.type === "shape" ? isShapeEditable || !!runWithRetouchLock : isEditable;
+    if (!canStart) {
+      log.debug("handleEditStart", "blocked — lock not held", { id: entry.id, type: entry.type });
       toastLockRequired();
       return;
     }
     setEditingItemId(entry.id);
     setEditValue(entry.title);
-  }, [isEditable]);
+  }, [isEditable, isShapeEditable, runWithRetouchLock]);
 
   const handleRenameConfirm = useCallback(() => {
     if (!editingItemId || !editValue.trim()) {
       setEditingItemId(null);
       return;
     }
-    // Defense-in-depth: a lock loss while the inline editor is open must not persist.
-    if (!isEditable) {
-      log.debug("handleRenameConfirm", "blocked — spread not held", { editingItemId });
-      toastLockRequired();
+    const entry = allEntries.find((e) => e.id === editingItemId);
+    if (!entry) {
       setEditingItemId(null);
       return;
     }
-    const entry = allEntries.find((e) => e.id === editingItemId);
-    if (!entry) {
+    // Defense-in-depth per partition: a lock loss while the inline editor is open must not persist.
+    // Shape renames go through the retouch gate below (which self-handles the not-held case), so
+    // only non-shape entries hard-require the SCENE lock here.
+    if (entry.type !== "shape" && !isEditable) {
+      log.debug("handleRenameConfirm", "blocked — spread not held", { editingItemId });
+      toastLockRequired();
       setEditingItemId(null);
       return;
     }
@@ -237,15 +252,30 @@ export function SpreadsSidebar({
         titleUpdate as Partial<SpreadImage>
       );
     } else if (entry.type === "shape") {
-      actions.updateRetouchShape(
-        selectedSpreadId,
-        entry.id,
-        titleUpdate as Partial<SpreadShape>
-      );
+      // Retouch partition: run under the rtype-10 gate (acquire-then-replay when not yet held);
+      // values are captured in the closure so a deferred replay writes THIS confirm's title.
+      if (runWithRetouchLock) {
+        runWithRetouchLock(() =>
+          actions.updateRetouchShape(
+            selectedSpreadId,
+            entry.id,
+            titleUpdate as Partial<SpreadShape>
+          )
+        );
+      } else if (isShapeEditable) {
+        actions.updateRetouchShape(
+          selectedSpreadId,
+          entry.id,
+          titleUpdate as Partial<SpreadShape>
+        );
+      } else {
+        log.debug("handleRenameConfirm", "blocked — shape lock not held", { editingItemId });
+        toastLockRequired();
+      }
     }
 
     setEditingItemId(null);
-  }, [editingItemId, editValue, allEntries, actions, selectedSpreadId, isEditable]);
+  }, [editingItemId, editValue, allEntries, actions, selectedSpreadId, isEditable, isShapeEditable, runWithRetouchLock]);
 
   // === Drag and drop handlers ===
 
@@ -370,23 +400,27 @@ export function SpreadsSidebar({
     [actions, selectedSpreadId, langCode, bookShape, bookTypography, onItemSelect]
   );
 
-  // First-click lock gate: route the add through runWithLock so the first click acquires the SCENE
-  // lock and the add runs once HELD (legacy toast gate only when no gate is wired).
+  // First-click lock gate, split per partition (dual-session): a SHAPE add must run under the
+  // RETOUCH (rtype 10) session — routing it through the scene gate would mutate `shapes` outside
+  // its owning session (silently unsaved). Other adds keep the SCENE gate (legacy toast gate only
+  // when no gate is wired).
   const handleAddElement = useCallback(
     (type: SpreadElementType) => {
-      if (runWithLock) {
-        runWithLock(() => performAddElement(type));
+      const gate = type === "shape" ? runWithRetouchLock : runWithLock;
+      if (gate) {
+        gate(() => performAddElement(type));
         return;
       }
-      if (!isEditable) {
-        log.debug("handleAddElement", "blocked — spread not held", { type });
+      const editable = type === "shape" ? isShapeEditable : isEditable;
+      if (!editable) {
+        log.debug("handleAddElement", "blocked — lock not held", { type });
         toastLockRequired();
         setIsAddOpen(false);
         return;
       }
       performAddElement(type);
     },
-    [isEditable, performAddElement, runWithLock]
+    [isEditable, isShapeEditable, performAddElement, runWithLock, runWithRetouchLock]
   );
 
   // Eager-acquire on "+" click (popover open): start acquiring immediately so the lock is already
@@ -505,7 +539,13 @@ export function SpreadsSidebar({
                   entry={entry}
                   index={index}
                   isSelected={selectedItemId?.id === entry.id}
-                  isEditable={isEditable}
+                  // Per-partition affordance: shape rows follow the RETOUCH gate (always actionable
+                  // when the first-interaction gate is wired — the action itself acquires the lock).
+                  isEditable={
+                    entry.type === "shape"
+                      ? isShapeEditable || !!runWithRetouchLock
+                      : isEditable
+                  }
                   editingId={editingItemId}
                   editValue={editValue}
                   onEditValueChange={setEditValue}

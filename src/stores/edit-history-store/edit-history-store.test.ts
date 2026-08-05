@@ -61,6 +61,48 @@ describe('beginSession / endSession', () => {
   });
 });
 
+describe('dual-session (scene ∥ retouch on one spread — ADR-044 addendum 2026-08-05)', () => {
+  const RETOUCH_KEY = 'retouch:10:sp1:∅' as ItemKey;
+
+  it('capture re-aims activeKey at the last-edited session (edit-following focus)', () => {
+    const s = useEditHistoryStore.getState();
+    s.beginSession(SCENE_KEY, {}, 'illustration-scene');
+    s.beginSession(RETOUCH_KEY, {}, 'retouch'); // last begin wins initially
+    expect(useEditHistoryStore.getState().activeKey).toBe(RETOUCH_KEY);
+
+    s.capture(SCENE_KEY, { raw_images: [] }, 'edit');
+    expect(useEditHistoryStore.getState().activeKey).toBe(SCENE_KEY);
+
+    s.capture(RETOUCH_KEY, { shapes: [] }, 'edit');
+    expect(useEditHistoryStore.getState().activeKey).toBe(RETOUCH_KEY);
+  });
+
+  it('ending the ACTIVE session falls back to a still-open sibling (never orphans its undo)', () => {
+    const s = useEditHistoryStore.getState();
+    s.beginSession(SCENE_KEY, {}, 'illustration-scene');
+    s.beginSession(RETOUCH_KEY, {}, 'retouch');
+    s.capture(RETOUCH_KEY, { shapes: [] }, 'edit'); // active = retouch
+
+    s.endSession(RETOUCH_KEY);
+    const st = useEditHistoryStore.getState();
+    expect(st.histories[RETOUCH_KEY]).toBeUndefined();
+    expect(st.activeKey).toBe(SCENE_KEY); // scene undo stays reachable
+
+    s.endSession(SCENE_KEY);
+    expect(useEditHistoryStore.getState().activeKey).toBeNull();
+  });
+
+  it('ending a NON-active session leaves activeKey untouched', () => {
+    const s = useEditHistoryStore.getState();
+    s.beginSession(SCENE_KEY, {}, 'illustration-scene');
+    s.beginSession(RETOUCH_KEY, {}, 'retouch');
+    s.capture(SCENE_KEY, { raw_images: [] }, 'edit'); // active = scene
+
+    s.endSession(RETOUCH_KEY);
+    expect(useEditHistoryStore.getState().activeKey).toBe(SCENE_KEY);
+  });
+});
+
 describe('capture', () => {
   it('pushes onto past and clears future', () => {
     const s = useEditHistoryStore.getState();

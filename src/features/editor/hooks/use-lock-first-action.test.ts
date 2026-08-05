@@ -98,4 +98,39 @@ describe("useLockFirstAction", () => {
 
     expect(action).not.toHaveBeenCalled();
   });
+
+  it("cancelRef drops the pending action even when the 'blocked' frame never renders", () => {
+    // Repro of the batching hole: a 409's onBlocked handler nulls the space's lock target in the
+    // SAME React batch, so the rendered status jumps 'acquiring' → 'idle' without ever showing
+    // 'blocked' — the status-based drop misses. The imperative cancel channel must cover it.
+    const requestLock = vi.fn();
+    const cancelRef = { current: () => {} };
+    const view = renderHook(
+      (props: HarnessProps) =>
+        useLockFirstAction({
+          isHeld: props.isHeld,
+          lockStatus: props.lockStatus,
+          requestLock,
+          resetKey: props.resetKey,
+          cancelRef,
+        }),
+      {
+        initialProps: {
+          isHeld: false,
+          lockStatus: "acquiring" as SessionStatus,
+          resetKey: "spread-1",
+        },
+      }
+    );
+    const action = vi.fn();
+
+    view.result.current(action);
+    // Blocked resolution: imperative cancel fires; render then shows plain 'idle' (never 'blocked').
+    cancelRef.current();
+    view.rerender({ isHeld: false, lockStatus: "idle", resetKey: "spread-1" });
+    // A later successful acquire on the SAME key must NOT flush the stale action.
+    view.rerender({ isHeld: true, lockStatus: "held", resetKey: "spread-1" });
+
+    expect(action).not.toHaveBeenCalled();
+  });
 });

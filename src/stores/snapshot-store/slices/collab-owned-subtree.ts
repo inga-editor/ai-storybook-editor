@@ -31,10 +31,11 @@ export const SCENE_OWNED_KEYS = [
 ] as const;
 
 /** RETOUCH pipeline (rtype 10, step 3) — the playable layers + animations.
- *  NOTE `shapes`: a PLAYABLE layer → owned by RETOUCH here. A legacy SCENE mutator
- *  (spreads-sidebar shape-reorder → rtype-6 whole-node) still writes it; that reorder
- *  MUST be re-routed onto the retouch path before the scene per-spread swap ships,
- *  else the scene merge (which excludes `shapes`) drops reorders. */
+ *  NOTE `shapes`: a PLAYABLE layer → owned by RETOUCH here, yet still editable from the
+ *  SCENE space canvas/sidebar. The scene space therefore runs a DUAL-SESSION (ADR-044
+ *  addendum 2026-08-05): shape interactions acquire a second per-spread rtype-10 held
+ *  session so shape edits persist through THIS partition — never via the rtype-6 merge
+ *  (which excludes `shapes` and silently drops them). Shape reorder stays Objects-only. */
 export const RETOUCH_OWNED_KEYS = [
   'images',
   'textboxes',

@@ -79,6 +79,12 @@ export function useSaveSession(args: UseSaveSessionArgs): UseSaveSessionResult {
     serializedRef.current = serialized;
   });
 
+  // Imperative gate-cancel channel (populated by useLockFirstAction below). Blocked/lost must drop
+  // a queued first-click action HERE — the rendered status can miss the 'blocked' frame entirely
+  // when the space's onBlocked nulls the lock target in the same React batch (status goes straight
+  // back to 'idle'), which would let the stale action flush into the NEXT successful acquire.
+  const gateCancelRef = useRef<() => void>(() => {});
+
   useEffect(() => {
     if (!serialized || !id || !bookId) return;
     const key = serialized;
@@ -87,8 +93,14 @@ export function useSaveSession(args: UseSaveSessionArgs): UseSaveSessionResult {
     // so this cleanup never reads myLocks/bookId (repeats the 2026-07-11 teardown-order bugfix).
     void useSaveSessionStore.getState().begin(domain, id, locale, {
       manageHeaderStatus: cbRef.current.manageHeaderStatus,
-      onBlocked: (h) => cbRef.current.onBlocked?.(h),
-      onLost: (b) => cbRef.current.onLost?.(b),
+      onBlocked: (h) => {
+        gateCancelRef.current();
+        cbRef.current.onBlocked?.(h);
+      },
+      onLost: (b) => {
+        gateCancelRef.current();
+        cbRef.current.onLost?.(b);
+      },
       isCancelled: () => cancelled,
     });
     return () => {
@@ -144,6 +156,7 @@ export function useSaveSession(args: UseSaveSessionArgs): UseSaveSessionResult {
     lockStatus: status,
     requestLock: requestLockStable,
     resetKey: args.gateResetKey ?? null,
+    cancelRef: gateCancelRef,
   });
 
   return { status, saveNow, ensureSaved, commitOnModalClose, runWithLock };

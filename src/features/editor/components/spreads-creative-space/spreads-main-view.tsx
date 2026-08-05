@@ -49,6 +49,7 @@ import { IllustrationEditImageModal } from './illustration-edit-image-modal';
 import { SpreadsTextToolbar } from './spreads-text-toolbar';
 import { SpreadsShapeToolbar } from './spreads-shape-toolbar';
 import { SpreadsPageToolbar } from './spreads-page-toolbar';
+import { isRetouchOwnedItem } from './shape-partition';
 import type { SelectedItem } from './utils';
 import type { ViewMode } from '@/types/canvas-types';
 import type {
@@ -112,6 +113,14 @@ interface SpreadsMainViewProps {
   /** Whether the active spread is currently held by THIS editor's SCENE lock. Gates all in-spread
    *  content editability (grey-out when not held — lock-on-click). */
   spreadEditable: boolean;
+  /** Whether the active spread's RETOUCH (rtype 10) lock is held by THIS editor — shapes persist
+   *  through that partition, so shape mutators gate on this, never on `spreadEditable` (ADR-044
+   *  addendum 2026-08-05, dual-session). */
+  shapeEditable: boolean;
+  /** First-interaction gate of the RETOUCH session: runs the action sync when held, else queues it
+   *  (1 slot, last wins) and acquires the retouch lock. Shape mutators MUST run inside it —
+   *  mutating before HELD bakes the change into the session baseline (silently unsaved). */
+  runWithRetouchLock: (action: () => void) => void;
   /** Held-session commit-on-modal-close (fire-and-forget) forwarded to every spread-level SCENE
    *  modal. STABLE from the engine; self-guards (no-op when clean / not held). */
   onCommitSave?: () => void;
@@ -130,6 +139,8 @@ export function SpreadsMainView({
   onSpreadUserSelect,
   onItemSelect,
   spreadEditable,
+  shapeEditable,
+  runWithRetouchLock,
   onCommitSave,
   viewMode,
   zoomLevel,
@@ -330,13 +341,21 @@ export function SpreadsMainView({
     [actions, illustrationSpreads, allLayouts, langCode, bookTypography]
   );
 
-  // Lock-on-click gate (ADR-044): every IN-SPREAD scene write (canvas raw_image / raw_textbox /
-  // shape / page add·update·delete, incl. the Generate modal's image updates which route here)
-  // flows through onUpdateSpreadItem → handleSpreadItemAction; block it when this editor does not
-  // hold the spread's SCENE lock (else the mutation dirties the node but the held session never
-  // saves it). Single choke point for drag/resize/inline-edit/delete on the canvas.
+  // Lock-on-click gate (ADR-044): every IN-SPREAD write (canvas raw_image / raw_textbox / shape /
+  // page add·update·delete, incl. the Generate modal's image updates which route here) flows
+  // through onUpdateSpreadItem → handleSpreadItemAction. Single choke point, TWO partitions
+  // (ADR-044 addendum 2026-08-05, dual-session):
+  //  - retouch-owned item (shape) → runWithRetouchLock: sync when the rtype-10 session is held,
+  //    else queue-1-slot + acquire, replay on HELD (mutating before HELD would bake into the
+  //    baseline → silently unsaved — the very defect this fixes);
+  //  - scene item → block unless the rtype-6 SCENE lock is held (unchanged behavior).
   const gatedSpreadItemAction = useCallback(
     (params: SpreadItemActionUnion) => {
+      if (isRetouchOwnedItem(params.itemType)) {
+        // Capture params in the closure — the queued replay must see THIS call's values.
+        runWithRetouchLock(() => handleSpreadItemAction(params));
+        return;
+      }
       if (!spreadEditable) {
         log.debug('gatedSpreadItemAction', 'blocked — spread not held', {
           itemType: params.itemType,
@@ -347,7 +366,7 @@ export function SpreadsMainView({
       }
       handleSpreadItemAction(params);
     },
-    [spreadEditable, handleSpreadItemAction]
+    [spreadEditable, runWithRetouchLock, handleSpreadItemAction]
   );
 
   // === Generate image modal state ===
@@ -530,8 +549,15 @@ export function SpreadsMainView({
 
   // Gate duplicate (covers BOTH the toolbar Clone action AND the Ctrl/Cmd+D hotkey — the hotkey
   // bypasses toolbar-visibility gating, so it must be blocked here when the spread is not held).
+  // Same two-partition split as gatedSpreadItemAction: shape clones go through the retouch gate.
+  // handleDuplicateItem reads `spread.shapes` + computes z-index INSIDE the callback, so a queued
+  // replay recomputes them on post-acquire state (no stale z-index).
   const gatedDuplicateItem = useCallback(
     (itemType: 'raw_image' | 'raw_textbox' | 'shape', itemId: string) => {
+      if (isRetouchOwnedItem(itemType)) {
+        runWithRetouchLock(() => handleDuplicateItem(itemType, itemId));
+        return;
+      }
       if (!spreadEditable) {
         log.debug('gatedDuplicateItem', 'blocked — spread not held', { itemType, itemId });
         toastLockRequired();
@@ -539,7 +565,7 @@ export function SpreadsMainView({
       }
       handleDuplicateItem(itemType, itemId);
     },
-    [spreadEditable, handleDuplicateItem]
+    [spreadEditable, runWithRetouchLock, handleDuplicateItem]
   );
 
   const { stackRef } = useInteractionLayerContext();
@@ -743,7 +769,9 @@ export function SpreadsMainView({
         // Lock-on-click: in-spread content is editable only while THIS editor holds the spread's
         // SCENE lock. Spread CREATE stays ungated (add a spread); spread DELETE is gated (must hold
         // it) → then explicit collection save; spread REORDER stays ungated (out of held scope).
-        isEditable={spreadEditable}
+        // Dual-session v1: retouch-held-only also unlocks the canvas (shape work without a scene
+        // edit); per-partition mutators stay hard-gated inside gatedSpreadItemAction regardless.
+        isEditable={spreadEditable || shapeEditable}
         canAddSpread={true}
         canDeleteSpread={spreadEditable}
         canReorderSpread={true}
