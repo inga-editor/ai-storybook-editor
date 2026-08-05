@@ -9,20 +9,17 @@
 // Generate is GATED (gateByRef → reasons). Gated-off ✨ renders DISABLED + tooltip, never hidden
 // (memory: never-hide-disabled-ui). While the row's op is busy, ✨ becomes an inert spinner.
 //
-// Collab peer-lock (ADR-047): each row self-reads its ENTITY lock (step 1 / rtype 3 char · 4 prop).
-// When ANOTHER editor holds the entity, the row shows a 🔒 holder badge and disables ✏ + ✨ (greyed,
-// NOT hidden). Advisory — the acquire 409 is the real authority (browse/select stays enabled).
+// Collab (ADR-044 addendum 2 — LOCKLESS): entity domains no longer acquire a lock, so there is NO
+// peer-lock badge and NO lock-based disable. ✏/✨ disable only on degraded (ADR-047) / gate reasons
+// / concurrency cap. The Lock/LockOpen icons below are the "chốt" (pick-finalized) glyph, NOT collab.
 
 import { AlertTriangle, ChevronDown, ChevronRight, Loader2, Lock, LockOpen, Pencil, Sparkles } from 'lucide-react';
-import { useMemo } from 'react';
 import { Button } from '@/components/ui/button';
 import type { BaseKind, VariantRef } from '@/types/sketch';
 import { KIND_ENTITY_SOURCE } from '@/types/sketch';
 import { cn } from '@/utils/utils';
-import { useIsLockedByOther, useLockHolderName } from '@/stores/resource-lock-store';
 import { useSketchEntityDegraded } from '@/stores/snapshot-store';
 import { useIsVariantGenerateCapReached } from '@/stores/snapshot-store/selectors';
-import { resolveSketchVariantLockTarget } from '@/stores/snapshot-store/slices/collab-sketch-variant-save-helper';
 import {
   GATE_TOOLTIP,
   sameRef,
@@ -189,14 +186,6 @@ function VariantRow({
   const mention = `@${variantRef.entityKey}/${variantRef.variantKey}`;
   const spinnerLabel = status.phase === 'cut' ? 'Cutting cells…' : 'Generating…';
 
-  // Peer-lock (advisory) for THIS row's ENTITY — memoize the target so the primitive selectors stay
-  // subscribed to a stable object (they return primitives → Object.is-stable, no re-render loop).
-  const lockTarget = useMemo(
-    () => resolveSketchVariantLockTarget(variantRef.kind, variantRef.entityKey),
-    [variantRef.kind, variantRef.entityKey],
-  );
-  const lockedByOther = useIsLockedByOther(lockTarget);
-  const holderName = useLockHolderName(lockTarget);
   // ADR-047: entity data unreadable (degraded) → row greyed (NOT hidden) + edit/generate refused;
   // browse/select stays enabled (D5 — persist is blocked, interaction is not).
   // `useSketchEntityDegraded` keys by the REAL collection ('characters' | 'props'): an alter
@@ -212,19 +201,17 @@ function VariantRow({
   const capReached = useIsVariantGenerateCapReached();
   const CAP_TOOLTIP = 'Too many sheets generating — wait for one to finish, then try again.';
 
-  // ✏/✨ disabled when a peer holds the entity OR the entity is degraded; ✨ additionally gated on
-  // the generate preconditions and the concurrency cap.
-  const editDisabled = lockedByOther || degraded;
-  const generateDisabled = lockedByOther || degraded || !gate.canGenerate || capReached;
+  // ✏ disabled when the entity is degraded; ✨ additionally gated on the generate preconditions and
+  // the concurrency cap.
+  const editDisabled = degraded;
+  const generateDisabled = degraded || !gate.canGenerate || capReached;
   const gateTooltip = degraded
     ? DEGRADED_TOOLTIP
-    : lockedByOther
-      ? `${holderName ?? 'Another editor'} is editing`
-      : gate.reason
-        ? GATE_TOOLTIP[gate.reason]
-        : capReached
-          ? CAP_TOOLTIP
-          : undefined;
+    : gate.reason
+      ? GATE_TOOLTIP[gate.reason]
+      : capReached
+        ? CAP_TOOLTIP
+        : undefined;
 
   return (
     <div
@@ -233,7 +220,7 @@ function VariantRow({
         isSelected ? 'bg-primary/10' : 'hover:bg-muted/50',
         degraded && 'opacity-60',
       )}
-      aria-disabled={lockedByOther || degraded}
+      aria-disabled={degraded}
     >
       {/* "Chốt" status glyph (read-only) — 🔒 picked / 🔓 not yet. Mirrors the base space's
           locked-style convention (base-kind-sidebar). The pick itself is made in the crop tab, so
@@ -278,17 +265,6 @@ function VariantRow({
         >
           <AlertTriangle className="h-3 w-3 shrink-0" aria-hidden="true" />
           <span className="max-w-[64px] truncate">Dữ liệu lỗi</span>
-        </span>
-      )}
-
-      {/* Peer-lock badge — 🔒 + holder name (never hidden; browse stays enabled). */}
-      {lockedByOther && (
-        <span
-          className="flex min-w-0 items-center gap-0.5 rounded bg-background/80 px-1 text-[10px] font-medium text-muted-foreground"
-          title={`${holderName ?? 'Another editor'} is editing`}
-        >
-          <Lock className="h-3 w-3 shrink-0" aria-hidden="true" />
-          <span className="max-w-[64px] truncate">{holderName ?? 'Editing'}</span>
         </span>
       )}
 

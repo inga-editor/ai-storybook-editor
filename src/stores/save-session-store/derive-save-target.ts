@@ -49,6 +49,9 @@ export function deriveSaveTarget(target: LockTarget | null): DerivedSaveTarget {
       return { domain: 'sketch-base-sheet', id: resource_id, locale };
     case '1:12':
       return { domain: 'sketch-lineups', id: resource_id, locale };
+    case '1:14':
+      // Base-space whole-collection column-root (resource_id === the collection name).
+      return { domain: 'sketch-base-entities', id: resource_id, locale };
     default:
       log.error('deriveSaveTarget', 'unmapped lock target', { step, rtype: resource_type });
       throw new Error(`deriveSaveTarget: no save-domain for step=${step} rtype=${resource_type}`);

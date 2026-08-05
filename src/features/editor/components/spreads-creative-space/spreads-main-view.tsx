@@ -6,7 +6,6 @@ import { CanvasSpreadView } from '@/features/editor/components/canvas-spread-vie
 import {
   EditableImage,
   EditableTextbox,
-  EditableShape,
   GenerateImageModal,
   ExtractImageModal,
   SPACE_TOOL_MATRIX,
@@ -21,7 +20,6 @@ import {
 import type { CropPreset } from '@/types/editor';
 import {
   cloneItemWithNewId,
-  nextTopZInTier,
   shiftTextboxLanguageGeometries,
 } from '@/features/editor/utils/duplicate-item-helpers';
 import {
@@ -47,9 +45,7 @@ import { useGlobalHotkey } from '@/features/editor/contexts/use-global-hotkey';
 import { SpreadsImageToolbar } from './spreads-image-toolbar';
 import { IllustrationEditImageModal } from './illustration-edit-image-modal';
 import { SpreadsTextToolbar } from './spreads-text-toolbar';
-import { SpreadsShapeToolbar } from './spreads-shape-toolbar';
 import { SpreadsPageToolbar } from './spreads-page-toolbar';
-import { isRetouchOwnedItem } from './shape-partition';
 import type { SelectedItem } from './utils';
 import type { ViewMode } from '@/types/canvas-types';
 import type {
@@ -57,16 +53,13 @@ import type {
   BaseSpread,
   ImageItemContext,
   TextItemContext,
-  ShapeItemContext,
   ImageToolbarContext,
   TextToolbarContext,
-  ShapeToolbarContext,
   PageToolbarContext,
   LayoutOption,
   SpreadItemActionUnion,
   SpreadImage,
   SpreadTextbox,
-  SpreadShape,
   PageData,
 } from '@/features/editor/components/canvas-spread-view';
 
@@ -113,14 +106,6 @@ interface SpreadsMainViewProps {
   /** Whether the active spread is currently held by THIS editor's SCENE lock. Gates all in-spread
    *  content editability (grey-out when not held — lock-on-click). */
   spreadEditable: boolean;
-  /** Whether the active spread's RETOUCH (rtype 10) lock is held by THIS editor — shapes persist
-   *  through that partition, so shape mutators gate on this, never on `spreadEditable` (ADR-044
-   *  addendum 2026-08-05, dual-session). */
-  shapeEditable: boolean;
-  /** First-interaction gate of the RETOUCH session: runs the action sync when held, else queues it
-   *  (1 slot, last wins) and acquires the retouch lock. Shape mutators MUST run inside it —
-   *  mutating before HELD bakes the change into the session baseline (silently unsaved). */
-  runWithRetouchLock: (action: () => void) => void;
   /** Held-session commit-on-modal-close (fire-and-forget) forwarded to every spread-level SCENE
    *  modal. STABLE from the engine; self-guards (no-op when clean / not held). */
   onCommitSave?: () => void;
@@ -139,8 +124,6 @@ export function SpreadsMainView({
   onSpreadUserSelect,
   onItemSelect,
   spreadEditable,
-  shapeEditable,
-  runWithRetouchLock,
   onCommitSave,
   viewMode,
   zoomLevel,
@@ -266,14 +249,6 @@ export function SpreadsMainView({
           else if (action === 'delete')
             actions.deleteRawTextbox(spreadId, itemId as string);
           break;
-        case 'shape':
-          if (action === 'add')
-            actions.addRetouchShape(spreadId, data as SpreadShape);
-          else if (action === 'update')
-            actions.updateRetouchShape(spreadId, itemId as string, data as Partial<SpreadShape>);
-          else if (action === 'delete')
-            actions.deleteRetouchShape(spreadId, itemId as string);
-          break;
         case 'page':
           if (action === 'update' && typeof itemId === 'number') {
             const spread = illustrationSpreads.find((s) => s.id === spreadId);
@@ -341,21 +316,13 @@ export function SpreadsMainView({
     [actions, illustrationSpreads, allLayouts, langCode, bookTypography]
   );
 
-  // Lock-on-click gate (ADR-044): every IN-SPREAD write (canvas raw_image / raw_textbox / shape /
-  // page add·update·delete, incl. the Generate modal's image updates which route here) flows
-  // through onUpdateSpreadItem → handleSpreadItemAction. Single choke point, TWO partitions
-  // (ADR-044 addendum 2026-08-05, dual-session):
-  //  - retouch-owned item (shape) → runWithRetouchLock: sync when the rtype-10 session is held,
-  //    else queue-1-slot + acquire, replay on HELD (mutating before HELD would bake into the
-  //    baseline → silently unsaved — the very defect this fixes);
-  //  - scene item → block unless the rtype-6 SCENE lock is held (unchanged behavior).
+  // Lock-on-click gate (ADR-044): every IN-SPREAD write (canvas raw_image / raw_textbox / page
+  // add·update·delete, incl. the Generate modal's image updates which route here) flows through
+  // onUpdateSpreadItem → handleSpreadItemAction. Single choke point, ONE partition: block unless the
+  // rtype-6 SCENE lock is held. (Shapes are NO LONGER a scene item — Phase 06 — so there is no
+  // retouch partition here anymore.)
   const gatedSpreadItemAction = useCallback(
     (params: SpreadItemActionUnion) => {
-      if (isRetouchOwnedItem(params.itemType)) {
-        // Capture params in the closure — the queued replay must see THIS call's values.
-        runWithRetouchLock(() => handleSpreadItemAction(params));
-        return;
-      }
       if (!spreadEditable) {
         log.debug('gatedSpreadItemAction', 'blocked — spread not held', {
           itemType: params.itemType,
@@ -366,7 +333,7 @@ export function SpreadsMainView({
       }
       handleSpreadItemAction(params);
     },
-    [spreadEditable, runWithRetouchLock, handleSpreadItemAction]
+    [spreadEditable, handleSpreadItemAction]
   );
 
   // === Generate image modal state ===
@@ -507,7 +474,7 @@ export function SpreadsMainView({
   // === Toolbar handlers ===
 
   const handleDuplicateItem = useCallback(
-    (itemType: 'raw_image' | 'raw_textbox' | 'shape', itemId: string) => {
+    (itemType: 'raw_image' | 'raw_textbox', itemId: string) => {
       const spread = illustrationSpreads.find((s) => s.id === selectedSpreadId);
       if (!spread) {
         log.warn('handleDuplicateItem', 'spread not found', { selectedSpreadId });
@@ -531,17 +498,6 @@ export function SpreadsMainView({
         actions.addRawTextbox(selectedSpreadId, cloned);
         log.info('handleDuplicateItem', 'duplicated', { itemType, sourceId: itemId, cloneId: cloned.id });
         onItemSelect({ type: 'raw_textbox', id: cloned.id });
-      } else if (itemType === 'shape') {
-        const source = spread.shapes?.find((s) => s.id === itemId);
-        if (!source) { log.warn('handleDuplicateItem', 'source not found', { itemType, itemId }); return; }
-
-        // Top-push: clone goes above all existing mix-tier items regardless of source position.
-        const newZ = nextTopZInTier(spread, 'mix');
-        const cloned = cloneItemWithNewId(source);
-        cloned['z-index'] = newZ;
-        actions.addRetouchShape(selectedSpreadId, cloned);
-        log.info('handleDuplicateItem', 'duplicated', { itemType, sourceId: itemId, cloneId: cloned.id, newZ });
-        onItemSelect({ type: 'shape', id: cloned.id });
       }
     },
     [actions, illustrationSpreads, selectedSpreadId, onItemSelect]
@@ -549,15 +505,8 @@ export function SpreadsMainView({
 
   // Gate duplicate (covers BOTH the toolbar Clone action AND the Ctrl/Cmd+D hotkey — the hotkey
   // bypasses toolbar-visibility gating, so it must be blocked here when the spread is not held).
-  // Same two-partition split as gatedSpreadItemAction: shape clones go through the retouch gate.
-  // handleDuplicateItem reads `spread.shapes` + computes z-index INSIDE the callback, so a queued
-  // replay recomputes them on post-acquire state (no stale z-index).
   const gatedDuplicateItem = useCallback(
-    (itemType: 'raw_image' | 'raw_textbox' | 'shape', itemId: string) => {
-      if (isRetouchOwnedItem(itemType)) {
-        runWithRetouchLock(() => handleDuplicateItem(itemType, itemId));
-        return;
-      }
+    (itemType: 'raw_image' | 'raw_textbox', itemId: string) => {
       if (!spreadEditable) {
         log.debug('gatedDuplicateItem', 'blocked — spread not held', { itemType, itemId });
         toastLockRequired();
@@ -565,7 +514,7 @@ export function SpreadsMainView({
       }
       handleDuplicateItem(itemType, itemId);
     },
-    [spreadEditable, runWithRetouchLock, handleDuplicateItem]
+    [spreadEditable, handleDuplicateItem]
   );
 
   const { stackRef } = useInteractionLayerContext();
@@ -587,7 +536,7 @@ export function SpreadsMainView({
       }
       log.debug('useGlobalHotkey', 'ctrl-d duplicating', { type: selectedItemId.type, id: selectedItemId.id });
       gatedDuplicateItem(
-        selectedItemId.type as 'raw_image' | 'raw_textbox' | 'shape',
+        selectedItemId.type as 'raw_image' | 'raw_textbox',
         selectedItemId.id
       );
     },
@@ -617,18 +566,6 @@ export function SpreadsMainView({
         context={{
           ...context,
           onClone: () => gatedDuplicateItem('raw_textbox', context.item.id),
-        }}
-      />
-    ),
-    [gatedDuplicateItem]
-  );
-
-  const renderIllustrationShapeToolbar = useCallback(
-    (context: ShapeToolbarContext<BaseSpread>) => (
-      <SpreadsShapeToolbar
-        context={{
-          ...context,
-          onClone: () => gatedDuplicateItem('shape', context.item.id),
         }}
       />
     ),
@@ -698,25 +635,6 @@ export function SpreadsMainView({
     [onItemSelect, langCode, bookTypography]
   );
 
-  const renderIllustrationShape = useCallback(
-    (context: ShapeItemContext<BaseSpread>) => {
-      return (
-        <EditableShape
-          shape={context.item}
-          index={context.itemIndex}
-          zIndex={context.zIndex}
-          isSelected={context.isSelected}
-          isEditable={context.isSpreadSelected}
-          onSelect={() => {
-            context.onSelect();
-            onItemSelect({ type: 'shape', id: context.item.id });
-          }}
-        />
-      );
-    },
-    [onItemSelect]
-  );
-
   // === Phase 04: opt-in saveResource directives (anchor = illustration raw_images node) ===
   // Edit → new image_version at the selected raw image; Upload (Generate modal's Upload mode) →
   // the same raw_images anchor, 'upload' action. Snapshot-scoped (Spreads is never remix);
@@ -748,13 +666,11 @@ export function SpreadsMainView({
         zoomLevel={zoomLevel}
         columnsPerRow={columnsPerRow}
         peerLock={SCENE_PEER_LOCK}
-        renderItems={['raw_image', 'raw_textbox', 'shape']}
+        renderItems={['raw_image', 'raw_textbox']}
         renderRawImage={renderIllustrationImage}
         renderRawTextbox={renderIllustrationTextbox}
-        renderShapeItem={renderIllustrationShape}
         renderRawImageToolbar={renderIllustrationImageToolbar}
         renderRawTextboxToolbar={renderIllustrationTextToolbar}
-        renderShapeToolbar={renderIllustrationShapeToolbar}
         renderPageToolbar={renderIllustrationPageToolbar}
         availableLayouts={availableLayouts}
         onSpreadSelect={onSpreadSelect}
@@ -769,9 +685,7 @@ export function SpreadsMainView({
         // Lock-on-click: in-spread content is editable only while THIS editor holds the spread's
         // SCENE lock. Spread CREATE stays ungated (add a spread); spread DELETE is gated (must hold
         // it) → then explicit collection save; spread REORDER stays ungated (out of held scope).
-        // Dual-session v1: retouch-held-only also unlocks the canvas (shape work without a scene
-        // edit); per-partition mutators stay hard-gated inside gatedSpreadItemAction regardless.
-        isEditable={spreadEditable || shapeEditable}
+        isEditable={spreadEditable}
         canAddSpread={true}
         canDeleteSpread={spreadEditable}
         canReorderSpread={true}

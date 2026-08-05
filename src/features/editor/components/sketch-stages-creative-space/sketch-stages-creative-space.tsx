@@ -41,15 +41,8 @@ import {
   stageTargetsEqual,
 } from '@/stores/snapshot-store/selectors';
 import { useCurrentBookId } from '@/stores/book-store';
-import {
-  useIsLockedByOther,
-  useLockHolderName,
-  type LockTarget,
-} from '@/stores/resource-lock-store';
-import { resolveSketchStageLockTarget } from '@/stores/snapshot-store/slices/collab-sketch-stage-save-helper';
 import { useCollabPersistSession } from '@/features/editor/hooks/use-collab-persist-session';
 import { useContentSyncSession } from '@/features/editor/hooks/use-content-sync-session';
-import { LockedByOtherOverlay } from '@/features/editor/components/shared-components/sketch-locked-by-other-overlay';
 import { CANVAS_CONFIRM_DIALOG_Z } from '@/constants/spread-constants';
 import type { SketchStage, StageSelection } from '@/types/sketch';
 import { effectiveStageBaseUrl } from '@/types/sketch';
@@ -180,77 +173,53 @@ export function SketchStagesCreativeSpace() {
     [stages],
   );
 
-  // ── Per-stage held session — the whole lock + persist lifecycle lives in this hook. ──────────
-  const lock = useStageLockSession();
-
-  // Peer-lock (advisory) for the DISPLAYED stage — veil the content + suppress acquire-on-interact.
-  const displayedLockTarget = useMemo<LockTarget>(
-    () =>
-      selection
-        ? resolveSketchStageLockTarget(selection.stageKey)
-        : { step: 1, resource_type: 5, resource_id: '', locale: null },
-    [selection],
-  );
-  const displayedLockedByOther = useIsLockedByOther(displayedLockTarget);
-  const displayedHolder = useLockHolderName(displayedLockTarget);
+  // ── Per-stage save session (lockless) — binds to the SELECTED stage; begins 'held' synchronously
+  // (no acquire). ──────────────────────────────────────────────────────────────────────────────
+  const lock = useStageLockSession(selection?.stageKey ?? null);
 
   // ── Handlers ─────────────────────────────────────────────────────────────────────────────────
-  // BROWSE (display only). Leaving a HELD stage commits it (release-saves the OLD node); a
-  // same-stage re-select (another target of it) keeps the lock. No-op on mount (nothing held).
-  const handleSelect = useCallback(
-    (sel: StageSelection) => {
-      setUserSelection(sel);
-      setActiveTab('raw');
-      lock.releaseUnlessSame(sel.stageKey);
-    },
-    [lock],
-  );
+  // SELECT (display + session target). Switching to a DIFFERENT stage re-targets the session → the
+  // OLD stage node release-saves on the switch.
+  const handleSelect = useCallback((sel: StageSelection) => {
+    setUserSelection(sel);
+    setActiveTab('raw');
+  }, []);
 
   const handleToggleStage = useCallback((stageKey: string) => {
     setExpandedStages((prev) => ({ ...prev, [stageKey]: !(prev[stageKey] ?? true) }));
   }, []);
 
-  // ＋ add style: acquire the stage lock + open the generate modal (mode add).
-  const handleAddStyle = useCallback(
-    (stageKey: string) => {
-      log.info('handleAddStyle', 'interact — acquire stage lock + open generate modal', { stageKey });
-      lock.adopt(stageKey);
-      setGenerateStyleModal({ stageKey, mode: 'add' });
-    },
-    [lock],
-  );
+  // ＋ add style: open the generate modal (mode add).
+  const handleAddStyle = useCallback((stageKey: string) => {
+    log.info('handleAddStyle', 'open generate modal', { stageKey });
+    setGenerateStyleModal({ stageKey, mode: 'add' });
+  }, []);
 
-  // 🔒 lock style: acquire + exclusive is_selected + clone refresh (all inside the store setter).
+  // 🔒 lock style: exclusive is_selected + clone refresh (all inside the store setter).
   const handleLockStyle = useCallback(
     (stageKey: string, styleIndex: number) => {
-      log.info('handleLockStyle', 'interact — acquire stage lock + lock style', { stageKey, styleIndex });
-      lock.adopt(stageKey);
+      log.info('handleLockStyle', 'lock style', { stageKey, styleIndex });
       setSketchStageStyleSelected(stageKey, styleIndex);
     },
-    [lock, setSketchStageStyleSelected],
+    [setSketchStageStyleSelected],
   );
 
-  // ✏ edit text (Base header → 'base'; variant row → that variant): acquire + open the modal.
-  const handleEditText = useCallback(
-    (stageKey: string, variantKey: string) => {
-      log.info('handleEditText', 'interact — acquire stage lock + open text modal', { stageKey, variantKey });
-      lock.adopt(stageKey);
-      setEditTextModal({ stageKey, variantKey });
-    },
-    [lock],
-  );
+  // ✏ edit text (Base header → 'base'; variant row → that variant): open the modal.
+  const handleEditText = useCallback((stageKey: string, variantKey: string) => {
+    log.info('handleEditText', 'open text modal', { stageKey, variantKey });
+    setEditTextModal({ stageKey, variantKey });
+  }, []);
 
-  // ✨ generate variant: acquire + run (the job flushes the stage node itself — 12 reads the DB).
+  // ✨ generate variant: run (the job flushes the stage node itself — 12 reads the DB).
   const doGenerateVariant = useCallback(
     (stageKey: string, variantKey: string) => {
-      log.info('doGenerateVariant', 'interact — acquire stage lock + start variant sheet generate', {
+      log.info('doGenerateVariant', 'start variant sheet generate', {
         stageKey,
         variantKey,
       });
-      lock.adopt(stageKey);
       startStageVariantSheetGenerate(stageKey, variantKey);
     },
-    [lock, startStageVariantSheetGenerate],
+    [startStageVariantSheetGenerate],
   );
 
   const handleGenerateVariant = useCallback(
@@ -271,28 +240,26 @@ export function SketchStagesCreativeSpace() {
     setPendingRegenerate(null);
   }, [pendingRegenerate, doGenerateVariant]);
 
-  // [✎] raw: acquire + open the edit-image modal (raw scope — commit AUTO re-cuts).
+  // [✎] raw: open the edit-image modal (raw scope — commit AUTO re-cuts).
   const handleEditRaw = useCallback(() => {
     if (!selection) return;
-    log.info('handleEditRaw', 'interact — acquire stage lock + open image modal (raw scope)', {
+    log.info('handleEditRaw', 'open image modal (raw scope)', {
       stageKey: selection.stageKey,
       target: selection.target,
     });
-    lock.adopt(selection.stageKey);
     setEditImageTarget(
       selection.target === 'base'
         ? { stageKey: selection.stageKey, scope: 'base-raw', styleIndex: selection.styleIndex }
         : { stageKey: selection.stageKey, scope: 'variant-raw', variantKey: selection.variantKey },
     );
-  }, [selection, lock]);
+  }, [selection]);
 
-  // Click crop card = pick 1/2: acquire + flip the mutex + EAGER flush (H2 — the one gesture the
-  // release-save provably cannot see; see use-stage-lock-session.flushStageNow).
+  // Click crop card = pick 1/2: flip the mutex + EAGER flush (crop-pick net; the session is already
+  // held for the selected stage — see use-stage-lock-session.flushStageNow).
   const handleSelectCrop = useCallback(
     (cropIndex: number) => {
       if (!selection) return;
-      log.debug('handleSelectCrop', 'interact — acquire stage lock + pick crop', { cropIndex });
-      lock.adopt(selection.stageKey);
+      log.debug('handleSelectCrop', 'pick crop + flush', { cropIndex });
       if (selection.target === 'base') {
         selectSketchStageBaseCrop(selection.stageKey, selection.styleIndex, cropIndex);
       } else {
@@ -303,49 +270,39 @@ export function SketchStagesCreativeSpace() {
     [selection, lock, selectSketchStageBaseCrop, selectSketchStageVariantCrop],
   );
 
-  // [✎] one crop cell: acquire + open the edit-image modal on that cell.
+  // [✎] one crop cell: open the edit-image modal on that cell.
   const handleEditCrop = useCallback(
     (cropIndex: number) => {
       if (!selection) return;
-      log.info('handleEditCrop', 'interact — acquire stage lock + open image modal (crop scope)', {
+      log.info('handleEditCrop', 'open image modal (crop scope)', {
         stageKey: selection.stageKey,
         cropIndex,
       });
-      lock.adopt(selection.stageKey);
       setEditImageTarget(
         selection.target === 'base'
           ? { stageKey: selection.stageKey, scope: 'base-crop', styleIndex: selection.styleIndex, cropIndex }
           : { stageKey: selection.stageKey, scope: 'variant-crop', variantKey: selection.variantKey, cropIndex },
       );
     },
-    [selection, lock],
+    [selection],
   );
 
-  // [⧉] extract from one crop cell: acquire + open the extract modal (crop scope, append version).
+  // [⧉] extract from one crop cell: open the extract modal (crop scope, append version).
   const handleExtractCrop = useCallback(
     (cropIndex: number) => {
       if (!selection) return;
-      log.info('handleExtractCrop', 'interact — acquire stage lock + open extract modal', {
+      log.info('handleExtractCrop', 'open extract modal', {
         stageKey: selection.stageKey,
         cropIndex,
       });
-      lock.adopt(selection.stageKey);
       setExtractImageTarget(
         selection.target === 'base'
           ? { stageKey: selection.stageKey, scope: 'base-crop', styleIndex: selection.styleIndex, cropIndex }
           : { stageKey: selection.stageKey, scope: 'variant-crop', variantKey: selection.variantKey, cropIndex },
       );
     },
-    [selection, lock],
+    [selection],
   );
-
-  // Content-area intent to edit → acquire the displayed stage's SUSTAINED lock unless peer-held
-  // (batch-at-release: the hold IS the save path). Guarded → setState no-op once already held.
-  const handleContentInteract = useCallback(() => {
-    if (selection && !displayedLockedByOther && !lock.isAdopted(selection.stageKey)) {
-      lock.adopt(selection.stageKey);
-    }
-  }, [selection, displayedLockedByOther, lock]);
 
   // === Phase 04: opt-in saveResource for the Edit path (4 scopes) ===
   // Stage anchors (per BE path grammar): base workspace lives PER-STAGE under
@@ -406,10 +363,7 @@ export function SketchStagesCreativeSpace() {
         isImporting={isImporting}
       />
 
-      <div
-        className="relative flex flex-1 min-w-[480px] overflow-hidden"
-        onPointerDownCapture={handleContentInteract}
-      >
+      <div className="relative flex flex-1 min-w-[480px] overflow-hidden">
         {selection ? (
           <StageSheetContentArea
             selection={selection}
@@ -426,12 +380,6 @@ export function SketchStagesCreativeSpace() {
           />
         ) : (
           <EmptyState />
-        )}
-        {/* Peer-lock veil: another editor holds the displayed stage. `interactive` → captures
-            pointer events over the WHOLE pane (toolbar included — mirror the variant space);
-            sidebar browse stays available. */}
-        {selection && displayedLockedByOther && (
-          <LockedByOtherOverlay holderName={displayedHolder} interactive />
         )}
       </div>
 

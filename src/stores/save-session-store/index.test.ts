@@ -3,7 +3,7 @@
 // fork. resource-lock-store / snapshot-store / status / history stores are mocked so the engine's
 // wiring is asserted without real I/O (same shape as the collab helper tests).
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 const h = vi.hoisted(() => {
   const lock = {
@@ -52,8 +52,17 @@ vi.mock('@/stores/edit-history-store/item-key', () => ({
     `${domain}:${t.resource_type}:${t.resource_id}:${t.locale ?? '∅'}`,
 }));
 
-import { useSaveSessionStore } from './index';
+import { useSaveSessionStore, SAVE_POLICIES } from './index';
 import { __resetHistoryBridge } from './history-bridge';
+
+// ⚡ 2026-08-05 (ADR-044 addendum 2 / phase 03): `illustration-entity` flipped to `locking:'none'`
+// (lock-exempt). This file's purpose is the ENGINE's GENERIC acquire→hold→release lifecycle, which is
+// unchanged — it just needs a policy that opts INTO locking. We force a non-'none' mode on the
+// illustration-entity fixture (its whole-node projection keeps the payload assertions below simple)
+// so the acquire branch is exercised; the lock-exempt behavior has its own suite
+// (`lockless-session.test.ts`), and the real spread-domain acquire path is pinned by
+// `scene-retouch-dual-session.test.ts`. Restored after each test.
+const ORIG_ENTITY_LOCKING = SAVE_POLICIES['illustration-entity'].locking;
 
 const ENTITY_ID = 'character/hero';
 const KEY = 'book1|2|3|hero|'; // keyOf(book1, {step:2,rtype:3,resource_id:hero,locale:null})
@@ -66,6 +75,7 @@ function resetStore() {
 beforeEach(() => {
   __resetHistoryBridge();
   resetStore();
+  SAVE_POLICIES['illustration-entity'].locking = 'whole-spread'; // force the acquire branch (see note above)
   h.lock.bookId = 'book1';
   h.lock.collabPersist = true;
   h.lock.myLocks = new Set();
@@ -85,6 +95,10 @@ beforeEach(() => {
   h.ess.markSaved.mockReset();
   h.hist.beginSession.mockReset();
   h.hist.endSession.mockReset();
+});
+
+afterEach(() => {
+  SAVE_POLICIES['illustration-entity'].locking = ORIG_ENTITY_LOCKING; // restore production 'none'
 });
 
 describe('begin → held', () => {

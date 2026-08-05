@@ -7,8 +7,8 @@
 // The former per-node scene LEAF saves (`persistSceneImageCollab` / `persistSceneTextboxCollab`
 // + their deletes, rtype 1/7) were REMOVED here — a dirty scene leaf is now persisted with the rest
 // of the spread's owned sub-tree by the per-spread `scene-spread` held session (save-session-store,
-// rtype 6 / SCENE_OWNED_KEYS). The scene SHAPE writes (rtype 8) were re-homed into the retouch held
-// session earlier (see the note at the bottom of this file).
+// rtype 6 / SCENE_OWNED_KEYS). Scene SHAPE writes (rtype 8) are RETIRED entirely — shapes are no
+// longer a SCENE item (Phase 06); the OBJECTS space is the sole writer (see the note at the bottom).
 //
 // Sibling of `collab-entity-save-helper.ts` (characters/props/stages, rtype 3/4/5) — same
 // acquire → save(node) → release lifecycle via the shared `saveImageResourceUnderLock`, kept
@@ -217,10 +217,9 @@ export async function persistSpreadReorderCollab(
 // one-shot writes from `illustration-slice` are gone (see the `Former persist*Collab … REMOVED`
 // markers there).
 //
-// --- Scene shape (rtype 8) — RE-HOMED (unified-item-save phase 3) -------------
+// --- Scene shape (rtype 8) — RETIRED (Phase 06, 2026-08-05) -------------------
 //
-// `persistSceneShapeCollab` / `persistSceneShapeDeleteCollab` were REMOVED here (2026-08-04): a scene
-// shape lives under `spreads[].shapes[]`, which is now a RETOUCH_OWNED_KEY (`addressing.py`), so a
-// dirty shape is persisted with the rest of the retouch sub-tree by the per-spread `retouch-spread`
-// held session (rtype 10) — no more one-shot rtype-8 node writes from `retouch-slice`. ⚠️ SHIP-
-// COUPLING: this FE removal deploys TOGETHER with the BE owned-key merge accepting `shapes`.
+// `persistSceneShapeCollab` / `persistSceneShapeDeleteCollab` were REMOVED (2026-08-04) and rtype 8
+// is now dead FE vocab. Shapes are NO LONGER a SCENE-space item: `spreads[].shapes[]` is a
+// RETOUCH_OWNED_KEY persisted only via the OBJECTS-space per-spread `retouch-spread` held session
+// (rtype 10) — the sole writer. There is no scene-space shape write path anymore.

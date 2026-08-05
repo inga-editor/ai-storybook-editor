@@ -3,7 +3,7 @@
 // lock / snapshot / status stores are mocked so the engine's wiring is asserted without real I/O
 // (same seam as index.test.ts).
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 const h = vi.hoisted(() => {
   const lock = {
@@ -55,6 +55,12 @@ vi.mock('@/stores/edit-history-store/item-key', () => ({
 import { useSaveSessionStore, SAVE_POLICIES } from './index';
 import { __resetHistoryBridge } from './history-bridge';
 
+// ⚡ 2026-08-05 (ADR-044 addendum 2 / phase 03): `illustration-entity` flipped to `locking:'none'`.
+// This suite exercises the ENGINE's held-saveNow + one-shot acquire→save→release paths (unchanged);
+// force a non-'none' mode on the illustration-entity fixture so the acquire branch runs. The
+// lock-exempt one-shot has its own coverage in `lockless-session.test.ts`. Restored after each test.
+const ORIG_ENTITY_LOCKING = SAVE_POLICIES['illustration-entity'].locking;
+
 const ENTITY_ID = 'character/hero';
 const KEY = 'book1|2|3|hero|'; // keyOf(book1, {step:2,rtype:3,resource_id:hero,locale:null})
 const TARGET = { step: 2, resource_type: 3, resource_id: 'hero', locale: null };
@@ -66,6 +72,7 @@ function resetStore() {
 beforeEach(() => {
   __resetHistoryBridge();
   resetStore();
+  SAVE_POLICIES['illustration-entity'].locking = 'whole-spread'; // force the acquire branch (see note above)
   h.lock.bookId = 'book1';
   h.lock.collabPersist = true;
   h.lock.myLocks = new Set();
@@ -79,6 +86,10 @@ beforeEach(() => {
   h.lock.unregisterOnLost.mockReset();
   h.snapshot.characters = [{ key: 'hero', name: 'A' }];
   h.snapshot.flushSnapshot.mockReset().mockResolvedValue(undefined);
+});
+
+afterEach(() => {
+  SAVE_POLICIES['illustration-entity'].locking = ORIG_ENTITY_LOCKING; // restore production 'none'
 });
 
 describe('ensureSaved — held branch', () => {

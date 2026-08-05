@@ -6,16 +6,14 @@
 //   • Variants — rows for every NON-BASE variant: key (select) + ✏ (edit text) + ✨ (generate,
 //                gated base-not-ready / empty-text; spinner while busy).
 //
-// BROWSE ≠ LOCK: row/label clicks are display-only (onSelect); ＋/🔒/✏/✨ are ACQUIRE seams —
-// the root adopts the stage lock before mutating. Gated-off affordances render DISABLED +
-// tooltip, never hidden (memory: never-hide-disabled-ui).
+// SELECT: row/label clicks set the display + session target (onSelect); ＋/🔒/✏/✨ mutate the
+// selected stage. Gated-off affordances render DISABLED + tooltip, never hidden (never-hide-ui).
 //
-// Collab peer-lock (README §5.4): each group SELF-READS its stage lock (step 1 / rtype 5 /
-// resource_id = stageKey) — peer-held ⇒ 🔒 holder badge on the group title + EVERY affordance in
-// the group (＋/🔒/✏/✨) greyed (ONE lock covers base + variants). Row select (browse) stays
-// enabled. Advisory — the acquire 409 is the real authority.
+// Collab (ADR-044 addendum 2 — LOCKLESS): entity domains no longer acquire a lock, so there is NO
+// peer-lock badge and NO lock-based disable. Mutations disable only on degraded (ADR-047) / gate
+// reasons. The Lock/LockOpen icons below are the style-lock (is_selected) glyph, NOT collab.
 
-import { useMemo, useRef } from 'react';
+import { useRef } from 'react';
 import {
   AlertTriangle,
   ChevronDown,
@@ -31,9 +29,7 @@ import {
 import { Button } from '@/components/ui/button';
 import type { SketchStage, StageSelection } from '@/types/sketch';
 import { cn } from '@/utils/utils';
-import { useIsLockedByOther, useLockHolderName } from '@/stores/resource-lock-store';
 import { useSketchEntityDegraded } from '@/stores/snapshot-store';
-import { resolveSketchStageLockTarget } from '@/stores/snapshot-store/slices/collab-sketch-stage-save-helper';
 import {
   STAGE_GATE_TOOLTIP,
   type StageGate,
@@ -165,19 +161,11 @@ function StageGroup({
 }) {
   const stageKey = stage.key;
 
-  // Peer-lock (advisory) SELF-READ on the own stage node — one lock covers base + variants.
-  const lockTarget = useMemo(() => resolveSketchStageLockTarget(stageKey), [stageKey]);
-  const lockedByOther = useIsLockedByOther(lockTarget);
-  const holderName = useLockHolderName(lockTarget);
   // ADR-047: stage data unreadable → group greyed (NOT hidden) + mutations refused; browse stays.
   const degraded = useSketchEntityDegraded('stages', stageKey);
 
-  const mutationsDisabled = lockedByOther || degraded;
-  const disabledTooltip = degraded
-    ? DEGRADED_TOOLTIP
-    : lockedByOther
-      ? `${holderName ?? 'Another editor'} is editing`
-      : undefined;
+  const mutationsDisabled = degraded;
+  const disabledTooltip = degraded ? DEGRADED_TOOLTIP : undefined;
 
   const nonBaseVariants = stage.variants.filter((v) => v.key !== 'base');
 
@@ -205,15 +193,6 @@ function StageGroup({
           >
             <AlertTriangle className="h-3 w-3 shrink-0" aria-hidden="true" />
             <span className="max-w-[64px] truncate">Dữ liệu lỗi</span>
-          </span>
-        )}
-        {lockedByOther && (
-          <span
-            className="flex min-w-0 items-center gap-0.5 rounded bg-background/80 px-1 text-[10px] font-medium text-muted-foreground"
-            title={`${holderName ?? 'Another editor'} is editing`}
-          >
-            <Lock className="h-3 w-3 shrink-0" aria-hidden="true" />
-            <span className="max-w-[64px] truncate">{holderName ?? 'Editing'}</span>
           </span>
         )}
       </div>

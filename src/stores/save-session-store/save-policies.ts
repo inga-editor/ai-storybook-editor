@@ -12,6 +12,14 @@
 //   sketch-base-sheet   → resolveSketchBaseSheetLockTarget + buildSketchBaseSheetPayload
 //   sketch-lineups      → resolveLineupsLockTarget + buildSketchLineupsPayload
 //   sketch-image/-textbox → phase-4 stub (no consumer until the spread canvas migrates)
+//
+// ⚡ LOCKING (ADR-044 addendum 2, 2026-08-05 — "lock scope = spread-only"): each entry declares a
+// `locking` mode. Only the spread-grain canvas domains lock — the two per-item children
+// (`sketch-image`/`sketch-textbox` = 'per-item') and the two whole-spread partitions
+// (`scene-spread`/`retouch-spread` = 'whole-spread'). Every OTHER (entity-grain) domain is
+// lock-exempt ('none'): the engine skips acquire/heartbeat/release; the gateway still gates by
+// `access_rights`. A NEW entry MUST default to 'none' — pick 'per-item'/'whole-spread' ONLY when
+// the space is a spread-grain canvas.
 
 import { useSnapshotStore } from '@/stores/snapshot-store';
 import type { LockTarget, SavePayload } from '@/stores/resource-lock-store';
@@ -41,6 +49,11 @@ import {
   resolveLineupsLockTarget,
   buildSketchLineupsPayload,
 } from '@/stores/snapshot-store/slices/collab-sketch-lineups-save-helper';
+import {
+  resolveEntityCollectionLockTarget,
+  buildEntityCollectionPayload,
+  type EntityCollectionName,
+} from '@/stores/snapshot-store/slices/collab-sketch-base-entities-save-helper';
 import { sheetOf, getSketchTextboxContent, type BaseKind } from '@/types/sketch';
 import type { SketchLineupTab, SketchSpread, SketchSpreadImage } from '@/types/sketch';
 import { parseEntityId } from './entity-id';
@@ -181,6 +194,7 @@ function buildSketchTextboxPayload(projected: unknown, id: string): SavePayload 
 /** The declarative registry — one entry per save-domain. */
 export const SAVE_POLICIES: Record<SaveDomain, SavePolicy> = {
   'illustration-entity': {
+    locking: 'none', // entity-grain (char/prop/stage space) — lock-exempt
     resolveTarget: (id, locale) => {
       const { kind, key } = parseEntityId(id);
       // ENTITY_KINDS in resolveImageLockTarget ⇒ resource_id = entityKey (whole entity node).
@@ -193,6 +207,7 @@ export const SAVE_POLICIES: Record<SaveDomain, SavePolicy> = {
   },
 
   'scene-spread': {
+    locking: 'whole-spread', // spread-grain owned-key partition (rtype 6) — acquire the spread lock
     resolveTarget: (id) => resolveSceneSpreadLockTarget(id),
     ownedKeys: SCENE_OWNED_KEYS,
     getNode: getSpreadNode,
@@ -201,6 +216,7 @@ export const SAVE_POLICIES: Record<SaveDomain, SavePolicy> = {
   },
 
   'retouch-spread': {
+    locking: 'whole-spread', // spread-grain owned-key partition (rtype 10) — acquire the spread lock
     resolveTarget: (id) => resolveRetouchSpreadLockTarget(id),
     ownedKeys: RETOUCH_OWNED_KEYS,
     getNode: getSpreadNode,
@@ -209,6 +225,7 @@ export const SAVE_POLICIES: Record<SaveDomain, SavePolicy> = {
   },
 
   'sketch-entity': {
+    locking: 'none', // entity-grain (variant / base-entity modal) — lock-exempt
     resolveTarget: (id) => {
       const { kind, key } = parseEntityId(id);
       return resolveSketchVariantLockTarget(kind as BaseKind, key);
@@ -220,6 +237,7 @@ export const SAVE_POLICIES: Record<SaveDomain, SavePolicy> = {
   },
 
   'sketch-stage': {
+    locking: 'none', // entity-grain (stage entity, rtype 5) — lock-exempt
     resolveTarget: (id) => resolveSketchStageLockTarget(id),
     ownedKeys: undefined,
     getNode: (id) =>
@@ -229,6 +247,7 @@ export const SAVE_POLICIES: Record<SaveDomain, SavePolicy> = {
   },
 
   'sketch-base-sheet': {
+    locking: 'none', // kind-level sheet node (rtype 11) — lock-exempt
     resolveTarget: (id) => resolveSketchBaseSheetLockTarget(sheetKindFromId(id)),
     ownedKeys: undefined,
     getNode: (id) => sheetOf(useSnapshotStore.getState().sketch.base, sheetKindFromId(id)) ?? null,
@@ -237,6 +256,7 @@ export const SAVE_POLICIES: Record<SaveDomain, SavePolicy> = {
   },
 
   'sketch-lineups': {
+    locking: 'none', // column-root lineups node (rtype 12) — lock-exempt
     resolveTarget: () => resolveLineupsLockTarget(),
     ownedKeys: undefined,
     getNode: () => useSnapshotStore.getState().sketch.lineups ?? [],
@@ -245,11 +265,31 @@ export const SAVE_POLICIES: Record<SaveDomain, SavePolicy> = {
     idleAutoSaveMs: DEFAULT_IDLE_AUTO_SAVE_MS,
   },
 
+  // --- sketch-base-entities (step 1, rtype 14 — base space "save 1 cục" + Excel import) ---------
+  // id = the entity collection name ('characters' | 'props' | 'stages'), which is ALSO the gateway
+  // resource_id (BE binds collection === resource_id). getNode reads the WHOLE `sketch.{collection}`
+  // array (default []); buildPayload is the collection-scope column-root REPLACE (mirror lineups but
+  // parameterised by collection). Lock-exempt — the whole array is one blast-radius write.
+  'sketch-base-entities': {
+    locking: 'none',
+    resolveTarget: (id) => resolveEntityCollectionLockTarget(id as EntityCollectionName),
+    ownedKeys: undefined,
+    getNode: (id) =>
+      (useSnapshotStore.getState().sketch[id as EntityCollectionName] as unknown[] | undefined) ?? [],
+    buildPayload: (node, id) =>
+      buildEntityCollectionPayload(
+        Array.isArray(node) ? (node as unknown[]) : [],
+        id as EntityCollectionName,
+      ),
+    idleAutoSaveMs: DEFAULT_IDLE_AUTO_SAVE_MS,
+  },
+
   // --- sketch-image / sketch-textbox (step 1, rtype 1/2 — the spread canvas). Composite id carries
   //     the parent spread (+ locale for textbox); `resolveTarget` extracts only the CHILD id into the
   //     lock key so `keyOf` matches the OLD canvas target byte-for-byte (parity-tested). A bare id
   //     (unit-test fixture) yields itself as the resource_id — see the split helpers above.
   'sketch-image': {
+    locking: 'per-item', // spread-grain canvas child (rtype 1) — acquire the image's own lock
     resolveTarget: (id, locale) => ({
       step: 1,
       resource_type: 1,
@@ -272,6 +312,7 @@ export const SAVE_POLICIES: Record<SaveDomain, SavePolicy> = {
   },
 
   'sketch-textbox': {
+    locking: 'per-item', // spread-grain canvas child (rtype 2) — acquire the textbox's own lock
     resolveTarget: (id, locale) => ({
       step: 1,
       resource_type: 2,

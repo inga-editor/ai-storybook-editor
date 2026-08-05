@@ -25,6 +25,25 @@ const log = createLogger('Store', 'SaveSessionIdleSweep');
 /** Interval cadence for the idle sweep. A dirty item is saved 60–75s after its last save. */
 export const IDLE_SWEEP_TICK_MS = 15_000;
 
+/**
+ * Grain-double mitigation (rtype 14, ADR-044 addendum 2): the base space runs TWO grains on the same
+ * `sketch.{collection}` array — the mounted rtype-14 collection session AND the base-sheet generate
+ * job (which re-clones every entity's base variant on a locked style, then persists the collection
+ * itself at the end of its chain). If the idle sweep fired the rtype-14 session's whole-array save
+ * WHILE that job is mid-flight, it could race the job's in-progress clone writes (last-writer-wins on
+ * the WHOLE array). So the sweep SKIPS a `sketch-base-entities` session whose collection has a base
+ * generate op running. The flag source is the job slice's running-state read DIRECTLY (no new state
+ * in the save-session-store). Collection → base kinds: `characters` covers both `characters` and the
+ * `alter_characters` kind (both persist into `sketch.characters[]`); `props` covers `props`; `stages`
+ * has no base generate op (its rtype-14 session is import-only, one-shot — never a mounted session).
+ */
+function baseGenerateRunningForCollection(collection: string): boolean {
+  const ops = useSnapshotStore.getState().baseSheetGenerateOps;
+  if (collection === 'characters') return ops.characters != null || ops.alter_characters != null;
+  if (collection === 'props') return ops.props != null;
+  return false;
+}
+
 type GetState = () => SaveSessionState;
 
 // ── Non-reactive module scope (single interval + in-flight de-dupe) ─────────────────────────────
@@ -85,6 +104,15 @@ function tick(getState: GetState): void {
     // would raise a degraded TOAST on every retry tick (the sweep must run unattended). Skip it
     // entirely; the header already surfaces the degraded state, and it resumes once consent clears.
     if (isSketchWriteBlocked(entry.target)) continue;
+    // Grain-double: never auto-save the whole rtype-14 collection while its kind's base generate job
+    // is mid-flight (it re-clones entities + persists the collection itself at chain end).
+    if (entry.domain === 'sketch-base-entities' && baseGenerateRunningForCollection(entry.id)) {
+      log.debug('tick', 'base generate running for collection — skip rtype-14 tick', {
+        key,
+        collection: entry.id,
+      });
+      continue;
+    }
     if (!isDirty(key)) continue; // nothing changed since the last save
     log.info('tick', 'idle auto-save', { key, domain: entry.domain });
     void autoSaveOne(getState, key, entry.manageHeaderStatus);

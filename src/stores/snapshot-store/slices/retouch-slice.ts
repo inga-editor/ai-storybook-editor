@@ -15,12 +15,11 @@ const log = createLogger('Store', 'RetouchSlice');
 // snapshot node — the former per-node fire-and-forget gateway saves (`persistRetouchNodeCollab` /
 // `persistRetouchDeleteCollab` / `persistAnimationsCollectionCollab`) were REMOVED here so the
 // held-session save-on-release is the SINGLE writer for these keys (no double-write / lost-write).
-// ⚡ unified-item-save phase 3 (2026-08-04): `shapes` (add/update/deleteRetouchShape) is now ALSO a
-// RETOUCH_OWNED_KEY — the former one-shot SCENE rtype-8 gateway writes (`persistSceneShapeCollab*`)
-// were REMOVED here so a dirty shape falls into the per-spread `retouch-spread` held session (rtype
-// 10) like every other owned key. ⚠️ SHIP-COUPLING: this FE re-route MUST deploy TOGETHER with the
-// BE owned-key merge accepting `shapes` in RETOUCH_OWNED_KEYS (addressing.py) — FE-before-BE = the
-// gateway drops the `shapes` key from the rtype-10 patch = lost shape reorder.
+// `shapes` (add/update/deleteRetouchShape) is a RETOUCH_OWNED_KEY — a dirty shape falls into the
+// per-spread `retouch-spread` held session (rtype 10) like every other owned key. The OBJECTS space
+// is the SOLE writer: shapes are no longer a SCENE-space item, so the former one-shot SCENE rtype-8
+// gateway writes (`persistSceneShapeCollab*`) AND the SCENE dual-session that briefly re-routed them
+// through rtype 10 are both RETIRED (Phase 06, 2026-08-05). rtype 8 is dead FE vocab.
 
 export const createRetouchSlice: StateCreator<
   SnapshotStore,

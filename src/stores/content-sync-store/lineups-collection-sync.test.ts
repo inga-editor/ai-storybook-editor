@@ -1,9 +1,9 @@
-// Regression for the rtype-12 lineups content-sync branch (2026-07-25): the collection scope
-// normally routes through `reconcileCollectionByIds`, which KEEPS the local object for every
-// matching id (content arrives via separate node-scope events). Lineup tabs have NO node-scope
-// event — every write is the collection-scope column-root save — so without the dedicated
-// WHOLE-REPLACE branch a peer's rename / entries change would never land. Drives the REAL store
-// via `handleActivityInsert` (channel entry point) to prove the wiring.
+// Content-sync WHOLE-REPLACE branch for the column-root collection writes (rtype 12 lineups +
+// rtype 14 entity collections — ADR-044 addendum 2, 2026-08-05). These arrays are written whole with
+// NO accompanying node-scope event, so a peer MUST whole-replace (not reconcile-by-id, which keeps
+// the local object for a matching id) or a content change to an existing id never lands. Drives the
+// REAL store via `handleActivityInsert` (channel entry point) to prove the wiring. Spreads (rtype 6
+// reorder-only) still reconcile — they are NOT in the `isColumnRootCollectionSync` predicate.
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
@@ -25,7 +25,7 @@ vi.mock('@/stores/resource-lock-store', () => ({
   hasAnyLiveLock: () => false,
 }));
 
-import { useContentSyncStore, isLineupCollectionSync } from '@/stores/content-sync-store';
+import { useContentSyncStore, isColumnRootCollectionSync } from '@/stores/content-sync-store';
 import { useSnapshotStore } from '@/stores/snapshot-store';
 import type { ActivityLogRawRow } from '@/stores/content-sync-store/types';
 import type { SketchLineupTab } from '@/types/sketch';
@@ -56,16 +56,19 @@ const lineupSync = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
-describe('isLineupCollectionSync', () => {
-  it('matches on resource_type 12 alone (path may drift on a future write-path change)', () => {
-    expect(isLineupCollectionSync({ column: 'illustration', path: ['x'], resource_type: 12 })).toBe(true);
+describe('isColumnRootCollectionSync', () => {
+  it('matches on resource_type 12 (lineups) or 14 (entity collection) alone', () => {
+    expect(isColumnRootCollectionSync({ column: 'illustration', path: ['x'], resource_type: 12 })).toBe(true);
+    expect(isColumnRootCollectionSync({ column: 'sketch', path: ['characters'], resource_type: 14 })).toBe(true);
   });
-  it('matches on column sketch + path [lineups] alone (descriptor lost its rtype)', () => {
-    expect(isLineupCollectionSync({ column: 'sketch', path: ['lineups'] })).toBe(true);
+  it('matches on column sketch + path [collection] alone (descriptor lost its rtype)', () => {
+    expect(isColumnRootCollectionSync({ column: 'sketch', path: ['lineups'] })).toBe(true);
+    expect(isColumnRootCollectionSync({ column: 'sketch', path: ['characters'] })).toBe(true);
+    expect(isColumnRootCollectionSync({ column: 'sketch', path: ['props'] })).toBe(true);
+    expect(isColumnRootCollectionSync({ column: 'sketch', path: ['stages'] })).toBe(true);
   });
-  it('does NOT match other sketch collections (characters keeps reconcile)', () => {
-    expect(isLineupCollectionSync({ column: 'sketch', path: ['characters'], resource_type: 3 })).toBe(false);
-    expect(isLineupCollectionSync({ column: 'sketch', path: ['spreads'], resource_type: 6 })).toBe(false);
+  it('does NOT match spreads (reorder-only, rtype 6 → keeps reconcile)', () => {
+    expect(isColumnRootCollectionSync({ column: 'sketch', path: ['spreads'], resource_type: 6 })).toBe(false);
   });
 });
 
@@ -130,7 +133,9 @@ describe('content-sync merge — rtype 12 lineups whole-replace', () => {
     expect(useSnapshotStore.getState().sketch.lineups).toHaveLength(1); // untouched
   });
 
-  it("REGRESSION: a `characters` collection sync still reconciles (local object KEPT for a matching key)", async () => {
+  it('rtype 14 `characters` collection sync WHOLE-REPLACES (peer base-text edit to a matching key lands)', async () => {
+    // Base-space entity text edits now route through the rtype-14 collection save (NO node-scope
+    // event), so a peer MUST whole-replace — reconcile-by-id would keep the stale LOCAL object.
     const localEntity = { key: 'ck0', variants: [{ key: 'base', description: 'LOCAL-EDIT', visual_design: '', art_language: '' }] };
     useSnapshotStore.setState((s) => {
       s.sketch = asState({ ...useSnapshotStore.getState().sketch, characters: [localEntity] });
@@ -140,12 +145,10 @@ describe('content-sync merge — rtype 12 lineups whole-replace', () => {
     ]);
 
     useContentSyncStore.getState().handleActivityInsert(
-      peerRow({ scope: 'collection', version: VERSION, column: 'sketch', path: ['characters'], step: 1, resource_type: 3, resource_id: 'characters', locale: null }),
+      peerRow({ scope: 'collection', version: VERSION, column: 'sketch', path: ['characters'], step: 1, resource_type: 14, resource_id: 'characters', locale: null }),
     );
     await flush();
 
-    // reconcile keeps the LOCAL object for the matching identity — proof lineups didn't leak
-    // the whole-replace behavior onto sibling collections.
-    expect(useSnapshotStore.getState().sketch.characters[0].variants[0].description).toBe('LOCAL-EDIT');
+    expect(useSnapshotStore.getState().sketch.characters[0].variants[0].description).toBe('SERVER');
   });
 });

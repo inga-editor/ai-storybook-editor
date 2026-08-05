@@ -40,16 +40,18 @@ export type ImageSaveOutcome = 'saved' | 'skipped' | 'failed' | 'forbidden';
 
 /** Scene overlay node-kinds opened by ADR-044 P03 (step=2 illustration scene):
  *  `scene_raw_textbox` → `spreads[].raw_textboxes[]` (rtype 7, `<locale>` sub-object like a
- *  textbox); `scene_retouch_shape` → `spreads[].shapes[]` (rtype 8, no locale). Not part of
- *  `ImageTaskEntityType` (they carry no image task) — a separate leaf-node vocabulary. */
-export type SceneNodeKind = 'scene_raw_textbox' | 'scene_retouch_shape';
+ *  textbox). Not part of `ImageTaskEntityType` (they carry no image task) — a separate leaf-node
+ *  vocabulary. NOTE: the scene-shape node-kind (rtype 8) is RETIRED (Phase 06, 2026-08-05) — shapes
+ *  are no longer a SCENE item; they persist only via the OBJECTS-space rtype-10 held session. */
+export type SceneNodeKind = 'scene_raw_textbox';
 
 /** Everything `resolveImageLockTarget` can address: image-task entities + scene overlay leaves. */
 export type CollabResourceKind = ImageTaskEntityType | SceneNodeKind;
 
 /** CollabResourceKind → gateway `resource_type` (1 image · 3 character · 4 prop · 5 stage ·
- *  7 scene raw_textbox · 8 scene shape). Entities lock their WHOLE node (rtype 3/4/5);
- *  scene + retouch images (rtype 1) and scene textbox/shape (rtype 7/8) lock the leaf node. */
+ *  7 scene raw_textbox). Entities lock their WHOLE node (rtype 3/4/5); scene + retouch images
+ *  (rtype 1) and scene textbox (rtype 7) lock the leaf node. (rtype 8 scene shape RETIRED —
+ *  Phase 06.) */
 export const ENTITY_TYPE_TO_RESOURCE_TYPE: Record<CollabResourceKind, ResourceType> = {
   character: 3,
   prop: 4,
@@ -57,7 +59,6 @@ export const ENTITY_TYPE_TO_RESOURCE_TYPE: Record<CollabResourceKind, ResourceTy
   illustration_image: 1, // scene raw image  → illustration.spreads[].raw_images[]
   retouch_image: 1, //       retouch image → illustration.spreads[].images[]
   scene_raw_textbox: 7, //   scene raw textbox → illustration.spreads[].raw_textboxes[]
-  scene_retouch_shape: 8, // scene shape       → illustration.spreads[].shapes[]
 };
 
 /** Entity kinds lock the WHOLE entity node → resource_id = entity key (not the child/leaf). */
@@ -66,8 +67,8 @@ const ENTITY_KINDS: ReadonlySet<string> = new Set(['character', 'prop', 'stage']
 /**
  * Build the step=2 LockTarget for an image/scene-overlay resource (leaf resolver).
  * - character/prop/stage → lock the entity node, resource_id = `entityKey`.
- * - illustration_image / retouch_image / scene_raw_textbox / scene_retouch_shape → lock the
- *   leaf node, resource_id = `childKey` (image / textbox / shape id).
+ * - illustration_image / retouch_image / scene_raw_textbox → lock the
+ *   leaf node, resource_id = `childKey` (image / textbox id).
  * step is ALWAYS 2 (illustration/retouch/scene phase). `locale` is null for everything EXCEPT a
  * locale-scoped scene raw_textbox edit (mirrors rtype-2 textbox: the `<language_key>` sub-object).
  */

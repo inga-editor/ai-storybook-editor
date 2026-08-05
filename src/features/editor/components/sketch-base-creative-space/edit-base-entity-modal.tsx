@@ -4,20 +4,18 @@
 // drives no generation). `description` lives in the DB but is NOT edited here — the store action is
 // a partial merge, so leaving it out preserves its value.
 //
-// Collab (ADR-043 sketch-base — GRAIN B): entity TEXT is a per-entity node (step 1 / rtype 3
-// character · 4 prop), INDEPENDENT of the sheet (rtype 11) — so this modal REUSES the variant
-// helper (`resolveSketchVariantLockTarget` + `flushSketchEntityUnderLock`), NOT the base-sheet
-// helper. It holds a per-ACTIVE-TAB entity lock (`useSaveSession`): acquire on open, and on
-// tab switch the hook releases the departing entity lock + acquires the new one (lock-on-switch).
-// Textareas are disabled while NOT held (acquiring / peer-blocked); a peer-held tab shows a 🔒 badge
-// + banner. Drafts are LOCAL until Save (static `initialDrafts` baseline → clean discard + no peer-
-// clobber of untouched tabs). Save commits every changed draft + flushes each changed entity through
-// the gateway (peer-held → skip + warn), driving its OWN Saving…→Saved (`manageHeaderStatus:false` —
-// a transient modal must not flip the shared header on every tab switch).
+// Collab (ADR-043 sketch-base — GRAIN B; ADR-044 addendum 2 — LOCKLESS + rtype 14): entity TEXT lives
+// in the entity collection (`sketch.{characters|props}`), INDEPENDENT of the sheet (rtype 11). Since
+// ADR-044 addendum 2 the base space persists that collection WHOLE in ONE column-root rtype-14 save
+// (not N per-entity rtype-3/4 writes), so this modal no longer binds a per-entity lock session — it
+// commits every changed draft to the store, then persists the whole collection ONCE via
+// `saveEntityCollection` (`alter_characters` shares the `characters` collection). Drafts are LOCAL
+// until Save (static `initialDrafts` baseline → clean discard); Save drives its OWN Saving…→Saved (a
+// transient modal must not flip the shared header). Entity textareas stay editable (lockless — no
+// peer can block; controlled inputs so nothing to gate).
 
 import { useCallback, useMemo, useRef, useState } from 'react';
-import { AlertCircle, Lock } from 'lucide-react';
-import { toast } from 'sonner';
+import { AlertCircle } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -38,19 +36,13 @@ import {
 } from '@/features/editor/components/shared-components/height-cm-draft';
 import { useSketchBaseEntityKeys, useSnapshotActions } from '@/stores/snapshot-store/selectors';
 import { useSnapshotStore } from '@/stores/snapshot-store';
+import { useResourceLockStore } from '@/stores/resource-lock-store';
 import {
-  useResourceLockStore,
-  useIsLockedByOther,
-  useLockHolderName,
-  type LockTarget,
-} from '@/stores/resource-lock-store';
-import {
-  resolveSketchVariantLockTarget,
-  flushSketchEntityUnderLock,
-} from '@/stores/snapshot-store/slices/collab-sketch-variant-save-helper';
+  saveEntityCollection,
+  BASE_KIND_TO_COLLECTION,
+  resolveEntityCollectionLockTarget,
+} from '@/stores/snapshot-store/slices/collab-sketch-base-entities-save-helper';
 import { toastSketchSaveOutcome } from '@/stores/snapshot-store/slices/sketch-save-outcome-toast';
-import { useSaveSession } from '@/features/editor/hooks/use-save-session';
-import { deriveSaveTarget } from '@/stores/save-session-store';
 import { useEditSessionStatusStore } from '@/stores/edit-session-status-store';
 import { useInteractionLayer } from '@/features/editor/contexts';
 import { titleCase } from '@/features/editor/components/sketch-variants-creative-space/sketch-variants-constants';
@@ -110,32 +102,6 @@ export function EditBaseEntityModal({ kind, onClose }: EditBaseEntityModalProps)
   // titleCase of the kind noun — a binary ternary would label the alter tab "Prop".
   const cfg = titleCase(nounForKind(kind));
 
-  // ── Per-active-tab held ENTITY session (grain B, rtype 3/4) ───────────────────────────────────
-  // Target = the active tab's entity; switching tabs release-then-acquires (the hook keys on the
-  // STRING target). Persistence is NOT via this session's save (drafts are uncommitted until Save)
-  // — the hold is for PEER-LOCK visibility + textarea gating. getNode/buildPayload are policy-owned
-  // (sketch-entity); the release-save is a no-op here (store unchanged until Save commits drafts).
-  const lockTarget = useMemo<LockTarget | null>(
-    () => (activeKey ? resolveSketchVariantLockTarget(kind, activeKey) : null),
-    [kind, activeKey],
-  );
-  const handleBlocked = useCallback((holder: string) => {
-    log.info('handleBlocked', 'entity held by another editor — read-only tab', { hasHolder: !!holder });
-  }, []);
-  const handleLost = useCallback(() => {
-    log.warn('handleLost', 'entity lock lost mid-edit');
-    toast.warning('You lost the edit lock for this entity — your last change may not have saved.');
-  }, []);
-
-  const session = useSaveSession({
-    ...deriveSaveTarget(lockTarget),
-    manageHeaderStatus: false, // transient modal — drives its own Saving…→Saved on Save (below)
-    onBlocked: handleBlocked,
-    onLost: handleLost,
-  });
-  const held = session.status === 'held';
-  const blocked = session.status === 'blocked';
-
   // Derived dirtiness vs the STATIC baseline (React 19: derive, never set-state-in-effect).
   const changedKeys = useMemo(
     () =>
@@ -167,8 +133,8 @@ export function EditBaseEntityModal({ kind, onClose }: EditBaseEntityModalProps)
     [activeKey],
   );
 
-  // Switch tab = browse the drafts (no commit): the held session releases the old entity lock +
-  // acquires the new (lock-on-switch). Local drafts persist across switches; they land only on Save.
+  // Switch tab = browse the drafts (no commit): the session re-targets the new entity. Local drafts
+  // persist across switches; they land only on Save.
   const handleSelectTab = useCallback((newKey: string) => {
     setActiveKey(newKey);
   }, []);
@@ -191,18 +157,19 @@ export function EditBaseEntityModal({ kind, onClose }: EditBaseEntityModalProps)
     }
     log.info('handleSave', 'commit base entity text edits', { kind, changed: keys.length });
     if (useResourceLockStore.getState().collabPersist) {
-      // Grain B: persist each CHANGED entity node (rtype 3/4) via the engine's `ensureSaved` seam
-      // (phase 3 — held → save; else one-shot). Peer-held → `blocked` → the caller toasts here (the
-      // seam no longer self-toasts).
+      // Grain B (rtype 14): the drafts are committed to the store above — now persist the WHOLE
+      // collection in ONE column-root save (`alter_characters` → `characters`). Degraded collection
+      // → `blocked` → the caller toasts here (the seam no longer self-toasts).
       const ess = useEditSessionStatusStore.getState();
-      if (keys.length > 0) ess.markSaving();
-      try {
-        for (const key of keys) {
-          const outcome = await flushSketchEntityUnderLock(kind, key);
-          toastSketchSaveOutcome(outcome, resolveSketchVariantLockTarget(kind, key));
+      if (keys.length > 0) {
+        const collection = BASE_KIND_TO_COLLECTION[kind];
+        ess.markSaving();
+        try {
+          const outcome = await saveEntityCollection(collection);
+          toastSketchSaveOutcome(outcome, resolveEntityCollectionLockTarget(collection));
+        } finally {
+          ess.markSaved();
         }
-      } finally {
-        if (keys.length > 0) ess.markSaved();
       }
     } else if (keys.length > 0) {
       void autoSaveSnapshot();
@@ -255,7 +222,6 @@ export function EditBaseEntityModal({ kind, onClose }: EditBaseEntityModalProps)
                 {entityKeys.map((key) => (
                   <EntityTabTrigger
                     key={key}
-                    kind={kind}
                     entityKey={key}
                     invalid={invalidKeys.has(key)}
                   />
@@ -263,20 +229,8 @@ export function EditBaseEntityModal({ kind, onClose }: EditBaseEntityModalProps)
               </TabsList>
             </Tabs>
 
-            {/* Peer-held active tab → advisory banner (textareas are also disabled). */}
-            {blocked && (
-              <div
-                className="flex items-center gap-1.5 rounded-md bg-muted/60 px-2.5 py-1.5 text-xs text-muted-foreground"
-                role="status"
-              >
-                <Lock className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                <span>Another editor is editing {titleCase(activeKey)} — your changes here won&rsquo;t be saved.</span>
-              </div>
-            )}
-
             <HeightCmField
               value={activeDraft.height}
-              disabled={!held}
               onChange={(v) => updateDraft('height', v)}
             />
 
@@ -289,7 +243,6 @@ export function EditBaseEntityModal({ kind, onClose }: EditBaseEntityModalProps)
                 value={activeDraft.visual_design}
                 placeholder="Describe this entity's visual design…"
                 aria-label="Visual design"
-                disabled={!held}
                 onChange={(e) => updateDraft('visual_design', e.target.value)}
               />
             </div>
@@ -303,7 +256,6 @@ export function EditBaseEntityModal({ kind, onClose }: EditBaseEntityModalProps)
                 value={activeDraft.art_language}
                 placeholder="Describe this entity's art language…"
                 aria-label="Art language"
-                disabled={!held}
                 onChange={(e) => updateDraft('art_language', e.target.value)}
               />
             </div>
@@ -323,34 +275,22 @@ export function EditBaseEntityModal({ kind, onClose }: EditBaseEntityModalProps)
   );
 }
 
-/** One entity tab trigger — self-reads its ENTITY peer-lock (rtype 3/4) so a peer-held tab shows a
- *  🔒 badge (never hidden; the tab stays selectable to view). Advisory — the acquire 409 rules.
- *  `invalid` (owned by the parent, which alone holds the drafts) flags the tab whose height blocks
- *  Save, so the user can navigate to the cause instead of hunting a greyed button. */
+/** One entity tab trigger. `invalid` (owned by the parent, which alone holds the drafts) flags the
+ *  tab whose height blocks Save, so the user can navigate to the cause instead of hunting a greyed
+ *  button. Lockless (ADR-044 addendum 2) — no peer-lock badge. */
 function EntityTabTrigger({
-  kind,
   entityKey,
   invalid,
 }: {
-  kind: BaseKind;
   entityKey: string;
   invalid: boolean;
 }) {
-  const target = useMemo(() => resolveSketchVariantLockTarget(kind, entityKey), [kind, entityKey]);
-  const lockedByOther = useIsLockedByOther(target);
-  const holder = useLockHolderName(target);
-  // Both states can hold at once (a peer-held tab keeps its local draft) — the tooltip states both.
-  const hints = [
-    invalid ? INVALID_HEIGHT_HINT : null,
-    lockedByOther ? `${holder ?? 'Another editor'} is editing` : null,
-  ].filter((h): h is string => h !== null);
   return (
     <TabsTrigger value={entityKey}>
-      <span className="flex items-center gap-1" title={hints.length > 0 ? hints.join(' · ') : undefined}>
+      <span className="flex items-center gap-1" title={invalid ? INVALID_HEIGHT_HINT : undefined}>
         {titleCase(entityKey)}
-        {lockedByOther && <Lock className="h-3 w-3 shrink-0 text-muted-foreground" aria-hidden="true" />}
-        {/* Unlike the advisory 🔒 this marker is the ONLY on-screen cause of a greyed Save, so it
-            carries its own accessible name rather than relying on the hover-only title. */}
+        {/* This marker is the ONLY on-screen cause of a greyed Save, so it carries its own
+            accessible name rather than relying on the hover-only title. */}
         {invalid && (
           <AlertCircle
             className="h-3 w-3 shrink-0 text-destructive"

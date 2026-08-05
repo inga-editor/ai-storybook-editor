@@ -4,19 +4,20 @@
 // derives the effective selection in RENDER (React 19: NO useEffect+setState, NO ref read/write
 // in render body). Handlers only set state on user interaction.
 //
-// Collab (ADR-043 sketch-base — the 8th collab space): mounts `useCollabPersistSession` (header
-// Saving…→Saved + suppress owner-direct autosave) + `useContentSyncSession` (peer refetch), and a
-// per-KIND HELD SHEET lock (`useSaveSession`, step 1 / rtype 11 base_sheet, whole-sheet
-// grain A). Lock-on-interact (browse ≠ lock): `lockedSheetKind` is set ONLY by a genuine sheet
-// interaction (＋ add / 🔒 lock / [✎] edit / content pointerdown), never by browsing (select/toggle).
-// `manageHeaderStatus:true` (the default — same as the variant space since its 2026-07-16 migration
-// to batch-at-release) → the hold
-// lifetime is "Unsaved", release-save (switch kind / leave) → Saving…→Saved (edit-one-style-per-
-// session semantics). GRAIN B (per-entity text: lock-clone base variant + EditBaseEntityModal)
-// REUSES the variant helper's `flushSketchEntityUnderLock` (rtype 3/4) — per-node EDITS of entities
-// that already exist. The Excel IMPORT is NOT grain B: it is a whole-collection REPLACE (new keys +
-// deletions), so it persists as a column-root collection-scope save (`runLockedSetSave`, design 05
-// §5). Peer-lock is advisory (veil + sidebar badge); the acquire 409 is the real authority.
+// Collab (ADR-043 sketch-base — the 8th collab space; ADR-044 addendum 2 — LOCKLESS + rtype 14):
+// mounts `useCollabPersistSession` (header Saving…→Saved + suppress owner-direct autosave) +
+// `useContentSyncSession` (peer refetch), and TWO per-ACTIVE-kind save sessions (`useSaveSession`):
+//   • SHEET  (step 1 / rtype 11 base_sheet — whole-sheet grain A, manageHeaderStatus:true → the hold
+//     lifetime is "Unsaved", release-save on switch/leave → Saving…→Saved);
+//   • COLLECTION (step 1 / rtype 14 entity_collection — the WHOLE `sketch.{characters|props}` array,
+//     grain B, manageHeaderStatus:false → the sheet session owns the header; this one is the silent
+//     idle-sweep + save-on-leave net for entity edits). Keyed by COLLECTION not kind, so
+//     `alter_characters` shares the `characters` session (BASE_KIND_TO_COLLECTION).
+// Both begin synchronously 'held' (lockless — no acquire, no peer-lock veil, last-write-wins). GRAIN B
+// edits (lock-clone base variant, EditBaseEntityModal, generate persist) persist the WHOLE collection
+// in ONE column-root rtype-14 save (`saveEntityCollection`), replacing the old per-entity rtype-3/4
+// loop. The Excel IMPORT is the same grain: a whole-collection REPLACE (new keys + deletions) → one
+// rtype-14 save per collection (characters + props), lock-exempt (no acquire).
 
 import { useCallback, useMemo, useState } from 'react';
 import { Plus, Upload } from 'lucide-react';
@@ -44,8 +45,6 @@ import { useSnapshotStore } from '@/stores/snapshot-store';
 import { useSketchStyleId, useCurrentBookId } from '@/stores/book-store';
 import {
   useResourceLockStore,
-  useIsLockedByOther,
-  useLockHolderName,
   type LockTarget,
 } from '@/stores/resource-lock-store';
 import { useEditSessionStatusStore, useRegisterEditCommit } from '@/stores/edit-session-status-store';
@@ -54,23 +53,20 @@ import {
   flushSketchBaseSheetUnderLock,
 } from '@/stores/snapshot-store/slices/collab-sketch-base-sheet-save-helper';
 import {
-  flushSketchEntityUnderLock,
-  resolveSketchVariantLockTarget,
-} from '@/stores/snapshot-store/slices/collab-sketch-variant-save-helper';
+  saveEntityCollection,
+  BASE_KIND_TO_COLLECTION,
+  resolveEntityCollectionLockTarget,
+  type EntityCollectionName,
+} from '@/stores/snapshot-store/slices/collab-sketch-base-entities-save-helper';
 import { toastSketchSaveOutcome } from '@/stores/snapshot-store/slices/sketch-save-outcome-toast';
-import {
-  runLockedSetSave,
-  type CollectionSaveOutcome,
-} from '@/features/editor/utils/structural-lock-collection-save';
+import type { SaveOutcome } from '@/stores/save-session-store';
 import { useCollabPersistSession } from '@/features/editor/hooks/use-collab-persist-session';
 import { useContentSyncSession } from '@/features/editor/hooks/use-content-sync-session';
 import { useSaveSession } from '@/features/editor/hooks/use-save-session';
 import { deriveSaveTarget } from '@/stores/save-session-store';
-import { LockedByOtherOverlay } from '@/features/editor/components/shared-components/sketch-locked-by-other-overlay';
 import { SketchDegradedBanner } from '@/features/editor/components/sketch-degraded-banner';
 import { useSketchSheetDegraded } from '@/stores/snapshot-store';
 import {
-  sketchEntitiesOfKind,
   BASE_SHEET_ID,
   type BaseKind,
   type SketchBaseStyle,
@@ -105,21 +101,18 @@ import {
 const log = createLogger('Editor', 'SketchBaseSpace');
 
 /**
- * Flush each entity node (rtype 3/4, grain B) of the given kinds through the gateway — the sheet
- * held-session covers rtype 11 (grain A) ONLY, so the lock-style base-variant clone (an EDIT of
- * entities that already exist) persists here. NOT for the Excel import: that one mints new keys and
- * drops removed ones, which a per-node upsert loop cannot express — see `commitImport`.
- * Peer-held entity → the engine `ensureSaved` returns `blocked` → the CALLER toasts (phase 3 — the
- * seam no longer self-toasts). The engine owns the lock lifecycle (one-shot when not held). Reads
- * FRESH nodes via getState() at call time. Solo → the seam's whole-snapshot flush (per entity).
+ * Persist the WHOLE entity collection (rtype 14, grain B) for each of the given kinds — the sheet
+ * held-session covers rtype 11 (grain A) ONLY, so the lock-style base-variant clone (an EDIT of the
+ * collection) persists here. Kinds are DEDUPED by collection (`alter_characters` shares `characters`)
+ * so the shared array is never written twice. Degraded collection → the engine `ensureSaved` returns
+ * `blocked` → the CALLER toasts (the seam no longer self-toasts). The engine owns the lifecycle
+ * (held → save + rebase; else one-shot lock-exempt; solo → whole-snapshot flush).
  */
 async function persistBaseEntities(kinds: readonly BaseKind[]): Promise<void> {
-  const st = useSnapshotStore.getState();
-  for (const kind of kinds) {
-    for (const e of sketchEntitiesOfKind(st.sketch, kind)) {
-      const outcome = await flushSketchEntityUnderLock(kind, e.key);
-      toastSketchSaveOutcome(outcome, resolveSketchVariantLockTarget(kind, e.key));
-    }
+  const collections = new Set<EntityCollectionName>(kinds.map((k) => BASE_KIND_TO_COLLECTION[k]));
+  for (const collection of collections) {
+    const outcome = await saveEntityCollection(collection);
+    toastSketchSaveOutcome(outcome, resolveEntityCollectionLockTarget(collection));
   }
 }
 
@@ -166,10 +159,6 @@ export function SketchBaseSpace() {
   // Import spinner flag + pending parse awaiting a replace confirm (when entities already exist).
   const [isImporting, setIsImporting] = useState(false);
   const [pendingImport, setPendingImport] = useState<BaseImportParse | null>(null);
-  // LOCK-ON-INTERACT choke point: the kind whose SHEET (rtype 11) is being edited → held-lock
-  // target. Stays null until a genuine sheet interaction (never set by browse) so the lock never
-  // auto-acquires on mount.
-  const [lockedSheetKind, setLockedSheetKind] = useState<BaseKind | null>(null);
 
   const stylesByKind = useMemo<Record<BaseKind, SketchBaseStyle[]>>(
     // Every kind resolves through ONE map (sidebar groups, auto-select, the displayed style) —
@@ -212,78 +201,57 @@ export function SketchBaseSpace() {
   const generateOps = useBaseSheetGenerateOps();
   const style = effectiveSelected ? stylesByKind[effectiveSelected.kind][effectiveSelected.index] : null;
 
-  // ── Per-kind held SHEET session (ADR-043, grain A) ───────────────────────────────────────────
-  // Lock target — null until a genuine interaction sets `lockedSheetKind` (browse ≠ lock).
+  // ── Per-kind SHEET session (ADR-043, grain A; lockless) ──────────────────────────────────────
+  // Session target binds to the ACTIVE (displayed) kind's sheet; the engine begins it 'held'
+  // synchronously (no acquire). getNode (WHOLE sheet node) + buildPayload live in the
+  // `sketch-base-sheet` policy (save-policies).
   const sheetLockTarget = useMemo<LockTarget | null>(
-    () => (lockedSheetKind ? resolveSketchBaseSheetLockTarget(lockedSheetKind) : null),
-    [lockedSheetKind],
+    () => (effectiveSelected ? resolveSketchBaseSheetLockTarget(effectiveSelected.kind) : null),
+    [effectiveSelected],
   );
 
-  // Live (non-reactive) read of the WHOLE locked sheet node — baseline + dirty-diff source. Reads
-  // getState() by the closure so a switch's release-cleanup still sees the OLD sheet.
-  // getNode (WHOLE sheet node) + buildPayload now live in the `sketch-base-sheet` policy (save-policies).
-
-  // 409 on acquire → another editor holds this sheet. Toast + drop the interaction (idle).
-  const handleSheetBlocked = useCallback((holder: string) => {
-    log.info('handleSheetBlocked', 'sheet held by another editor', { hasHolder: !!holder });
-    toast.info('Another editor is editing this sheet — your change was not saved.');
-    setLockedSheetKind(null);
-  }, []);
-
-  // Heartbeat 409 → sheet lock stolen mid-edit. Drop + toast; content-sync reconciles the winner.
-  const handleSheetLost = useCallback(() => {
-    log.warn('handleSheetLost', 'sheet lock lost — release');
-    setLockedSheetKind(null);
-    toast.warning('You lost the edit lock for this sheet — a later change may not have saved.');
-  }, []);
-
-  // The held session drives the SUSTAINED sheet lock + the SHARED header label (manageHeaderStatus:
-  // true — base default). Hold lifetime = "Unsaved"; release-save (switch kind / leave) → Saving…→
-  // Saved. Crop-edit (setSketchBaseCropIllustrations) has NO immediate flush → the release-save is
-  // its ONLY persist path (baseline captured at acquire, BEFORE the modal edit → dirty on release).
-  const sheetSession = useSaveSession({
+  // The session drives the SHARED header label (manageHeaderStatus: true — base default). Hold
+  // lifetime = "Unsaved"; release-save (switch kind / leave) → Saving…→Saved. Crop-edit
+  // (setSketchBaseCropIllustrations) has NO immediate flush → the release-save is its ONLY persist
+  // path (baseline captured at begin, BEFORE the modal edit → dirty on release). onBlocked/onLost
+  // dropped: a lockless session can't be blocked or lost.
+  const { status: sheetStatus, saveNow: sheetSaveNow } = useSaveSession({
     ...deriveSaveTarget(sheetLockTarget),
-    onBlocked: handleSheetBlocked,
-    onLost: handleSheetLost,
     manageHeaderStatus: true, // base default — session-driven Unsaved → Saving… → Saved
   });
 
-  // I currently hold the sheet lock for the kind under view → the content is my editable session.
-  const editable = sheetSession.status === 'held' && lockedSheetKind === effectiveSelected?.kind;
-
-  // Lock-on-interact seam: adopt the kind's sheet (the held session acquires rtype 11 on the next
-  // render). Idempotent — re-acquiring the same kind is a no-op.
-  const acquireSheet = useCallback((kind: BaseKind) => {
-    setLockedSheetKind((prev) => (prev === kind ? prev : kind));
-  }, []);
-
-  // Commit-now for the header "Unsaved" button (editor-page handleManualSave → commitFn): null the
-  // held sheet target so `useSaveSession` release-saves the sheet (grain A: crop edits +
-  // is_selected) → header Saving…→Saved. Without this the base space registered NO commit → the
-  // manual-save fell through to the collab-suppressed autoSaveSnapshot() → the button was a no-op.
-  // Mirrors characters/props `setLockedKey(null)` (batch-at-release commit). Display is kept; the
-  // next edit re-acquires via acquireSheet.
-  const commitSheet = useCallback(() => {
-    log.info('commitSheet', 'commit held sheet session (save + unlock)');
-    setLockedSheetKind(null);
-  }, []);
-  useRegisterEditCommit(commitSheet);
-
-  // Peer-lock (advisory) for the DISPLAYED kind's sheet — veil the content + suppress acquire-on-interact.
-  const displayedSheetTarget = useMemo<LockTarget>(
-    () =>
-      effectiveSelected
-        ? resolveSketchBaseSheetLockTarget(effectiveSelected.kind)
-        : { step: 1, resource_type: 11, resource_id: '', locale: null },
+  // ── Per-active-COLLECTION entity session (grain B, rtype 14; lockless) ─────────────────────────
+  // Keyed by COLLECTION (never kind): `alter_characters` and `characters` share ONE session on
+  // `sketch.characters`, so they never open two baselines that overwrite each other. This session is
+  // the SILENT idle-sweep + save-on-leave net for grain-B entity edits — the sheet session owns the
+  // header, so `manageHeaderStatus:false` here (explicit grain-B saves drive the header themselves).
+  // Persistence still routes through `saveEntityCollection` at gesture time; mounting the session
+  // means the engine rebases its baseline on those saves and covers anything missed on leave.
+  const activeCollection = useMemo<EntityCollectionName | null>(
+    () => (effectiveSelected ? BASE_KIND_TO_COLLECTION[effectiveSelected.kind] : null),
     [effectiveSelected],
   );
-  const displayedSheetLockedByOther = useIsLockedByOther(displayedSheetTarget);
-  const displayedSheetHolder = useLockHolderName(displayedSheetTarget);
+  useSaveSession({
+    domain: 'sketch-base-entities',
+    id: activeCollection,
+    manageHeaderStatus: false,
+  });
+
+  // The active kind's sheet session is held → the content is my editable session.
+  const editable = sheetStatus === 'held';
+
+  // Commit-now for the header "Unsaved" button (editor-page handleManualSave → commitFn): saveNow
+  // persists the sheet (grain A: crop edits + is_selected) + rebases the baseline → Saving…→Saved.
+  // Mirrors the sibling spaces' commit.
+  const commitSheet = useCallback(() => {
+    log.info('commitSheet', 'commit sheet session (saveNow)');
+    void sheetSaveNow();
+  }, [sheetSaveNow]);
+  useRegisterEditCommit(commitSheet);
 
   // Persist the sheet is_selected (grain A) + the cloned base-variant crops (grain B) after a lock.
-  // Grain A is flushed DIRECTLY (baseline-independent) because the sheet session's baseline is
-  // captured AFTER this synchronous mutation → its release-diff would be empty (H2). Default (keep)
-  // — acquireSheet has adopted the sheet, so the session owns + eventually releases the lock.
+  // Grain A is flushed DIRECTLY via the off-session seam (a saveNow while held), landing the pick
+  // eagerly; grain B (cloned base variants) flushes per entity.
   const persistLockStyle = useCallback(async (kind: BaseKind) => {
     const outcome = await flushSketchBaseSheetUnderLock(kind); // grain A (rtype 11) via ensureSaved
     toastSketchSaveOutcome(outcome, resolveSketchBaseSheetLockTarget(kind));
@@ -291,12 +259,10 @@ export function SketchBaseSpace() {
   }, []);
 
   // ── Handlers ────────────────────────────────────────────────────────────────────────────────
-  // Browse (display only): switch the shown style. Leaving a HELD sheet (switch to a DIFFERENT kind)
-  // commits it (null lockedSheetKind → the hook release-saves the OLD sheet); a same-kind re-select
-  // (another style of it) keeps the lock. `prev` stays null on mount / while browsing.
+  // Select (display + session target): switch the shown style. Switching to a DIFFERENT kind
+  // re-targets the sheet session → the OLD sheet release-saves on the switch.
   const handleSelectStyle = useCallback((kind: BaseKind, index: number) => {
     setSelectedStyle({ kind, index });
-    setLockedSheetKind((prev) => (prev === kind ? prev : null));
   }, []);
 
   // Enqueued style → select it + show the Raw tab so the content-area "Generating…" overlay tracks it.
@@ -310,26 +276,23 @@ export function SketchBaseSpace() {
     setExpandedGroups((prev) => ({ ...prev, [kind]: !prev[kind] }));
   }, []);
 
-  // Interact (add style): acquire the kind's sheet lock (generate runs under it) + open the modal.
+  // Add style: open the generate modal (mode add). Generate runs under the active sheet session.
   const handleAddStyle = useCallback(
     (kind: BaseKind) => {
-      log.info('handleAddStyle', 'interact — acquire sheet + open generate modal (add)', {
+      log.info('handleAddStyle', 'open generate modal (add)', {
         kind,
         hasArtStyle: artStyleId != null,
       });
-      acquireSheet(kind);
       setGenerateModal({ kind, mode: 'add' });
     },
-    [artStyleId, acquireSheet],
+    [artStyleId],
   );
 
-  // Interact (lock a style): acquire the sheet lock, set is_selected + clone crops → base variants,
-  // then persist grain A (sheet) + grain B (entities). Clicking an already-locked style re-sets
-  // itself (no-op). SOLO → autoSaveSnapshot.
+  // Lock a style: set is_selected + clone crops → base variants, then persist grain A (sheet) +
+  // grain B (entities). Clicking an already-locked style re-sets itself (no-op). SOLO → autoSaveSnapshot.
   const handleLockStyle = useCallback(
     (kind: BaseKind, index: number) => {
-      log.info('handleLockStyle', 'interact — acquire sheet + lock style', { kind, index });
-      acquireSheet(kind);
+      log.info('handleLockStyle', 'lock style', { kind, index });
       setSketchBaseStyleSelected(kind, index);
       if (useResourceLockStore.getState().collabPersist) {
         void persistLockStyle(kind);
@@ -337,7 +300,7 @@ export function SketchBaseSpace() {
         void autoSaveSnapshot();
       }
     },
-    [acquireSheet, setSketchBaseStyleSelected, persistLockStyle, autoSaveSnapshot],
+    [setSketchBaseStyleSelected, persistLockStyle, autoSaveSnapshot],
   );
 
   // Interact (edit entity text): grain B — the modal self-manages its per-tab entity lock (rtype
@@ -347,13 +310,13 @@ export function SketchBaseSpace() {
   }, []);
 
   // Commit a parsed import: replace char + prop + alter entities, then persist.
-  // COLLAB → ONE column-root whole-array save per collection (design 05 §5 `runLockedSetSave`:
-  // rtype 3 `sketch.characters` + rtype 4 `sketch.props`, coarse sentinel lock). It MUST be the
-  // whole-array shape, not a per-entity flush: an import is a REPLACE, so it (a) introduces keys
-  // that do not exist in the DB yet — a per-entity `action_type:3` edit of a new key 404s at the
-  // gateway (`_resolve_entity` → "Target resource node not found"), which is exactly how a fresh
-  // alter cast silently never persisted — and (b) DELETES the entities the workbook dropped, which
-  // an upsert loop can never express. SOLO → autoSaveSnapshot (whole-doc).
+  // COLLAB → ONE column-root whole-array rtype-14 save per collection (`saveEntityCollection`:
+  // `sketch.characters` + `sketch.props`), LOCK-EXEMPT (ADR-044 addendum 2 — no acquire/release). It
+  // MUST be the whole-array shape, not a per-entity flush: an import is a REPLACE, so it (a) introduces
+  // keys that do not exist in the DB yet — a per-entity edit of a new key 404s at the gateway — and
+  // (b) DELETES the entities the workbook dropped, which an upsert loop can never express. Local
+  // applies FIRST (optimistic), then the save reads the fresh arrays; the ACTIVE collection's mounted
+  // session rebases its baseline on the save (no stale re-save). SOLO → autoSaveSnapshot (whole-doc).
   const commitImport = useCallback(
     async (parse: BaseImportParse) => {
       // `setSketchBaseEntities` WHOLE-REPLACES `characters[]`, which holds the story cast AND the
@@ -385,40 +348,27 @@ export function SketchBaseSpace() {
         return;
       }
 
-      // Bulk import is off-session (no sheet hold) → drive the header Saving…→Saved itself.
+      // Bulk import drives the header Saving…→Saved itself (the collection session is silent). Apply
+      // the optimistic local REPLACE FIRST, then persist each collection whole — `saveEntityCollection`
+      // reads the fresh `sketch.{collection}` array via the policy registry (its input is ignored).
       const ess = useEditSessionStatusStore.getState();
       ess.markSaving();
-      let outcome: CollectionSaveOutcome;
+      let outcomes: SaveOutcome[];
       try {
-        outcome = await runLockedSetSave(
-          [
-            {
-              target: { step: 1, resource_type: 3, resource_id: 'characters', locale: null },
-              save: {
-                action_type: 3, // edit (replace-all) — the ONLY action a column-root save accepts
-                patch: payload.characters, // LIST ⇒ the gateway takes the collection-scope path
-                collection: 'characters',
-                target_ref: { count: payload.characters.length },
-              },
-            },
-            {
-              target: { step: 1, resource_type: 4, resource_id: 'props', locale: null },
-              save: {
-                action_type: 3,
-                patch: payload.props,
-                collection: 'props',
-                target_ref: { count: payload.props.length },
-              },
-            },
-          ],
-          () => setSketchBaseEntities(payload),
-        );
+        setSketchBaseEntities(payload);
+        outcomes = [await saveEntityCollection('characters'), await saveEntityCollection('props')];
       } finally {
         ess.markSaved();
       }
-      if (outcome === 'blocked') return; // nothing applied; holder toast already shown
+      // Local is already applied (optimistic-first). A degraded collection → 'blocked' (kept locally,
+      // a refetch reconciles) → toast + abort. A gateway/network error → 'failed' → tell the user to
+      // reload. Otherwise every collection landed.
+      if (outcomes.includes('blocked')) {
+        toastSketchSaveOutcome('blocked', resolveEntityCollectionLockTarget('characters'));
+        return;
+      }
       reportIssues();
-      if (outcome === 'failed') {
+      if (outcomes.includes('failed')) {
         toast.error('Import chưa lưu được — vui lòng tải lại trang.');
         return;
       }
@@ -458,29 +408,27 @@ export function SketchBaseSpace() {
     setPendingImport(null);
   }, [pendingImport, commitImport]);
 
-  // Interact (edit RAW sheet): acquire the sheet lock + open the edit-image modal (raw scope → the
-  // modal's onUpdate re-crops → the recrop job persists the whole sheet under this lock).
+  // Edit RAW sheet: open the edit-image modal (raw scope → the modal's onUpdate re-crops → the
+  // recrop job persists the whole sheet under the active session).
   const handleEditRaw = useCallback(() => {
     if (!effectiveSelected) return;
-    log.info('handleEditRaw', 'interact — acquire sheet + open raw edit modal', {
+    log.info('handleEditRaw', 'open raw edit modal', {
       kind: effectiveSelected.kind,
       styleIndex: effectiveSelected.index,
     });
-    acquireSheet(effectiveSelected.kind);
     setEditImageTarget({ kind: effectiveSelected.kind, styleIndex: effectiveSelected.index, scope: 'raw' });
-  }, [effectiveSelected, acquireSheet]);
+  }, [effectiveSelected]);
 
-  // Interact (edit one crop): acquire the sheet lock + open the edit-image modal (crop scope → the
-  // edit persists via the sheet session's release-save on switch/leave).
+  // Edit one crop: open the edit-image modal (crop scope → the edit persists via the sheet session's
+  // release-save on switch/leave).
   const handleEditCrop = useCallback(
     (entityKey: string) => {
       if (!effectiveSelected) return;
-      log.info('handleEditCrop', 'interact — acquire sheet + open crop edit modal', {
+      log.info('handleEditCrop', 'open crop edit modal', {
         kind: effectiveSelected.kind,
         styleIndex: effectiveSelected.index,
         entityKey,
       });
-      acquireSheet(effectiveSelected.kind);
       setEditImageTarget({
         kind: effectiveSelected.kind,
         styleIndex: effectiveSelected.index,
@@ -488,35 +436,27 @@ export function SketchBaseSpace() {
         entityKey,
       });
     },
-    [effectiveSelected, acquireSheet],
+    [effectiveSelected],
   );
 
-  // Interact (extract from one crop): acquire the sheet lock + open the extract-image modal (crop
-  // tab). onCreateImages appends a new version of that crop → persists via the sheet session's
-  // release-save on switch/leave (same path as handleEditCrop).
+  // Extract from one crop: open the extract-image modal (crop tab). onCreateImages appends a new
+  // version of that crop → persists via the sheet session's release-save on switch/leave.
   const handleExtractCrop = useCallback(
     (entityKey: string) => {
       if (!effectiveSelected) return;
-      log.info('handleExtractCrop', 'interact — acquire sheet + open crop extract modal', {
+      log.info('handleExtractCrop', 'open crop extract modal', {
         kind: effectiveSelected.kind,
         styleIndex: effectiveSelected.index,
         entityKey,
       });
-      acquireSheet(effectiveSelected.kind);
       setExtractImageTarget({
         kind: effectiveSelected.kind,
         styleIndex: effectiveSelected.index,
         entityKey,
       });
     },
-    [effectiveSelected, acquireSheet],
+    [effectiveSelected],
   );
-
-  // NOTE (review #1): NO content-capture acquire. Unlike the variant space (where a content
-  // pointerdown IS the select-crop mutation), the base content area has NO non-[✎] mutation — Raw/
-  // Crop tabs + zoom + image clicks are pure BROWSE. The two real edit seams (onEditRaw/onEditCrop)
-  // acquire the sheet themselves, so a capture-phase acquire would only flip the shared header to a
-  // false "Unsaved" while merely viewing (browse ≠ lock). Peer visibility still comes from the veil.
 
   // === Phase 04: opt-in saveResource for the Edit path (Raw sheet | one keyed crop) ===
   // Anchor = base workspace style node: raw → the style's `illustrations`; crop → that entity's
@@ -577,11 +517,6 @@ export function SketchBaseSpace() {
           />
         ) : (
           <EmptyState onAddStyle={() => handleAddStyle('characters')} />
-        )}
-        {/* Peer-lock veil: another editor holds the displayed kind's sheet. `interactive` → the veil
-            CAPTURES pointer events so nothing beneath can be clicked while someone else is editing. */}
-        {effectiveSelected && displayedSheetLockedByOther && (
-          <LockedByOtherOverlay holderName={displayedSheetHolder} interactive />
         )}
         </div>
       </div>

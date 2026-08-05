@@ -116,19 +116,31 @@ async function fetchSyncNode(
   return coerced;
 }
 
+/** Column-root collection paths that are written whole-array with NO accompanying node-scope events
+ *  → a peer MUST whole-replace (not reconcile-by-id) or it never sees content changes to a matching
+ *  id. `lineups` (rtype 12) + the three entity collections (rtype 14 — base-space "save 1 cục" +
+ *  Excel import). NOTE `spreads` is deliberately ABSENT: its collection-scope events are reorder-only
+ *  (rtype 6) and its content arrives via separate node-scope events, so spreads keep reconcile-by-id. */
+const COLUMN_ROOT_COLLECTION_PATHS = new Set(['lineups', 'characters', 'props', 'stages']);
+
 /**
- * Is this collection-scope descriptor the `sketch.lineups` whole-array write (rtype 12)?
- * OR of both signals (plan Validation S1): `resource_type === 12` survives a future write-path
- * change; the column+path match survives a descriptor that lost its rtype. Exported for tests.
+ * Is this collection-scope descriptor a WHOLE-ARRAY column-root write (rtype 12 lineups OR rtype 14
+ * entity collection)? OR of both signals (plan Validation S1): the `resource_type` match survives a
+ * future write-path change; the column+path match survives a descriptor that lost its rtype (in the
+ * `collection` scope a `sketch` path of length 1 addressing one of these keys is ALWAYS the rtype
+ * 12/14 whole-array writer — there is no other collection-scope writer for them). Exported for tests.
  */
-export function isLineupCollectionSync(sync: {
+export function isColumnRootCollectionSync(sync: {
   column: string;
   path: string[];
   resource_type?: number;
 }): boolean {
   return (
     sync.resource_type === 12 ||
-    (sync.column === 'sketch' && sync.path.length === 1 && sync.path[0] === 'lineups')
+    sync.resource_type === 14 ||
+    (sync.column === 'sketch' &&
+      sync.path.length === 1 &&
+      COLUMN_ROOT_COLLECTION_PATHS.has(sync.path[0]))
   );
 }
 
@@ -180,13 +192,14 @@ async function applySync(sync: MetadataSync): Promise<void> {
         const node = await fetchSyncNode(sync.version, sync.column, sync.path);
         if (node === undefined) return; // rpc error — skip
         if (!versionStillMatches(sync.version)) return;
-        if (Array.isArray(node) && isLineupCollectionSync(sync)) {
-          // ⚡ rtype 12 (sketch.lineups — 2026-07-25): WHOLE-REPLACE, never reconcile-by-id.
-          // reconcileCollectionByIds keeps the LOCAL object for every matching id and adopts only
-          // order/membership — correct for characters/spreads (their content arrives via separate
-          // scope:'node' events), but lineup tabs have NO node-scope event (every write is this
-          // collection-scope save), so a peer's rename / entries change would NEVER land.
-          log.debug('applySync', 'lineups collection — whole-replace branch', { column: sync.column });
+        if (Array.isArray(node) && isColumnRootCollectionSync(sync)) {
+          // ⚡ rtype 12 (sketch.lineups — 2026-07-25) + rtype 14 (sketch.{characters|props|stages} —
+          // 2026-08-05): WHOLE-REPLACE, never reconcile-by-id. reconcileCollectionByIds keeps the
+          // LOCAL object for every matching id and adopts only order/membership — but these arrays are
+          // written whole (base-space "save 1 cục" + Excel import + lineup save) with NO accompanying
+          // node-scope event, so a peer's content change to a MATCHING id would never land under
+          // reconcile. Spreads (reorder-only, rtype 6) still reconcile — they're not in the predicate.
+          log.debug('applySync', 'column-root collection — whole-replace branch', { column: sync.column });
           withRemotePatchGuard(() =>
             useSnapshotStore.getState().applyRemoteNodePatch(sync.column, sync.path, node),
           );

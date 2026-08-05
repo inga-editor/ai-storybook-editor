@@ -5,7 +5,7 @@ import { LAYER_CONFIG, LAYER_ORDER } from "@/constants/spread-constants";
 import { DEFAULT_TYPOGRAPHY } from "@/constants/config-constants";
 import { mapTypographyToTextbox } from "@/constants/book-defaults";
 import type { LucideIcon } from "lucide-react";
-import { Image, Type, Hexagon, PanelBottom } from "lucide-react";
+import { Image, Type, PanelBottom } from "lucide-react";
 import type {
   BaseSpread,
   SpreadImage,
@@ -15,7 +15,10 @@ import type { TypographySettings } from "@/types/editor";
 
 // === Types ===
 
-export type SpreadElementType = "shape" | "raw_image" | "raw_textbox" | "page";
+// NOTE: `shape` is NO LONGER a SCENE-space item type (ADR-044 addendum 2 · Phase 06, 2026-08-05).
+// Shapes are a RETOUCH-owned key edited only in the OBJECTS space (sole writer rtype 10). Existing
+// `spread.shapes[]` data stays in the snapshot but is not rendered/editable here.
+export type SpreadElementType = "raw_image" | "raw_textbox" | "page";
 
 export interface ElementListEntry {
   id: string;
@@ -42,14 +45,12 @@ export interface LayerGroup {
 export const ADDABLE_ELEMENT_TYPES: SpreadElementType[] = [
   "raw_image",
   "raw_textbox",
-  "shape",
 ];
 
 export const ALL_ELEMENT_TYPES: SpreadElementType[] = [
   "page",
   "raw_image",
   "raw_textbox",
-  "shape",
 ];
 
 /** Virtual layer for page backgrounds (below all real layers) */
@@ -59,7 +60,6 @@ const BACKGROUND_LAYER = { min: -1, max: 0, label: "Background", types: ["page"]
 export const ILLUSTRATION_LAYER_MAP: Record<SpreadElementType, LayerRange> = {
   page: BACKGROUND_LAYER as unknown as LayerRange,
   raw_image: LAYER_CONFIG.MEDIA,
-  shape: LAYER_CONFIG.OBJECTS,
   raw_textbox: LAYER_CONFIG.TEXT,
 };
 
@@ -70,7 +70,6 @@ export const ELEMENT_TYPE_CONFIG: Record<
   page: { icon: PanelBottom, label: "Page" },
   raw_image: { icon: Image, label: "Image" },
   raw_textbox: { icon: Type, label: "Textbox" },
-  shape: { icon: Hexagon, label: "Shape" },
 };
 
 export const NEW_ELEMENT_DEFAULTS = {
@@ -84,12 +83,6 @@ export const NEW_ELEMENT_DEFAULTS = {
     image_references: [],
     final_hires_media_url: undefined,
     illustrations: [],
-  },
-  shape: {
-    title: "New Shape",
-    geometry: { x: 30, y: 30, w: 40, h: 30 },
-    type: "rectangle" as const,
-    // fill & outline injected at call site from bookShape ?? FALLBACK_SHAPE
   },
 };
 
@@ -164,14 +157,8 @@ export function buildElementList(
     });
   });
 
-  (spread.shapes ?? []).forEach((shape, i) => {
-    entries.push({
-      id: shape.id,
-      type: "shape",
-      title: shape.title || `Shape ${i + 1}`,
-      zIndex: resolveZIndex(i, LAYER_CONFIG.OBJECTS),
-    });
-  });
+  // NOTE: `spread.shapes[]` is intentionally NOT listed here — shapes are a RETOUCH-owned key edited
+  // only in the OBJECTS space (ADR-044 addendum 2 · Phase 06). Data remains in the snapshot.
 
   return entries.sort((a, b) => b.zIndex - a.zIndex);
 }

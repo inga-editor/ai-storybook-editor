@@ -80,7 +80,7 @@ describe('collab-image-save-helper', () => {
         illustration_image: 1,
         retouch_image: 1,
         scene_raw_textbox: 7, // ADR-044 P03 scene overlay
-        scene_retouch_shape: 8, // ADR-044 P03 scene overlay
+        // NOTE: the scene-shape node-kind (rtype 8) RETIRED — Phase 06 (shapes not a SCENE item).
       });
     });
 
@@ -96,15 +96,6 @@ describe('collab-image-save-helper', () => {
         resource_type: 7,
         resource_id: 'tb1',
         locale: 'en_US',
-      });
-    });
-
-    it('scene shape locks the leaf node → rtype 8, resource_id = childKey, no locale', () => {
-      expect(resolveImageLockTarget('scene_retouch_shape', 'sp1', 'shp1')).toEqual({
-        step: 2,
-        resource_type: 8,
-        resource_id: 'shp1',
-        locale: null,
       });
     });
   });

@@ -9,11 +9,11 @@
 // `kind:'characters'` and is re-split by `actor_role` on read. See `toTabEntry`/`lineupEntryRef`.
 //
 // ⚡ 2026-07-25 MULTI-TAB + PERSIST (ADR-043 §Mở rộng): selection is no longer local — each tab is
-// a PERSISTED named selection in `sketch.lineups[]` (rtype 12 collab node). The space follows the
-// standard collab checklist (memory *new-pipeline-space-collab-flow*): persist + content-sync
-// sessions mounted FIRST (teardown order), then the lineup lock session; EVERY write goes through
-// `withLock` (acquire BEFORE mutate, 409 = mutation dropped); solo persists via the setters'
-// sync.isDirty + whole-doc autosave (never autoSaveSnapshot here).
+// a PERSISTED named selection in `sketch.lineups[]` (rtype 12 collab node). ADR-044 addendum 2 —
+// LOCKLESS: persist + content-sync sessions mounted FIRST (teardown order), then the lineup save
+// session (lockless ⇒ begins 'held' synchronously); EVERY write calls `runWrite` DIRECTLY
+// (mutate → flush, no acquire, last-write-wins); solo persists via the setters' sync.isDirty +
+// whole-doc autosave (never autoSaveSnapshot here).
 //
 // VIRTUAL TAB: a book with no `lineups` yet shows one FE-only tab (id minted ONCE per mount);
 // NOTHING is written by browsing — the first write MATERIALIZES it (spec §2.3). Payload shapes
@@ -32,8 +32,6 @@ import { useSnapshotStore } from '@/stores/snapshot-store';
 import { useSketchLineupEntries, useSketchLineups } from '@/stores/snapshot-store/selectors';
 import { useCurrentBook, useCurrentBookId } from '@/stores/book-store';
 import { useAuthStore } from '@/stores/auth-store';
-import { useIsLockedByOther, useLockHolderName } from '@/stores/resource-lock-store';
-import { LINEUP_LOCK_TARGET } from '@/stores/snapshot-store/slices/collab-sketch-lineups-save-helper';
 import { useCollabPersistSession } from '@/features/editor/hooks/use-collab-persist-session';
 import { useContentSyncSession } from '@/features/editor/hooks/use-content-sync-session';
 import { useMyCollaboration } from '@/features/editor/components/collaborators-creative-space/hooks/use-my-collaboration';
@@ -70,7 +68,7 @@ export function SketchLineupSpace() {
   const bookId = useCurrentBookId();
   useCollabPersistSession(bookId);
   useContentSyncSession(bookId);
-  const { withLock } = useLineupLockSession();
+  const { runWrite } = useLineupLockSession();
 
   // Three UI kinds. `characters` is the STORY cast only (KIND_ENTITY_SOURCE filters `actor_role`),
   // so an alter is listed EXACTLY ONCE — in the Alter group, never also under Character.
@@ -78,10 +76,6 @@ export function SketchLineupSpace() {
   const propEntries = useSketchLineupEntries('props');
   const alterEntries = useSketchLineupEntries('alter_characters');
   const tabs = useSketchLineups();
-
-  // Peer lock on the ONE rtype-12 grain → every write affordance greys (browse stays live).
-  const lockedByOther = useIsLockedByOther(LINEUP_LOCK_TARGET);
-  const holderName = useLockHolderName(LINEUP_LOCK_TARGET);
 
   // Granted kinds — the FE mitigation of the gateway's characters∨props OR-gate over-permit
   // (signed-off Validation S1): an ungranted kind renders greyed, the gateway stays the authority.
@@ -161,12 +155,13 @@ export function SketchLineupSpace() {
   // Members that cannot render (deleted entity/variant OR lost image/height) — the "Dọn" chip.
   const danglingCount = activeTab.entries.length - canvasEntries.length;
 
-  const writeDisabled = lockedByOther;
+  // Lockless (ADR-044 addendum 2): no peer-lock → writes are never disabled by another editor.
+  const writeDisabled = false;
   const canCreateTab = effectiveTabs.length < LINEUP_TAB_LIMIT;
 
-  // ── Write handlers — ALL go through withLock (acquire → mutate → flush) ─────────────────────
-  // Store reads inside `mutate` are FRESH (getState at commit time): a peer change landing
-  // between the gesture and the acquire round-trip is never overwritten from a stale closure.
+  // ── Write handlers — ALL go through runWrite (mutate → flush, lockless) ─────────────────────
+  // Store reads inside `mutate` are FRESH (getState at commit time): a peer change landing between
+  // the gesture and the flush is never overwritten from a stale closure.
 
   /** Fresh entries of the active tab; null ⇒ tab vanished mid-gesture (peer delete) → drop. */
   const resolveLiveTab = useCallback(
@@ -184,7 +179,7 @@ export function SketchLineupSpace() {
       const targetId = activeTab.id;
       const targetName = activeTab.name;
       const targetEntries = activeTab.entries;
-      void withLock(() => {
+      runWrite(() => {
         const s = useSnapshotStore.getState();
         const lineups = s.sketch.lineups ?? [];
         if (lineups.length === 0) {
@@ -202,7 +197,7 @@ export function SketchLineupSpace() {
         s.setSketchLineupTabEntries(live.id, build(live.entries));
       });
     },
-    [activeTab.id, activeTab.name, activeTab.entries, withLock],
+    [activeTab.id, activeTab.name, activeTab.entries, runWrite],
   );
 
   const handleToggleEntry = useCallback(
@@ -241,9 +236,9 @@ export function SketchLineupSpace() {
       const newTab: SketchLineupTab = { id: crypto.randomUUID(), name, entries: [] };
       log.info('handleCreateTab', 'creating tab', { tabId: newTab.id, total: effectiveTabs.length + 1 });
       let created = false;
-      void withLock(() => {
+      runWrite(() => {
         // Re-check the cap on the FRESH store (a peer may have filled it while the modal was
-        // open / during the acquire round-trip) — the ＋ disable is render-time only.
+        // open) — the ＋ disable is render-time only.
         const s = useSnapshotStore.getState();
         const lineups = s.sketch.lineups ?? [];
         const effectiveCount = lineups.length === 0 ? 1 : lineups.length; // virtual counts as 1
@@ -255,17 +250,17 @@ export function SketchLineupSpace() {
         // Materializing create keeps the on-screen virtual tab as tab 1 (payload [virtual, new]).
         s.addSketchLineupTab(newTab, virtualTab);
         created = true;
-      }).then((ok) => {
-        if (ok && created) setActiveTabId(newTab.id);
       });
+      // `runWrite` mutates synchronously → `created` is settled here.
+      if (created) setActiveTabId(newTab.id);
     },
-    [withLock, virtualTab, effectiveTabs.length],
+    [runWrite, virtualTab, effectiveTabs.length],
   );
 
   const handleRenameTab = useCallback(
     (tabId: string, name: string) => {
       log.info('handleRenameTab', 'renaming tab', { tabId });
-      void withLock(() => {
+      runWrite(() => {
         const s = useSnapshotStore.getState();
         if ((s.sketch.lineups ?? []).length === 0) {
           // Renaming the VIRTUAL tab materializes it (spec §2.3 — rename is a real write).
@@ -275,7 +270,7 @@ export function SketchLineupSpace() {
         s.renameSketchLineupTab(tabId, name);
       });
     },
-    [withLock, virtualTab.id, activeTab.entries],
+    [runWrite, virtualTab.id, activeTab.entries],
   );
 
   const handleDeleteTab = useCallback(
@@ -293,11 +288,11 @@ export function SketchLineupSpace() {
         if (neighbor) setActiveTabId(neighbor.id);
       }
       log.info('handleDeleteTab', 'deleting tab', { tabId });
-      void withLock(() => {
+      runWrite(() => {
         useSnapshotStore.getState().removeSketchLineupTab(tabId);
       });
     },
-    [withLock, resolveLiveTab, activeTabId, effectiveTabs],
+    [runWrite, resolveLiveTab, activeTabId, effectiveTabs],
   );
 
   // ── Browse handlers — NO lock (browse ≠ lock) ───────────────────────────────────────────────
@@ -329,7 +324,7 @@ export function SketchLineupSpace() {
         checkedRefs={checkedRefs}
         expandedGroups={expandedGroups}
         disabled={writeDisabled}
-        lockHolderName={holderName}
+        lockHolderName={null}
         canCreateTab={canCreateTab}
         grantedKinds={grantedKinds}
         onToggleEntry={handleToggleEntry}

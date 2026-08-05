@@ -31,11 +31,10 @@ export const SCENE_OWNED_KEYS = [
 ] as const;
 
 /** RETOUCH pipeline (rtype 10, step 3) — the playable layers + animations.
- *  NOTE `shapes`: a PLAYABLE layer → owned by RETOUCH here, yet still editable from the
- *  SCENE space canvas/sidebar. The scene space therefore runs a DUAL-SESSION (ADR-044
- *  addendum 2026-08-05): shape interactions acquire a second per-spread rtype-10 held
- *  session so shape edits persist through THIS partition — never via the rtype-6 merge
- *  (which excludes `shapes` and silently drops them). Shape reorder stays Objects-only. */
+ *  NOTE `shapes`: a PLAYABLE layer → owned by RETOUCH (sole writer). Editable ONLY from
+ *  the OBJECTS space (rtype 10 held-session). SCENE space no longer renders/edits shapes
+ *  (ADR-044 addendum 2026-08-05 rtype 8 retire). The rtype-6 merge excludes `shapes`,
+ *  preventing any SCENE-space shape mutation from persisting. */
 export const RETOUCH_OWNED_KEYS = [
   'images',
   'textboxes',

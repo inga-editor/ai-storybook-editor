@@ -1,18 +1,17 @@
 // props-creative-space.tsx - Root container for props creative space
 // Manages selected prop key and active content tab; delegates to sidebar + content area.
 //
-// Collab (ADR-044 §Revision 2026-07-10 — per-entity HELD session): a USER click on a prop acquires
-// ONE per-entity lock (step 2 / rtype 4, resource_id = prop key). Every entity write (name / category
-// / type / variant add·edit·delete / sound add·edit·delete / generate·edit image) mutates the snapshot
-// node and is persisted as the WHOLE entity node on release / switch — replacing the former
-// per-mutation fire-and-forget saves. Mount does NOT auto-acquire (lock-on-click); the first prop is
-// shown READ-ONLY until clicked. `useContentSyncSession` reconciles the realtime winner's node.
+// Collab (ADR-044 addendum 2 — LOCKLESS entity save): entity domains no longer acquire a per-entity
+// lock. The per-item save session binds DIRECTLY to the SELECTED prop (step 2 / rtype 4); the engine
+// begins it synchronously as 'held' (no acquire, no peer-lock veil, last-write-wins). Every entity
+// write (name / category / type / variant add·edit·delete / sound add·edit·delete / generate·edit
+// image) mutates the snapshot node and is persisted as the WHOLE entity node on switch / leave /
+// saveNow. `useContentSyncSession` reconciles the realtime winner's node.
 
 import { useState, useMemo, useCallback } from 'react';
-import { toast } from 'sonner';
 import { PropsSidebar } from './props-sidebar';
 import { PropsContentArea } from './props-content-area';
-import { usePropKeys, useSnapshotActions } from '@/stores/snapshot-store/selectors';
+import { usePropKeys } from '@/stores/snapshot-store/selectors';
 import { DEFAULT_CONTENT_TAB } from '@/constants/prop-constants';
 import type { ContentTab } from '@/types/prop-types';
 import { createLogger } from '@/utils/logger';
@@ -22,12 +21,7 @@ import { useContentSyncSession } from '@/features/editor/hooks/use-content-sync-
 import { useSaveSession } from '@/features/editor/hooks/use-save-session';
 import { deriveSaveTarget } from '@/stores/save-session-store';
 import { useRegisterEditCommit } from '@/stores/edit-session-status-store';
-import {
-  useIsLockedByOther,
-  useLockHolderName,
-  type LockTarget,
-} from '@/stores/resource-lock-store';
-import { LockedByOtherOverlay } from '@/features/editor/components/shared-components/sketch-locked-by-other-overlay';
+import { type LockTarget } from '@/stores/resource-lock-store';
 
 const log = createLogger('Editor', 'PropsCreativeSpace');
 
@@ -37,13 +31,10 @@ export function PropsCreativeSpace() {
   useContentSyncSession(bookId);
 
   const propKeys = usePropKeys();
-  const actions = useSnapshotActions();
   const [userSelectedPropKey, setUserSelectedPropKey] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<ContentTab>(DEFAULT_CONTENT_TAB);
-  // LOCK-ON-CLICK choke point: the prop the user CLICKED to edit → held lock target. null until click.
-  const [lockedKey, setLockedKey] = useState<string | null>(null);
 
-  // Derive DISPLAY prop: user choice if valid, else first available (read-only until locked).
+  // Derive DISPLAY prop: user choice if valid, else first available.
   const selectedPropKey = useMemo(() => {
     if (userSelectedPropKey && propKeys.includes(userSelectedPropKey)) {
       return userSelectedPropKey;
@@ -51,77 +42,36 @@ export function PropsCreativeSpace() {
     return propKeys[0] ?? null;
   }, [propKeys, userSelectedPropKey]);
 
-  // ── Per-entity held session ──────────────────────────────────────────────────────────────────
+  // ── Per-entity save session (lockless) — binds to the SELECTED prop; begins 'held' synchronously.
   const lockTarget = useMemo<LockTarget | null>(
-    () => (lockedKey ? { step: 2, resource_type: 4, resource_id: lockedKey, locale: null } : null),
-    [lockedKey],
-  );
-
-  // getNode + buildPayload now live in the `illustration-entity` policy (save-policies) — the engine
-  // reads the live node + builds the whole-node edit payload from the derived id.
-
-  const handleLockBlocked = useCallback((holder: string) => {
-    log.info('handleLockBlocked', 'prop held by another editor', { hasHolder: !!holder });
-    toast.info('Another editor is editing this prop — your change was not saved.');
-    setLockedKey(null);
-  }, []);
-
-  const handleLockLost = useCallback(
-    (baseline: unknown) => {
-      log.warn('handleLockLost', 'prop lock lost — revert + deselect', { hasBaseline: baseline != null });
-      if (lockedKey && baseline != null) {
-        actions.revertEntityNode('prop', lockedKey, baseline);
-      }
-      setLockedKey(null);
-      toast.warning('You lost the edit lock for this prop — your changes were reverted.');
-    },
-    [lockedKey, actions],
-  );
-
-  // ── Undo/redo nexus (ADR-045) — the engine now bridges begin/endSession itself; no space wiring.
-  const { status: lockStatus } = useSaveSession({
-    ...deriveSaveTarget(lockTarget),
-    onBlocked: handleLockBlocked,
-    onLost: handleLockLost,
-  });
-
-  const entityEditable = lockStatus === 'held' && lockedKey === selectedPropKey && lockedKey !== null;
-
-  // Peer-lock (advisory) for the DISPLAYED prop: another editor holds its held lock → veil the content
-  // + suppress the acquire-on-click. resource_id '' when nothing is shown (never matches → free).
-  const displayedLockTarget = useMemo<LockTarget>(
-    () => ({ step: 2, resource_type: 4, resource_id: selectedPropKey ?? '', locale: null }),
+    () =>
+      selectedPropKey
+        ? { step: 2, resource_type: 4, resource_id: selectedPropKey, locale: null }
+        : null,
     [selectedPropKey],
   );
-  const displayedLockedByOther = useIsLockedByOther(displayedLockTarget);
-  const displayedHolder = useLockHolderName(displayedLockTarget);
 
-  // Commit-now for the header "Unsaved" button: release the held lock → save + unlock (keep display).
+  // Undo/redo nexus (ADR-045) — the engine bridges begin/endSession itself. onBlocked/onLost dropped:
+  // a lockless session can't be blocked or lost.
+  const { status: sessionStatus, saveNow } = useSaveSession(deriveSaveTarget(lockTarget));
+
+  const entityEditable = sessionStatus === 'held' && selectedPropKey !== null;
+
+  // Commit-now for the header "Unsaved" button: saveNow persists the entity node + rebases in place.
   const commitEntity = useCallback(() => {
-    log.info('commitEntity', 'commit held prop session (save + unlock)');
-    setLockedKey(null);
-  }, []);
+    log.info('commitEntity', 'commit entity session (saveNow)');
+    void saveNow();
+  }, [saveNow]);
   useRegisterEditCommit(commitEntity);
 
-  // USER browse (sidebar row click / arrow-nav) → DISPLAY only, no lock (browse ≠ lock — mirrors
-  // spreads `handleSpreadSelect`, ADR-044 §Revision 2026-07-11). Leaving a HELD prop commits it via
-  // the `prev && prev !== key` guard; the newly shown prop stays READ-ONLY until a real interaction.
+  // USER select (sidebar row click / arrow-nav / detail interaction) → set DISPLAY = session target.
   const handlePropSelect = useCallback((key: string) => {
-    log.info('handlePropSelect', 'user browsed prop — display only, no lock', { key });
+    log.info('handlePropSelect', 'user selected prop', { key });
     setUserSelectedPropKey(key);
-    setLockedKey((prev) => (prev && prev !== key ? null : prev));
-  }, []);
-
-  // USER interact (name edit / sidebar-detail / content-area click) → acquire this prop's held lock.
-  const handlePropInteract = useCallback((key: string) => {
-    log.info('handlePropInteract', 'user interacted — acquire held lock', { key });
-    setUserSelectedPropKey(key);
-    setLockedKey(key);
   }, []);
 
   const handleEntityDeleted = useCallback((key: string) => {
-    log.info('handleEntityDeleted', 'held prop deleted — release lock', { key });
-    setLockedKey((prev) => (prev === key ? null : prev));
+    log.info('handleEntityDeleted', 'prop deleted — clear selection', { key });
     setUserSelectedPropKey((prev) => (prev === key ? null : prev));
   }, []);
 
@@ -130,7 +80,7 @@ export function PropsCreativeSpace() {
     setActiveTab(tab);
   }, []);
 
-  log.debug('render', 'PropsCreativeSpace', { propCount: propKeys.length, lockStatus, entityEditable });
+  log.debug('render', 'PropsCreativeSpace', { propCount: propKeys.length, sessionStatus, entityEditable });
 
   return (
     <div className="flex h-full" role="main" aria-label="Props creative space">
@@ -138,25 +88,15 @@ export function PropsCreativeSpace() {
         propKeys={propKeys}
         selectedPropKey={selectedPropKey}
         onPropSelect={handlePropSelect}
-        onPropInteract={handlePropInteract}
         editable={entityEditable}
         onEntityDeleted={handleEntityDeleted}
       />
-      <div
-        className="relative flex-1 overflow-hidden"
-        // Click anywhere in the content area = intent to edit → acquire the displayed prop's lock
-        // (lock-on-interact). Capture-phase, guarded so holding this prop makes it a no-op.
-        onPointerDownCapture={() => {
-          if (selectedPropKey && !displayedLockedByOther && lockedKey !== selectedPropKey) {
-            handlePropInteract(selectedPropKey);
-          }
-        }}
-      >
-        {/* Edit affordance is global now — the header owns undo/redo + the Unsaved/Saved status
-            (ADR-044/045). The canvas/sidebar grey out via editable=false until the lock is held. */}
+      <div className="relative flex-1 overflow-hidden">
+        {/* Header owns undo/redo + Unsaved/Saved status. No peer-lock veil — entity domains are
+            lockless (owner-only, last-write-wins). */}
         {selectedPropKey ? (
           <PropsContentArea
-            key={lockedKey ?? selectedPropKey}
+            key={selectedPropKey}
             selectedPropKey={selectedPropKey}
             activeTab={activeTab}
             onTabChange={handleTabChange}
@@ -166,12 +106,6 @@ export function PropsCreativeSpace() {
           <div className="flex items-center justify-center h-full">
             <p className="text-muted-foreground">No prop selected</p>
           </div>
-        )}
-        {/* Peer-lock veil: another editor holds the displayed prop. `interactive` → the veil captures
-            pointer events so nothing beneath (download / zoom / version-select / edit / upload) can be
-            clicked through while someone else is editing. */}
-        {displayedLockedByOther && (
-          <LockedByOtherOverlay holderName={displayedHolder} interactive />
         )}
       </div>
     </div>

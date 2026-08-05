@@ -142,14 +142,21 @@ export function useSaveSession(args: UseSaveSessionArgs): UseSaveSessionResult {
   // First-click lock gate (composed from the shared primitive). requestLock resolves through cbRef
   // so the gate's runner identity stays stable; a missing wiring degrades to a warn (action would
   // otherwise queue forever).
+  //
+  // Lockless domains (ADR-044 addendum 2): the session reaches 'held' synchronously in `begin`, so
+  // `runWithLock` degrades to a synchronous run and never actually needs a lock. `requestLock` is a
+  // SILENT no-op here (no "not wired" warn — shared entity/spread components pass wiring that a
+  // lockless space simply doesn't need). `onBlocked`/`onLost` handed to a lockless domain are never
+  // fired (a lock-exempt session can't be blocked or lost), so they're harmless to leave wired.
   const requestLockStable = useCallback((): void => {
+    if (SAVE_POLICIES[domain].locking === 'none') return;
     const requestLock = cbRef.current.requestLock;
     if (requestLock) {
       requestLock();
     } else {
       log.warn('runWithLock', 'requestLock not wired — deferred action will never run', {});
     }
-  }, []);
+  }, [domain]);
 
   const runWithLock = useLockFirstAction({
     isHeld: status === 'held',

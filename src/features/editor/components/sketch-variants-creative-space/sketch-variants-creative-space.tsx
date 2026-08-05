@@ -56,16 +56,12 @@ import {
 } from '@/stores/snapshot-store/slices/sketch-variant-generate-job-slice';
 import { toast } from 'sonner';
 import { useCurrentBookId } from '@/stores/book-store';
-import {
-  useIsLockedByOther,
-  useLockHolderName,
-  type LockTarget,
-} from '@/stores/resource-lock-store';
-import { resolveSketchVariantLockTarget } from '@/stores/snapshot-store/slices/collab-sketch-variant-save-helper';
 import { useCollabPersistSession } from '@/features/editor/hooks/use-collab-persist-session';
 import { useContentSyncSession } from '@/features/editor/hooks/use-content-sync-session';
-import { useVariantEntityLockSession } from './use-variant-entity-lock-session';
-import { LockedByOtherOverlay } from '@/features/editor/components/shared-components/sketch-locked-by-other-overlay';
+import {
+  useVariantEntityLockSession,
+  type ActiveLockEntity,
+} from './use-variant-entity-lock-session';
 import { CANVAS_CONFIRM_DIALOG_Z } from '@/constants/spread-constants';
 import type { BaseKind, SketchEntity, VariantRef } from '@/types/sketch';
 import { KIND_ENTITY_SOURCE } from '@/types/sketch';
@@ -223,55 +219,38 @@ export function SketchVariantsCreativeSpace() {
     [entitiesByKind],
   );
 
-  // ── Per-entity held session (ADR-047) — the whole lock + persist lifecycle lives in this hook. ──
-  const lock = useVariantEntityLockSession();
-
-  // Peer-lock (advisory) for the DISPLAYED entity — veil the content + suppress acquire-on-interact.
-  const displayedLockTarget = useMemo<LockTarget>(
-    () =>
-      selected
-        ? resolveSketchVariantLockTarget(selected.kind, selected.entityKey)
-        : { step: 1, resource_type: 3, resource_id: '', locale: null },
+  // ── Per-entity save session (lockless) — binds to the SELECTED entity; the hook begins it 'held'
+  // synchronously (no acquire). Stable {kind, entityKey} so a variant switch within the SAME entity
+  // does not churn the session. ────────────────────────────────────────────────────────────────
+  const selectedEntity = useMemo<ActiveLockEntity | null>(
+    () => (selected ? { kind: selected.kind, entityKey: selected.entityKey } : null),
     [selected],
   );
-  const displayedLockedByOther = useIsLockedByOther(displayedLockTarget);
-  const displayedHolder = useLockHolderName(displayedLockTarget);
+  const lock = useVariantEntityLockSession(selectedEntity);
 
   // ── Handlers ────────────────────────────────────────────────────────────────────────────────
-  // Browse (display only): switch the shown variant. Leaving a HELD entity commits it (null the
-  // held target → the hook release-saves the OLD node). Same-entity re-select keeps the lock.
-  const handleSelect = useCallback(
-    (ref: VariantRef) => {
-      setSelectedVariant(ref);
-      setActiveTab('raw');
-      // Browsing to a DIFFERENT entity commits the held one (release-saves the OLD node); a
-      // same-entity re-select (another variant of it) keeps the lock. No-op on mount (nothing held).
-      lock.releaseUnlessSame(ref);
-    },
-    [lock],
-  );
+  // Select (display + session target): switch the shown variant. Switching to a DIFFERENT entity
+  // re-targets the session → the OLD entity node release-saves on the switch.
+  const handleSelect = useCallback((ref: VariantRef) => {
+    setSelectedVariant(ref);
+    setActiveTab('raw');
+  }, []);
 
   const handleToggleGroup = useCallback((kind: BaseKind) => {
     setExpandedGroups((prev) => ({ ...prev, [kind]: !prev[kind] }));
   }, []);
 
-  // Interact (edit text): acquire this entity's held lock + open the modal.
-  const handleEditVariant = useCallback(
-    (ref: VariantRef) => {
-      log.info('handleEditVariant', 'interact — acquire entity lock + open text modal', {
-        kind: ref.kind,
-        entityKey: ref.entityKey,
-      });
-      setSelectedVariant(ref);
-      lock.adopt(ref);
-      setEditingVariant(ref);
-    },
-    [lock],
-  );
+  // Edit text: select the entity (→ session target) + open the modal.
+  const handleEditVariant = useCallback((ref: VariantRef) => {
+    log.info('handleEditVariant', 'select entity + open text modal', {
+      kind: ref.kind,
+      entityKey: ref.entityKey,
+    });
+    setSelectedVariant(ref);
+    setEditingVariant(ref);
+  }, []);
 
-  // ✨ Generate: acquire the entity lock (adopt → held session releases on switch/unmount), then run.
-  // Both guards run BEFORE `lock.adopt` — a dropped click must not leave an adopted lock behind
-  // (the slice's own guards are silent defensive nets, so the toasts live here).
+  // ✨ Generate: the entity is already the session target (selected); just run after the guards.
   const doGenerate = useCallback(
     (ref: VariantRef) => {
       const ops = useSnapshotStore.getState().variantSheetGenerateOps;
@@ -306,10 +285,9 @@ export function SketchVariantsCreativeSpace() {
         variantKey: ref.variantKey,
         inFlight,
       });
-      lock.adopt(ref);
       startVariantSheetGenerate(ref);
     },
-    [lock, startVariantSheetGenerate],
+    [startVariantSheetGenerate],
   );
 
   // ✨ entry: variant already has crops → confirm EVERY time (guards pick/edit); empty → straight.
@@ -346,30 +324,27 @@ export function SketchVariantsCreativeSpace() {
     setPendingRegenerate(null);
   }, [pendingRegenerate, doGenerate]);
 
-  // Interact (lock 1/4 crop): acquire the entity lock (sustained peer-lock) + flip the mutex, then
-  // flush EAGERLY — this is the one gesture the release-save provably cannot see (H2; the mutation
-  // lands before the held-session captures its baseline). See `flushEntityNow`.
+  // Pick 1/4 crop: flip the mutex, then flush EAGERLY (crop-pick net — the pick is high value; the
+  // release-save would also catch it since the session is already held). See `flushEntityNow`.
   const handleSelectCrop = useCallback(
     (cropIndex: number) => {
       if (!selected) return;
-      log.debug('handleSelectCrop', 'interact — acquire entity lock + pick crop', { cropIndex });
-      lock.adopt(selected);
+      log.debug('handleSelectCrop', 'pick crop + flush', { cropIndex });
       selectSketchVariantCrop(selected.kind, selected.entityKey, selected.variantKey, cropIndex);
       lock.flushEntityNow(selected);
     },
     [selected, selectSketchVariantCrop, lock],
   );
 
-  // Interact (edit ONE crop cell): acquire the entity lock + open the edit-image modal on that cell.
+  // Edit ONE crop cell: open the edit-image modal on that cell (entity already the session target).
   const handleEditCrop = useCallback(
     (cropIndex: number) => {
       if (!selected) return;
-      log.info('handleEditCrop', 'interact — acquire entity lock + open image modal (crop scope)', {
+      log.info('handleEditCrop', 'open image modal (crop scope)', {
         kind: selected.kind,
         entityKey: selected.entityKey,
         cropIndex,
       });
-      lock.adopt(selected);
       setEditImageTarget({
         kind: selected.kind,
         entityKey: selected.entityKey,
@@ -378,21 +353,19 @@ export function SketchVariantsCreativeSpace() {
         cropIndex,
       });
     },
-    [selected, lock],
+    [selected],
   );
 
-  // Interact (extract from ONE crop cell): acquire the entity lock + open the extract-image modal on
-  // that cell. onCreateImages appends a new version of the cell → persists via the held session's
-  // release-save (same path as handleEditCrop; the cell's is_selected pick is untouched).
+  // Extract from ONE crop cell: open the extract-image modal on that cell. onCreateImages appends a
+  // new version of the cell → persists via the held session's release-save.
   const handleExtractCrop = useCallback(
     (cropIndex: number) => {
       if (!selected) return;
-      log.info('handleExtractCrop', 'interact — acquire entity lock + open extract modal (crop scope)', {
+      log.info('handleExtractCrop', 'open extract modal (crop scope)', {
         kind: selected.kind,
         entityKey: selected.entityKey,
         cropIndex,
       });
-      lock.adopt(selected);
       setExtractImageTarget({
         kind: selected.kind,
         entityKey: selected.entityKey,
@@ -400,37 +373,25 @@ export function SketchVariantsCreativeSpace() {
         cropIndex,
       });
     },
-    [selected, lock],
+    [selected],
   );
 
-  // Interact (edit the RAW 21:9 sheet): acquire the entity lock + open the edit-image modal on the
-  // sheet. Committing an edit AUTO re-cuts all 4 cells (the modal chains recropVariantSheet) — no
-  // confirm, per design §3.5 (mirrors the base space).
+  // Edit the RAW 21:9 sheet: open the edit-image modal on the sheet. Committing an edit AUTO re-cuts
+  // all 4 cells (the modal chains recropVariantSheet) — no confirm, per design §3.5.
   const handleEditRaw = useCallback(() => {
     if (!selected) return;
-    log.info('handleEditRaw', 'interact — acquire entity lock + open image modal (raw scope)', {
+    log.info('handleEditRaw', 'open image modal (raw scope)', {
       kind: selected.kind,
       entityKey: selected.entityKey,
       variantKey: selected.variantKey,
     });
-    lock.adopt(selected);
     setEditImageTarget({
       kind: selected.kind,
       entityKey: selected.entityKey,
       variantKey: selected.variantKey,
       scope: 'raw',
     });
-  }, [selected, lock]);
-
-  // Content-area intent to edit → acquire the displayed entity's SUSTAINED lock (peer-lock visibility +
-  // header "Unsaved") unless a peer holds it. Under batch-at-release the hold is ALSO the save path —
-  // the release-cleanup diffs against the acquire-time baseline — so acquiring on the FIRST interaction
-  // is what makes the edit persistable at all. Guarded → setState no-op once we already hold it.
-  const handleContentInteract = useCallback(() => {
-    if (selected && !displayedLockedByOther && !lock.isAdopted(selected)) {
-      lock.adopt(selected);
-    }
-  }, [selected, displayedLockedByOther, lock]);
+  }, [selected]);
 
   // === Phase 04: opt-in saveResource for the Edit path (Raw sheet | one positional crop) ===
   // Anchor = the variant node under its entity: raw → `key:raw_sheet` (char/prop wrap the sheet);
@@ -471,10 +432,7 @@ export function SketchVariantsCreativeSpace() {
         onGenerate={handleGenerate}
       />
 
-      <div
-        className="relative flex flex-1 min-w-[480px] overflow-hidden"
-        onPointerDownCapture={handleContentInteract}
-      >
+      <div className="relative flex flex-1 min-w-[480px] overflow-hidden">
         {selected ? (
           <VariantSheetContentArea
             selectedVariant={selected}
@@ -491,11 +449,6 @@ export function SketchVariantsCreativeSpace() {
           />
         ) : (
           <EmptyState />
-        )}
-        {/* Peer-lock veil: another editor holds the displayed entity. `interactive` → the veil
-            CAPTURES pointer events so nothing beneath can be clicked while someone else is editing. */}
-        {selected && displayedLockedByOther && (
-          <LockedByOtherOverlay holderName={displayedHolder} interactive />
         )}
       </div>
 

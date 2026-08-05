@@ -276,12 +276,12 @@ export const createSketchStageGenerateJobSlice: StateCreator<
       const saveOutcome = await useSaveSessionStore.getState().ensureSaved('sketch-stage', stageKey);
       if (opStale(target)) return;
       if (saveOutcome !== 'saved' && saveOutcome !== 'clean') {
-        log.warn('runVariantGenerate', 'save-before-generate not persisted — abort (stale DB / peer lock)', {
+        log.warn('runVariantGenerate', 'save-before-generate not persisted — abort (degraded / stale DB)', {
           stageKey,
           variantKey,
           outcome: saveOutcome,
         });
-        markOpError('Could not save before generating — the stage may be locked by another editor.');
+        markOpError('Could not save before generating — please try again.');
         return;
       }
 

@@ -50,22 +50,15 @@ export function SpreadsSidebarListItem({
 }: SpreadsSidebarListItemProps) {
   const isEditing = editingId === entry.id;
   const isPage = entry.type === "page";
-  // `shapes` is a RETOUCH-owned key — its ordering moved to the Objects space (ADR-044). Shape rows
-  // are display-only here: the reorder control shows greyed/disabled (never hidden).
-  const isShape = entry.type === "shape";
   // Textbox title is auto-derived, page backgrounds are fixed — renaming disabled
   const isRenameable = entry.type !== "raw_textbox" && !isPage;
   // Drag-reorder is an in-spread SCENE edit → only for raw_image/raw_textbox while the lock is held.
-  const isDraggable = !isPage && !isShape && isEditable;
-  // The reorder handle is shown (never hidden) for non-page rows, but greyed/disabled when it is not
-  // an actionable reorder (shape row, or spread not held).
+  const isDraggable = !isPage && isEditable;
+  // The reorder handle is shown (never hidden) for non-page rows, but greyed/disabled when the
+  // spread is not held.
   const showGrip = !isPage;
-  const gripDisabled = isShape || !isEditable;
-  const gripTitle = isShape
-    ? "Shape order is managed in the Objects space"
-    : !isEditable
-      ? "Click this spread to edit"
-      : "Drag to reorder";
+  const gripDisabled = !isEditable;
+  const gripTitle = !isEditable ? "Click this spread to edit" : "Drag to reorder";
   const config = ELEMENT_TYPE_CONFIG[entry.type];
   const Icon = config.icon;
 
@@ -91,7 +84,7 @@ export function SpreadsSidebarListItem({
       role="option"
       aria-selected={isSelected}
     >
-      {/* Drag handle (hidden only for pages). Greyed/disabled for shape rows + when not held. */}
+      {/* Drag handle (hidden only for pages). Greyed/disabled when the spread is not held. */}
       {showGrip && (
         <span title={gripTitle} className="flex-shrink-0 inline-flex">
           <GripVertical

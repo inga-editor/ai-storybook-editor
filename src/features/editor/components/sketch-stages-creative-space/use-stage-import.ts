@@ -2,14 +2,18 @@
 // of the root (500-line rule). parse → block on errors → confirm when stages exist (REPLACE loses
 // every generated image — locked decision, no merge-by-key) → commit.
 //
-// Commit = optimistic local REPLACE + gateway collection-scope save (rtype 5, sentinel
-// resource_id + collection 'stages') — NOT the held session. A stage peer-held → whole-batch 409
-// + holder toast (locked decision: accept + retry, no FE pre-check guard).
+// Commit = optimistic local REPLACE + gateway collection-scope save (rtype 14 `entity_collection`,
+// resource_id === collection 'stages') — LOCK-EXEMPT (ADR-044 addendum 2, 2026-08-05): no acquire /
+// release, authz gated on `access_rights.steps.sketch.resources.stages`. Local applies FIRST, then
+// the whole-array save reads the fresh array (`saveEntityCollection` → engine one-shot / solo flush).
 
 import { useCallback, useState } from 'react';
 import { toast } from 'sonner';
-import type { LockTarget } from '@/stores/resource-lock-store';
-import { runLockedCollectionSave } from '@/features/editor/utils/structural-lock-collection-save';
+import {
+  saveEntityCollection,
+  resolveEntityCollectionLockTarget,
+} from '@/stores/snapshot-store/slices/collab-sketch-base-entities-save-helper';
+import { toastSketchSaveOutcome } from '@/stores/snapshot-store/slices/sketch-save-outcome-toast';
 import { useSnapshotActions, useIsAnySketchGenerating } from '@/stores/snapshot-store/selectors';
 import { createLogger } from '@/utils/logger';
 import { importStagesFromFile, type StageImportParse } from './import/parse-stages';
@@ -42,21 +46,17 @@ export function useStageImport({ hasExistingStages, onReplaced }: UseStageImport
 
   const commitImport = useCallback(
     async (parse: StageImportParse) => {
-      const target: LockTarget = { step: 1, resource_type: 5, resource_id: 'stages', locale: null };
-      const outcome = await runLockedCollectionSave(
-        target,
-        {
-          action_type: 3, // edit (replace-all)
-          patch: parse.stages,
-          collection: 'stages',
-          target_ref: { count: parse.stages.length },
-        },
-        () => {
-          setSketchStages(parse.stages);
-          onReplaced();
-        },
-      );
-      if (outcome === 'blocked') return; // nothing applied; holder toast already shown
+      // Optimistic local REPLACE FIRST — the whole-array rtype-14 save then reads the fresh array
+      // (`saveEntityCollection` ignores its input, reading `sketch.stages` via the policy registry).
+      setSketchStages(parse.stages);
+      onReplaced();
+      const outcome = await saveEntityCollection('stages');
+      if (outcome === 'blocked') {
+        // Degraded collection (ADR-047 write-block) — no lock holder, generic notice. Local replace
+        // is KEPT (save-lost semantics — a refetch reconciles).
+        toastSketchSaveOutcome('blocked', resolveEntityCollectionLockTarget('stages'));
+        return;
+      }
       if (parse.issues.warnings.length > 0) {
         toast.warning(`${parse.issues.warnings.length} import warning(s) — see console`);
         for (const w of parse.issues.warnings) log.warn('commitImport', 'warning', { message: w });

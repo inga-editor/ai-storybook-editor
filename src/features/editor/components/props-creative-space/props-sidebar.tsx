@@ -37,12 +37,10 @@ const log = createLogger("Editor", "PropsSidebar");
 interface PropsSidebarProps {
   propKeys: string[];
   selectedPropKey: string | null;
-  /** USER browse (row click / arrow-nav) → display only, no lock (browse ≠ lock). */
+  /** USER select (row click / arrow-nav) → set display = session target (lockless entity save). */
   onPropSelect: (key: string) => void;
-  /** USER interact (name edit / sidebar-detail click) → acquire this entity's held lock. */
-  onPropInteract: (key: string) => void;
-  /** Collab held-session gate (ADR-044): this editor holds the SELECTED prop's lock. Only the
-   *  selected+held item may be renamed/deleted or have its category/type edited. */
+  /** Collab save-session gate (ADR-044 addendum 2, lockless): only the SELECTED item may be
+   *  renamed/deleted or have its category/type edited (its session is held). */
   editable: boolean;
   /** Called after deleting the held prop so the space can drop the lock (→ release-save). */
   onEntityDeleted: (key: string) => void;
@@ -74,7 +72,6 @@ export function PropsSidebar({
   propKeys,
   selectedPropKey,
   onPropSelect,
-  onPropInteract,
   editable,
   onEntityDeleted,
 }: PropsSidebarProps) {
@@ -434,7 +431,6 @@ export function PropsSidebar({
               editable={editable && key === selectedPropKey}
               onToggle={() => handleToggle(key)}
               onSelect={() => onPropSelect(key)}
-              onInteract={() => onPropInteract(key)}
               onStartRename={() => setEditingNameKey(key)}
               onFinishRename={(name) => handleRenameProp(key, name)}
               onDelete={() => handleDeleteProp(key)}

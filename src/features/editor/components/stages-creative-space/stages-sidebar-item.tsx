@@ -1,7 +1,7 @@
 // stages-sidebar-item.tsx - Single accordion item in stages sidebar
 // Shows stage name (inline rename), location selector, and drag handle.
 
-import { useState, useMemo } from "react";
+import { useState } from "react";
 import {
   GripVertical,
   ChevronDown,
@@ -11,7 +11,6 @@ import {
   Copy,
   Check,
   X,
-  Lock,
 } from "lucide-react";
 import {
   Collapsible,
@@ -40,11 +39,6 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Separator } from "@/components/ui/separator";
 import { useStageByKey, useSnapshotActions } from "@/stores/snapshot-store/selectors";
-import {
-  useIsLockedByOther,
-  useLockHolderName,
-  type LockTarget,
-} from "@/stores/resource-lock-store";
 import { useLocations, useLocationsLoading } from "@/stores/location-store";
 import { cn } from "@/utils/utils";
 import { createLogger } from "@/utils/logger";
@@ -57,14 +51,12 @@ interface StagesSidebarItemProps {
   isSelected: boolean;
   isExpanded: boolean;
   isEditingName: boolean;
-  /** Collab held-session gate (ADR-044): this item is the SELECTED+held stage. When false the
-   *  location edit + rename/delete affordances are blocked + disabled. Expand/select + drag stay
-   *  enabled (select is the lock-acquire trigger; reorder is out of scope). */
+  /** Collab save-session gate (ADR-044 addendum 2, lockless): this item is the SELECTED stage (its
+   *  session is held). When false the location edit + rename/delete affordances are disabled.
+   *  Expand/select + drag stay enabled (select re-targets the session). */
   editable: boolean;
   onToggle: () => void;
   onSelect: () => void;
-  /** USER interact (rename / click in the expanded detail) → acquire this entity's held lock. */
-  onInteract: () => void;
   onStartRename: () => void;
   onFinishRename: (name: string) => void;
   onDelete: () => void;
@@ -82,7 +74,6 @@ export function StagesSidebarItem({
   editable,
   onToggle,
   onSelect,
-  onInteract,
   onStartRename,
   onFinishRename,
   onDelete,
@@ -98,23 +89,10 @@ export function StagesSidebarItem({
   const [editValue, setEditValue] = useState(stage?.name ?? "");
   const [isDragging, setIsDragging] = useState(false);
 
-  // Peer-lock (advisory): another editor holding THIS stage's held lock (step 2 / rtype 5) → show a
-  // 🔒 holder badge + disable the acquire seams (rename / detail-click). Browsing stays allowed. The
-  // acquire 409 remains the real authority; this mirrors the realtime registry for a live grey-out.
-  const lockTarget = useMemo<LockTarget>(
-    () => ({ step: 2, resource_type: 5, resource_id: stageKey, locale: null }),
-    [stageKey]
-  );
-  const lockedByOther = useIsLockedByOther(lockTarget);
-  const holderName = useLockHolderName(lockTarget);
-  const lockTooltip = `${holderName ?? "another editor"} is editing`;
-
-  // Sync editValue when entering rename mode
-  // Clicking the pencil is an edit-intent gesture → acquire the lock (lock-on-interact). The rename
-  // COMMIT stays gated on `editable` in the parent (held by the time the user types + confirms).
+  // Sync editValue when entering rename mode. The rename COMMIT is gated on `editable` in the parent
+  // (true whenever this row is the selected item — its session is held).
   function handleStartRename(e: React.MouseEvent) {
     e.stopPropagation();
-    onInteract();
     setEditValue(stage?.name ?? "");
     onStartRename();
   }
@@ -225,29 +203,13 @@ export function StagesSidebarItem({
               <span className="text-xs text-muted-foreground">@{stageKey}</span>
             </div>
 
-            {/* Locked-by-other badge — always visible (advisory), tooltip names the holder */}
-            {lockedByOther && (
-              <span
-                className="mt-0.5 shrink-0 flex items-center text-muted-foreground"
-                title={lockTooltip}
-                onClick={(e) => e.stopPropagation()}
-              >
-                <Lock className="h-3.5 w-3.5" aria-label={lockTooltip} />
-              </span>
-            )}
-
-            {/* Rename button — visible on hover; disabled + greyed when another editor holds this stage */}
+            {/* Rename button — visible on hover */}
             {!isEditingName && (
               <Button
                 variant="ghost"
                 size="icon"
-                className={cn(
-                  "mt-0.5 h-5 w-5 transition-opacity shrink-0",
-                  lockedByOther ? "opacity-40" : "opacity-0 group-hover:opacity-100"
-                )}
+                className="mt-0.5 h-5 w-5 transition-opacity shrink-0 opacity-0 group-hover:opacity-100"
                 onClick={handleStartRename}
-                disabled={lockedByOther}
-                title={lockedByOther ? lockTooltip : undefined}
                 tabIndex={-1}
                 aria-label="Edit name"
               >
@@ -258,10 +220,7 @@ export function StagesSidebarItem({
         </CollapsibleTrigger>
 
         <CollapsibleContent>
-          {/* Clicking anywhere in the expanded detail (location fields) = intent to edit → acquire
-              this entity's lock (lock-on-interact). Capture-phase; fields stay disabled until the
-              lock is held. */}
-          <div className="px-3 pb-3 space-y-3" onPointerDownCapture={lockedByOther ? undefined : onInteract}>
+          <div className="px-3 pb-3 space-y-3">
             <Separator />
 
             <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">

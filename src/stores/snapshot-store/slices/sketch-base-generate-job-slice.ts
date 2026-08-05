@@ -37,9 +37,13 @@ import type { ImageApiFailure } from '@/apis/image-api-client';
 // Persist the WHOLE base.{kind}_sheet node (rtype 11) via the engine's `ensureSaved` seam
 // (unified-item-save phase 3 — the engine owns the solo/collab fork + lock lifecycle + rebase).
 import { flushSketchBaseSheetUnderLock } from './collab-sketch-base-sheet-save-helper';
-// Grain B (rtype 3/4): a crops replacement on the LOCKED style re-clones every entity's base
-// variant (sketch-slice cloneLockedStyleCropsToBaseVariants) → those entity nodes flush here too.
-import { flushSketchEntityUnderLock } from './collab-sketch-variant-save-helper';
+// Grain B (rtype 14): a crops replacement on the LOCKED style re-clones every entity's base variant
+// (sketch-slice cloneLockedStyleCropsToBaseVariants) → the WHOLE entity collection is persisted in ONE
+// column-root save (base space "save 1 cục", ADR-044 addendum 2) instead of N per-entity writes.
+import {
+  saveEntityCollection,
+  BASE_KIND_TO_COLLECTION,
+} from './collab-sketch-base-entities-save-helper';
 import { buildImageVersionSaveResource } from '@/utils/save-resource-path';
 import { toast } from 'sonner';
 import { createLogger } from '@/utils/logger';
@@ -130,17 +134,14 @@ export const createSketchBaseGenerateJobSlice: StateCreator<
   // Persist the RESULT of a generate/recrop (raw + crops landed in the store). ⚡ unified-item-save
   // phase 3: the solo/collab fork is GONE — the flush seams delegate to the engine's `ensureSaved`
   // (held → save + rebase; browsed-away → one-shot acquire→save→release; solo → whole-snapshot flush).
-  // Background persist — SILENT (no toast). Grain A = the whole SHEET node (rtype 11). Grain B = each
-  // entity's base-variant clone (rtype 3/4), refreshed only when the LOCKED style's crops landed —
-  // `cropsLanded` gates the failed/cancelled paths (clones unchanged → no N-entity writes).
-  // ⚠️ SOLO cost: each seam's solo branch is a whole-snapshot flush, so grain B loops N flushes in
-  // solo — acceptable (solo base generate is rare — space unmounted; flush is idempotent).
+  // Background persist — SILENT (no toast). Grain A = the whole SHEET node (rtype 11). Grain B = the
+  // WHOLE entity collection (rtype 14), refreshed only when the LOCKED style's crops landed (its
+  // clone re-write touched the entities) — `cropsLanded` gates the failed/cancelled paths (clones
+  // unchanged → no collection write). ONE column-root save replaces the old per-entity N-write loop.
   async function persistBaseSheet(kind: BaseKind, styleIndex: number, cropsLanded: boolean): Promise<void> {
     await flushSketchBaseSheetUnderLock(kind);
     if (cropsLanded && sheetOf(get().sketch.base, kind).styles[styleIndex]?.is_selected) {
-      for (const e of sketchEntitiesOfKind(get().sketch, kind)) {
-        await flushSketchEntityUnderLock(kind, e.key);
-      }
+      await saveEntityCollection(BASE_KIND_TO_COLLECTION[kind]);
     }
   }
 

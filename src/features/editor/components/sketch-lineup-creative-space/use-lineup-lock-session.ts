@@ -1,39 +1,29 @@
-// use-lineup-lock-session.ts — owns holding + persisting the `sketch.lineups[]` node in the
-// Sketch Lineup creative space (rtype 12 — ADR-043 §Mở rộng 2026-07-25). ONE grain: the WHOLE
-// tabs array (one lock covers every tab), saved collection-scope column-root.
+// use-lineup-lock-session.ts — owns persisting the `sketch.lineups[]` node in the Sketch Lineup
+// creative space (rtype 12 — ADR-043 §Mở rộng 2026-07-25). ONE grain: the WHOLE tabs array, saved
+// collection-scope column-root.
 //
-// LOCK-ON-INTERACT (browse ≠ lock): `engaged` starts false and is flipped ONLY by the first WRITE
-// gesture routed through `withLock` (check/uncheck, tab create/rename/delete, cleanup) — never by
-// mount / tab switching / zoom. `withLock` AWAITS acquire BEFORE mutating (spec §5.2 — 409 means
-// the mutation is CANCELLED, not applied optimistically).
+// LOCKLESS (ADR-044 addendum 2): entity domains no longer acquire a lock. The save session binds to
+// the rtype-12 grain ALWAYS and the engine begins it synchronously as 'held' — no acquire, no
+// blocked toast, last-write-wins. Writes call `runWrite` DIRECTLY (mutate → flush); there is no
+// acquire round-trip and no `withLock` gate. The session stays mounted purely for save-on-leave +
+// auto-save + the header status.
 //
-// FLUSH-AFTER-EVERY-MUTATE (plan phase-03 Insight #3): the held-session captures its baseline in
-// an effect AFTER acquire's round-trip, so a release-time dirty-diff could see the first mutation
-// already inside the baseline → silently skipped. The node is tiny (tab config), so every
-// successful `withLock` also runs a baseline-independent `flushSketchLineupsUnderLock` — the
-// held-session stays as the release-save safety net + header status driver.
+// FLUSH-AFTER-EVERY-MUTATE: the node is tiny (tab config), so every successful `runWrite` also runs
+// a baseline-independent `flushSketchLineupsUnderLock` (eager persist); the held session remains the
+// release-save safety net + header status driver.
 //
 // TEARDOWN ORDER (memory *held-session teardown-order*): the SPACE must declare
 // useCollabPersistSession + useContentSyncSession BEFORE this hook.
 //
-// SOLO (`collabPersist=false`): `withLock` just runs the mutation — setters mark sync.isDirty and
-// the global whole-doc autosave persists (never autoSaveSnapshot from the space).
+// SOLO (`collabPersist=false`): the setters mark sync.isDirty and the global whole-doc autosave
+// persists; the flush is a best-effort no-op.
 
-import { useCallback, useMemo, useState } from 'react';
-import { toast } from 'sonner';
-import {
-  useResourceLockStore,
-  keyOf,
-  type LockTarget,
-  type SessionStatus,
-} from '@/stores/resource-lock-store';
+import { useCallback, useMemo } from 'react';
 import {
   LINEUP_LOCK_TARGET,
   flushSketchLineupsUnderLock,
 } from '@/stores/snapshot-store/slices/collab-sketch-lineups-save-helper';
 import { toastSketchSaveOutcome } from '@/stores/snapshot-store/slices/sketch-save-outcome-toast';
-import { toastLockedByOther } from '@/utils/collab-save-toasts';
-import { resolveLockHolderName } from '@/stores/snapshot-store/slices/collab-image-save-helper';
 import { useRegisterEditCommit } from '@/stores/edit-session-status-store';
 import { useSaveSession } from '@/features/editor/hooks/use-save-session';
 import { deriveSaveTarget } from '@/stores/save-session-store';
@@ -42,97 +32,36 @@ import { createLogger } from '@/utils/logger';
 const log = createLogger('Editor', 'useLineupLockSession');
 
 export interface UseLineupLockSessionResult {
-  /**
-   * Run a WRITE mutation under the lineup lock. Solo → mutate immediately. Collab → acquire
-   * first (already-held = skip); 409 → toast + the mutation is DROPPED (`false`). On success the
-   * fresh tabs array is flushed to the gateway immediately (baseline-independent).
-   */
-  withLock: (mutate: () => void) => Promise<boolean>;
-  /** Held-session status ('idle' while browsing — nothing engaged). */
-  status: SessionStatus;
-  /** True once a write gesture engaged the session (drives "editing" affordances if needed). */
-  engaged: boolean;
-  /** Header "Unsaved" commit: disengage → the held-session release-saves + unlocks. */
-  commit: () => void;
+  /** Run a WRITE mutation, then flush the fresh tabs array to the gateway (lockless — no acquire).
+   *  `mutate` runs SYNCHRONOUSLY, so a caller may read state it set right after this returns. */
+  runWrite: (mutate: () => void) => void;
 }
 
 export function useLineupLockSession(): UseLineupLockSessionResult {
-  const [engaged, setEngaged] = useState(false);
+  // Session bound to the rtype-12 grain ALWAYS (lockless ⇒ begins 'held' synchronously) so
+  // save-on-leave + auto-save stay wired. getNode (WHOLE tabs array) + buildPayload live in the
+  // `sketch-lineups` policy (save-policies). onBlocked/onLost dropped: a lockless session can't be
+  // blocked or lost.
+  const { saveNow } = useSaveSession(deriveSaveTarget(LINEUP_LOCK_TARGET));
 
-  // Target flips null ⇄ the module-constant singleton — never a per-render object.
-  const target = useMemo<LockTarget | null>(() => (engaged ? LINEUP_LOCK_TARGET : null), [engaged]);
-
-  // getNode (WHOLE tabs array) + buildPayload now live in the `sketch-lineups` policy (save-policies).
-
-  const handleLockBlocked = useCallback((holder: string) => {
-    log.info('handleLockBlocked', 'lineups held by another editor', { hasHolder: !!holder });
-    toast.info('Another editor is editing the Lineup — your change was not saved.');
-    setEngaged(false);
-  }, []);
-
-  const handleLockLost = useCallback(() => {
-    log.warn('handleLockLost', 'lineup lock lost — drop hold');
-    setEngaged(false);
-    toast.warning('You lost the edit lock for the Lineup — a later change may not have saved.');
-  }, []);
-
-  const { status } = useSaveSession({
-    ...deriveSaveTarget(target),
-    onBlocked: handleLockBlocked,
-    onLost: handleLockLost,
-  });
-
-  const withLock = useCallback(
-    async (mutate: () => void): Promise<boolean> => {
-      const rl = useResourceLockStore.getState();
-      if (!rl.collabPersist) {
-        log.debug('withLock', 'solo — mutate only (whole-doc autosave persists)');
-        mutate();
-        return true;
-      }
-      const bookId = rl.bookId;
-      if (!bookId) {
-        log.warn('withLock', 'collab persist active but no book connected — drop mutation');
-        return false;
-      }
-      // Acquire BEFORE mutating (never optimistic). Already held → CAS renew is idempotent, but
-      // skipping the round-trip keeps repeat gestures snappy.
-      if (!rl.myLocks.has(keyOf(bookId, LINEUP_LOCK_TARGET))) {
-        const acq = await rl.acquire(LINEUP_LOCK_TARGET);
-        if (!acq.ok) {
-          log.info('withLock', 'acquire blocked — mutation dropped');
-          toastLockedByOther(resolveLockHolderName(LINEUP_LOCK_TARGET));
-          return false;
-        }
-      }
-      // Hand ownership to the held-session (release-save + header status). Its own acquire is an
-      // idempotent renew of the lock we just took.
-      setEngaged(true);
-      mutate();
-      // Immediate flush (Insight #3 — never lose the first mutation). ⚡ phase 3: routes through the
-      // engine's `ensureSaved` (saveNow while held, or one-shot in the acquire-in-flight race); the
-      // caller toasts the outcome (the seam no longer self-toasts).
-      const outcome = await flushSketchLineupsUnderLock();
-      if (outcome !== 'saved' && outcome !== 'clean') {
-        log.warn('withLock', 'immediate flush not persisted (held-session release-save remains)', {
-          outcome,
-        });
-        toastSketchSaveOutcome(outcome, LINEUP_LOCK_TARGET);
-      }
-      return true;
-    },
-    [],
-  );
-
-  // Header "Unsaved" → commit: disengage so the held-session cleanup release-saves + unlocks.
+  // Header "Unsaved" → commit: saveNow persists the tabs array + rebases the baseline.
   const commit = useCallback(() => {
-    log.info('commit', 'commit held lineup session (save + unlock)');
-    setEngaged(false);
-  }, []);
+    log.info('commit', 'commit lineup session (saveNow)');
+    void saveNow();
+  }, [saveNow]);
   useRegisterEditCommit(commit);
 
-  return useMemo(
-    () => ({ withLock, status, engaged, commit }),
-    [withLock, status, engaged, commit],
-  );
+  const runWrite = useCallback((mutate: () => void) => {
+    mutate();
+    // Immediate flush (never lose the first mutation). Routes through the engine's `ensureSaved`
+    // (saveNow while held); the caller toasts a non-clean outcome.
+    void flushSketchLineupsUnderLock().then((outcome) => {
+      if (outcome !== 'saved' && outcome !== 'clean') {
+        log.warn('runWrite', 'immediate flush not persisted (release-save remains)', { outcome });
+        toastSketchSaveOutcome(outcome, LINEUP_LOCK_TARGET);
+      }
+    });
+  }, []);
+
+  return useMemo(() => ({ runWrite }), [runWrite]);
 }

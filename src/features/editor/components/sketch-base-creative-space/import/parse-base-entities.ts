@@ -292,7 +292,7 @@ export function validateCharacterKeyRoles(characters: SketchEntity[], issues: Im
  *     not "delete them". Replacing anyway would wipe the alter cast that `base.alter_character_sheet`
  *     still points at. A tab that is PRESENT but empty is an explicit empty cast and does clear them
  *     — the array this returns is written to the gateway as ONE column-root whole-array replace
- *     (`commitImport` → `runLockedSetSave`), so a removal here IS a deletion in the DB. (Before
+ *     (`commitImport` → `saveEntityCollection`, rtype 14), so a removal here IS a deletion in the DB. (Before
  *     2026-07-28 the commit flushed entity-by-entity, which could neither create a new key nor
  *     delete a dropped one; that gap is closed.)
  *

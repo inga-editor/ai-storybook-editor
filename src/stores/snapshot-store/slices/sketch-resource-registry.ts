@@ -151,7 +151,12 @@ export function resourceKeyToLockPredicate(key: SketchResourceKey): (t: LockTarg
 
   if (key === 'characters' || key === 'props' || key === 'stages') {
     const rtype = ENTITY_RTYPE[key];
-    return (t) => t.step === 1 && t.resource_type === rtype;
+    // Collection unreadable → block BOTH the per-entity writes (rtype 3/4/5) AND the whole-collection
+    // rtype-14 "save 1 cục" / import REPLACE (resource_id === the collection name) — the whole-array
+    // save would silently overwrite the quarantined collection without consent (fail-safe).
+    return (t) =>
+      t.step === 1 &&
+      (t.resource_type === rtype || (t.resource_type === 14 && t.resource_id === key));
   }
 
   if (key === 'spreads') {
@@ -177,7 +182,14 @@ export function resourceKeyToLockPredicate(key: SketchResourceKey): (t: LockTarg
   }
 
   const rtype = ENTITY_RTYPE[kind];
-  return (t) => t.step === 1 && t.resource_type === rtype && t.resource_id === id;
+  // A node-grain degraded entity blocks its own per-entity write (rtype 3/4/5, exact key) AND the
+  // WHOLE-collection rtype-14 REPLACE for that kind (resource_id === the collection name): the base
+  // space's "save 1 cục" would include / overwrite the quarantined entity's data without consent, so
+  // any one quarantined entity of the kind fail-safes the whole-array write (plan insight 7).
+  return (t) =>
+    t.step === 1 &&
+    ((t.resource_type === rtype && t.resource_id === id) ||
+      (t.resource_type === 14 && t.resource_id === kind));
 }
 
 const KIND_LABEL: Record<'characters' | 'props' | 'stages', { one: string; many: string }> = {

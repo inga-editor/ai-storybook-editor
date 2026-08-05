@@ -37,12 +37,10 @@ const log = createLogger("Editor", "CharactersSidebar");
 interface CharactersSidebarProps {
   characterKeys: string[];
   selectedCharacterKey: string | null;
-  /** USER browse (row click / arrow-nav) → display only, no lock (browse ≠ lock). */
+  /** USER select (row click / arrow-nav) → set display = session target (lockless entity save). */
   onCharacterSelect: (key: string) => void;
-  /** USER interact (name edit / sidebar-detail click) → acquire this entity's held lock. */
-  onCharacterInteract: (key: string) => void;
-  /** Collab held-session gate (ADR-044): this editor holds the SELECTED character's lock. Only the
-   *  selected+held item may be renamed/deleted or have its basic-info/personality edited. */
+  /** Collab save-session gate (ADR-044 addendum 2, lockless): only the SELECTED item may be
+   *  renamed/deleted or have its basic-info/personality edited (its session is held). */
   editable: boolean;
   /** Called after deleting the held character so the space can drop the lock (→ release-save). */
   onEntityDeleted: (key: string) => void;
@@ -96,7 +94,6 @@ export function CharactersSidebar({
   characterKeys,
   selectedCharacterKey,
   onCharacterSelect,
-  onCharacterInteract,
   editable,
   onEntityDeleted,
 }: CharactersSidebarProps) {
@@ -451,7 +448,6 @@ export function CharactersSidebar({
               editable={editable && key === selectedCharacterKey}
               onToggle={() => handleToggle(key)}
               onSelect={() => onCharacterSelect(key)}
-              onInteract={() => onCharacterInteract(key)}
               onStartRename={() => setEditingNameKey(key)}
               onFinishRename={(name) => handleRenameCharacter(key, name)}
               onDelete={() => handleDeleteCharacter(key)}

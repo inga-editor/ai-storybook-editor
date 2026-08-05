@@ -32,35 +32,19 @@ vi.mock('@/stores/snapshot-store/selectors', () => ({
 
 vi.mock('@/stores/resource-lock-store', () => ({
   useResourceLockStore: { getState: () => ({ collabPersist: false }) },
-  useIsLockedByOther: () => false,
-  useLockHolderName: () => null,
 }));
 
 vi.mock('@/stores/edit-session-status-store', () => ({
   useEditSessionStatusStore: { getState: () => ({ markSaving: vi.fn(), markSaved: vi.fn() }) },
 }));
 
-vi.mock('@/stores/snapshot-store/slices/collab-sketch-variant-save-helper', () => ({
-  // Return a REAL LockTarget shape (step/resource_type/resource_id/locale) — the modal now derives the
-  // save-session via `deriveSaveTarget(lockTarget)` in render (the old wrapper did this internally).
-  resolveSketchVariantLockTarget: (kind: string, key: string) => ({
-    step: 1,
-    resource_type: kind === 'props' ? 4 : 3,
-    resource_id: key,
-    locale: null,
-  }),
-  buildSketchEntityPayload: (node: unknown) => node,
-  flushSketchEntityUnderLock: vi.fn(),
-}));
-
-// Save session: the tab is MINE → fields editable (the drafts are what the gate reads).
-vi.mock('@/features/editor/hooks/use-save-session', () => ({
-  useSaveSession: () => ({
-    status: 'held',
-    saveNow: vi.fn(),
-    ensureSaved: vi.fn(),
-    commitOnModalClose: vi.fn(),
-  }),
+// ADR-044 addendum 2 (rtype 14): the modal no longer binds a per-entity lock session — Save commits
+// drafts to the store then persists the WHOLE collection via `saveEntityCollection`. Solo path here
+// (collabPersist:false) → that seam is never called; the stub keeps its module load side-effect-free.
+vi.mock('@/stores/snapshot-store/slices/collab-sketch-base-entities-save-helper', () => ({
+  saveEntityCollection: vi.fn(),
+  BASE_KIND_TO_COLLECTION: { characters: 'characters', props: 'props', alter_characters: 'characters' },
+  resolveEntityCollectionLockTarget: (c: string) => ({ step: 1, resource_type: 14, resource_id: c, locale: null }),
 }));
 
 vi.mock('@/features/editor/contexts', () => ({ useInteractionLayer: () => {} }));

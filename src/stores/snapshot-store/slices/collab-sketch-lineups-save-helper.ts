@@ -55,7 +55,7 @@ export const LINEUP_LOCK_TARGET: LockTarget = resolveLineupsLockTarget();
 /**
  * Collection-scope payload: `{ action_type: 3, patch: <tabs ARRAY>, collection: 'lineups',
  * log: true }`. `log:true` emits the `scope:'collection'` content-sync descriptor peers use to
- * whole-replace their `sketch.lineups` (see content-sync-store `isLineupCollectionSync`).
+ * whole-replace their `sketch.lineups` (see content-sync-store `isColumnRootCollectionSync`).
  */
 export function buildSketchLineupsPayload(tabs: SketchLineupTab[]): SavePayload {
   return { action_type: ACTION_TYPE_EDIT, patch: tabs, collection: LINEUP_COLLECTION, log: true };

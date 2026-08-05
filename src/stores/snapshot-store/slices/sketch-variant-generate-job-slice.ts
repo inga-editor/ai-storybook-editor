@@ -242,13 +242,13 @@ export const createSketchVariantGenerateJobSlice: StateCreator<
         .ensureSaved('sketch-entity', makeEntityId(ref.kind, ref.entityKey));
       if (opStale(ref)) return; // op reset during the save
       if (saveOutcome !== 'saved' && saveOutcome !== 'clean') {
-        log.warn('runGenerate', 'save-before-generate not persisted — abort (stale DB / peer lock)', {
+        log.warn('runGenerate', 'save-before-generate not persisted — abort (degraded / stale DB)', {
           kind: ref.kind,
           entityKey: ref.entityKey,
           variantKey: ref.variantKey,
           outcome: saveOutcome,
         });
-        markOpError(ref, 'Could not save before generating — the entity may be locked by another editor.');
+        markOpError(ref, 'Could not save before generating — please try again.');
         return;
       }
 

@@ -4,10 +4,10 @@
 // already exists in the DB — so the entity node (basic info + visual description just edited) must
 // be persisted FIRST, or the directive fails ANCHOR_NOT_FOUND and the result is lost.
 //
-// `ensureSaved` handles both cases: a held session (lock-on-interact) → save-while-held + rebase;
-// no session → one-shot acquire→save→release. The caller ABORTS the generate unless this returns
-// true (a user-facing toast is raised here on block/fail). Shared by the 3 variant-item components
-// (DRY — identical gate in each space).
+// `ensureSaved` (lockless entity domain — ADR-044 addendum 2) is a save-while-held + rebase; it never
+// returns `blocked` EXCEPT the degraded ADR-047 branch (data unreadable → writes refused). The caller
+// ABORTS the generate unless this returns true (a user-facing toast is raised here on block/fail).
+// Shared by the 3 variant-item components (DRY — identical gate in each space).
 
 import { toast } from 'sonner';
 import { createLogger } from '@/utils/logger';
@@ -20,8 +20,8 @@ export type IllustrationEntityKind = 'character' | 'prop' | 'stage';
 
 /**
  * Persist the entity node before a generate-visual POST. Returns true ONLY when the node is safely
- * in the DB (`saved` or already `clean`); on `blocked` (a peer holds the lock) or `failed` it toasts
- * and returns false so the caller does NOT burn an AI call against a missing/stale anchor.
+ * in the DB (`saved` or already `clean`); on `blocked` (degraded — write refused) or `failed` it
+ * toasts and returns false so the caller does NOT burn an AI call against a missing/stale anchor.
  */
 export async function ensureEntitySavedBeforeGenerate(
   kind: IllustrationEntityKind,
@@ -32,11 +32,11 @@ export async function ensureEntitySavedBeforeGenerate(
     .ensureSaved('illustration-entity', makeEntityId(kind, entityKey));
   if (outcome === 'saved' || outcome === 'clean') return true;
   if (outcome === 'blocked') {
-    log.warn('ensureEntitySavedBeforeGenerate', 'blocked — a peer holds the entity lock', {
+    log.warn('ensureEntitySavedBeforeGenerate', 'blocked — draft write is chặn (degraded)', {
       kind,
       entityKey,
     });
-    toast.error('Another editor is editing this — try again in a moment.');
+    toast.error('Bản nháp đang bị chặn ghi (degraded) — thử lại sau.');
     return false;
   }
   log.error('ensureEntitySavedBeforeGenerate', 'save failed before generate', {

@@ -27,6 +27,7 @@ const SAVE_DOMAIN_TO_HISTORY_DOMAIN: Record<SaveDomain, EditHistoryDomain | null
   'sketch-stage': null,
   'sketch-base-sheet': null,
   'sketch-lineups': null,
+  'sketch-base-entities': null,
 };
 
 /** Idempotent guard: ItemKeys with a live undo session opened by THIS bridge. Prevents a

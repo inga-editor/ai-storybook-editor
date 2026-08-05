@@ -167,6 +167,38 @@ export const useSaveSessionStore = create<SaveSessionState>()((set, get) => {
       const manage = opts.manageHeaderStatus !== false;
       log.info('begin', 'session start', { key, domain });
 
+      // ── Lockless domain (ADR-044 addendum 2, 'lock scope = spread-only'): SKIP acquire/heartbeat/
+      // release. The baseline MUST be captured SYNCHRONOUSLY here — before the function yields — or
+      // the first mutation could leak into it (clean dirty ⇒ silent data loss, the B2 defect class).
+      // Status is 'held' immediately, so `runWithLock` degrades to a synchronous run (no gate wait).
+      if (policy.locking === 'none') {
+        // Respect the React-19 cancelled discipline: if the owning effect's cleanup already ran,
+        // don't seed an entry (mirrors abandonIfCancelled for the acquire path).
+        if (opts.isCancelled?.()) {
+          log.debug('begin', 'lockless cancelled before setup — skip', { key, domain });
+          return 'idle';
+        }
+        const base = structuredClone(projectNode(policy, policy.getNode(id)));
+        upsertEntry(key, {
+          domain,
+          id,
+          target,
+          capturedBookId,
+          collabPersist: rl.collabPersist,
+          baseline: base,
+          status: 'held',
+          lastSavedAt: Date.now(),
+          manageHeaderStatus: manage,
+          onLost: opts.onLost, // captured but never fired — a lockless session can't lose a lock
+        });
+        if (manage) useEditSessionStatusStore.getState().beginHold();
+        beginHistory(domain, target, base); // undo bridge still driven by the session engine
+        ensureSweepRunning(get); // idle sweep + flush-on-hidden cover held sessions (locked or not)
+        log.debug('begin', 'lockless session — skip acquire', { domain });
+        log.info('begin', 'held (lockless)', { key });
+        return 'held';
+      }
+
       // Provisional 'acquiring' entry + onLost registration BEFORE the await (mirror old sync setup).
       upsertEntry(key, {
         domain,
@@ -238,8 +270,56 @@ export const useSaveSessionStore = create<SaveSessionState>()((set, get) => {
         log.debug('end', 'no held lock — cleanup only', { key, status: entry.status });
         return;
       }
-      // Held → dirty-gated release-and-save (the ONLY durable write for batch-at-release domains).
       const policy = SAVE_POLICIES[entry.domain];
+
+      // ── Lockless domain: dirty-gated SAVE ONLY (no unlock — there is no held lock). Uses the same
+      // persist fork with release=false ⇒ `rl.save`, NOT `releaseAndSave` (which would send an
+      // `unlock` for a lock that was never acquired). Header settles Saving→Saved like a normal save.
+      if (policy.locking === 'none') {
+        const rawNode = policy.getNode(entry.id);
+        const projected = projectNode(policy, rawNode);
+        // A null node = the resource was DELETED mid-session → nothing to persist (parity with the
+        // held branch); the deletion is saved by the explicit collection-op path.
+        const dirty = rawNode != null && !dequal(projected, entry.baseline);
+        const manage = entry.manageHeaderStatus;
+        const ess = useEditSessionStatusStore.getState();
+        log.info('end', 'lockless save-on-leave', { key, dirty, nodeGone: rawNode == null });
+        if (manage) {
+          ess.endHold();
+          if (dirty) ess.markSaving();
+        }
+        if (dirty) {
+          const payload = policy.buildPayload(projected, entry.id);
+          // Fire-and-forget (mirror the held cleanup): settle the header on resolve; warn on failure.
+          void persistUnderFork(entry, payload, false, true)
+            .then((res) => {
+              if (manage) ess.markSaved();
+              if (!res.ok) {
+                log.warn('end', 'lockless save-on-leave failed', {
+                  key,
+                  domain: entry.domain,
+                  blocked: res.blocked ?? false,
+                });
+              }
+            })
+            .catch((err) => {
+              if (manage) ess.markSaved();
+              log.warn('end', 'lockless save-on-leave threw', {
+                key,
+                domain: entry.domain,
+                error: errMsg(err),
+              });
+            });
+        } else if (manage) {
+          ess.markSaved();
+        }
+        endHistory(entry.domain, entry.target);
+        dropEntry(key);
+        maybeStopSweep(get);
+        return;
+      }
+
+      // Held → dirty-gated release-and-save (the ONLY durable write for batch-at-release domains).
       const rawNode = policy.getNode(entry.id);
       // A null node = the held resource was DELETED (entity/spread removed) → nothing to persist;
       // the deletion is saved by the explicit collection-op path. Release WITHOUT a save.
@@ -337,6 +417,21 @@ export const useSaveSessionStore = create<SaveSessionState>()((set, get) => {
         log.warn('ensureSaved', 'one-shot node missing — nothing to save', { key, domain });
         return 'failed';
       }
+
+      // ── Lockless one-shot: save STRAIGHT to the gateway — no acquire, no release (the domain is
+      // lock-exempt). `blocked` can still surface only via the ADR-047 degraded write-blocker.
+      if (policy.locking === 'none') {
+        log.info('ensureSaved', 'one-shot lockless save (no acquire/release)', { key, domain });
+        const projected = projectNode(policy, rawNode);
+        const res = await rl.save(target, policy.buildPayload(projected, id));
+        if (res.ok) {
+          log.info('ensureSaved', 'one-shot lockless saved', { key });
+          return 'saved';
+        }
+        log.warn('ensureSaved', 'one-shot lockless save rejected', { key, blocked: res.blocked });
+        return res.blocked ? 'blocked' : 'failed';
+      }
+
       log.info('ensureSaved', 'one-shot acquire→save→release', { key, domain });
       const acq = await rl.acquire(target);
       if (!acq.ok) {
@@ -452,6 +547,7 @@ export type {
   SaveOutcome,
   SessionEntry,
   SavePolicy,
+  LockMode,
   BeginOptions,
   LockTarget,
   SavePayload,

@@ -11,18 +11,25 @@ export type Step = 1 | 2 | 3;
 
 /** Resource kind inside a snapshot.
  *  1 image · 2 textbox · 3 character · 4 prop · 5 stage · 6 spread (per-spread SCENE
- *  sub-tree at step=2 — ADR-044 rev) · 7 scene raw_textbox · 8 scene shape (legacy
- *  per-item overlays — `spreads[].raw_textboxes[]`/`shapes[]`) · 9 objects/retouch node —
- *  ONE GENERIC type for every objects-space playable node kind (`spreads[].{videos,
- *  auto_pics,audios,auto_audios,composites,quizzes}[]`) · 10 retouch_spread (per-spread
- *  RETOUCH sub-tree at step=3 — ADR-044 rev; the whole retouch owned-key set of a spread) ·
+ *  sub-tree at step=2 — ADR-044 rev) · 7 scene raw_textbox (legacy per-item overlay —
+ *  `spreads[].raw_textboxes[]`) · 8 RETIRED (was scene shape — shapes are NOT a SCENE item;
+ *  they persist only via the OBJECTS-space rtype-10 held session. Phase 06, 2026-08-05) ·
+ *  9 objects/retouch node — ONE GENERIC type for every objects-space playable node kind
+ *  (`spreads[].{videos,auto_pics,audios,auto_audios,composites,quizzes}[]`) · 10 retouch_spread
+ *  (per-spread RETOUCH sub-tree at step=3 — ADR-044 rev; the whole retouch owned-key set of a
+ *  spread, sole writer of `shapes`) ·
  *  11 base_sheet (sketch-base per-kind sheet — step=1; the whole `sketch.base.{kind}_sheet`
  *  node, resource_id `character_sheet`|`prop_sheet`; ADR-043 sketch-base collab, Phase 01) ·
  *  12 lineup (`sketch.lineups[]` — the WHOLE multi-tab lineup array, collection-scope
  *  column-root save; resource_id sentinel `lineups`, step=1; ADR-043 §Mở rộng 2026-07-25) ·
  *  13 actor (casting-swap grain = actant; the whole `actors[]` row addressed by actant_id,
- *  step=3 retouch; Actors creative space — actors-casting design 2026-07-29). */
-export type ResourceType = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13;
+ *  step=3 retouch; Actors creative space — actors-casting design 2026-07-29) ·
+ *  14 entity_collection (`sketch.{characters|props|stages}` — the WHOLE entity array,
+ *  collection-scope column-root REPLACE; resource_id === the collection name, step=1; lock-EXEMPT,
+ *  authz gated on `access_rights.steps.sketch.resources.<collection>`. Base space "save 1 cục" +
+ *  Excel import — ADR-044 addendum 2, 2026-08-05). */
+// NOTE: 8 is intentionally absent — RETIRED (was scene shape, Phase 06 2026-08-05). Do NOT re-add.
+export type ResourceType = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 9 | 10 | 11 | 12 | 13 | 14;
 
 /** Addresses one lockable resource. `locale` is set for textboxes (per-language)
  *  and null for language-agnostic resources (image / entity / spread). */

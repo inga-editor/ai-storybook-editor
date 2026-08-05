@@ -33,12 +33,10 @@ const log = createLogger("Editor", "StagesSidebar");
 interface StagesSidebarProps {
   stageKeys: string[];
   selectedStageKey: string | null;
-  /** USER browse (row click / arrow-nav) → display only, no lock (browse ≠ lock). */
+  /** USER select (row click / arrow-nav) → set display = session target (lockless entity save). */
   onStageSelect: (key: string) => void;
-  /** USER interact (name edit / sidebar-detail click) → acquire this entity's held lock. */
-  onStageInteract: (key: string) => void;
-  /** Collab held-session gate (ADR-044): this editor holds the SELECTED stage's lock. Only the
-   *  selected+held item may be renamed/deleted or have its location edited. */
+  /** Collab save-session gate (ADR-044 addendum 2, lockless): only the SELECTED item may be
+   *  renamed/deleted or have its location edited (its session is held). */
   editable: boolean;
   /** Called after deleting the held stage so the space can drop the lock (→ release-save). */
   onEntityDeleted: (key: string) => void;
@@ -77,7 +75,6 @@ export function StagesSidebar({
   stageKeys,
   selectedStageKey,
   onStageSelect,
-  onStageInteract,
   editable,
   onEntityDeleted,
 }: StagesSidebarProps) {
@@ -393,7 +390,6 @@ export function StagesSidebar({
               editable={editable && key === selectedStageKey}
               onToggle={() => handleToggle(key)}
               onSelect={() => onStageSelect(key)}
-              onInteract={() => onStageInteract(key)}
               onStartRename={() => setEditingNameKey(key)}
               onFinishRename={(name) => handleRenameStage(key, name)}
               onDelete={() => handleDeleteStage(key)}

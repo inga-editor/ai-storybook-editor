@@ -5,20 +5,17 @@
 // independent); clicking an already-locked style re-sets itself (no-op) — there is no unlock-to-0
 // (Validation S1).
 //
-// Collab peer-lock (ADR-043): each KIND group self-reads its SHEET lock (step 1 / rtype 11,
-// resource_id character_sheet · prop_sheet · alter_character_sheet). Three DISTINCT resource_ids ⇒
-// three INDEPENDENT lock sessions: editor A holding the character sheet never blocks editor B on
-// the alter sheet. When ANOTHER editor holds the sheet, the group shows a 🔒 holder badge and
-// DISABLES the sheet acquire-seams — ＋ (add style) + each row's 🔒 (lock) — greyed, NOT hidden
-// (memory: never-hide-disabled-ui). Browse (row select) + ✏ (edit entity, grain B rtype 3/4) stay
-// enabled. Advisory — the acquire 409 is the real authority.
+// Collab (ADR-044 addendum 2 — LOCKLESS): entity domains no longer acquire a lock, so there is NO
+// peer-lock badge and NO lock-based disable. The ＋ (add style) + each row's 🔒 (lock-style) seams
+// disable only when the group is EMPTY. The Lock/LockOpen icons below are the style-lock
+// (is_selected) glyph, NOT collab. ✏ (edit entity, grain B rtype 3/4) stays enabled.
 //
 // EMPTY GROUP (no base entity of that kind — typically the alter group before the Excel import
 // adds any `actor_role=1` row): the group still RENDERS, with a hint naming the Excel tab and the
 // ＋ seam greyed. Generating a sheet with zero cells is meaningless (the slice rejects it), so the
 // seam is disabled at the source instead of failing after the modal — but it is never HIDDEN.
 
-import { useMemo, useRef } from 'react';
+import { useRef } from 'react';
 import {
   ChevronDown,
   ChevronRight,
@@ -32,8 +29,6 @@ import {
 import { Button } from '@/components/ui/button';
 import type { BaseKind, SketchBaseStyle } from '@/types/sketch';
 import type { BaseSheetGenerateOp } from '@/stores/snapshot-store/types';
-import { useIsLockedByOther, useLockHolderName } from '@/stores/resource-lock-store';
-import { resolveSketchBaseSheetLockTarget } from '@/stores/snapshot-store/slices/collab-sketch-base-sheet-save-helper';
 import { cn } from '@/utils/utils';
 import { createLogger } from '@/utils/logger';
 import { emptyEntitiesHint, type KindGroupConfig, type SelectedStyleRef } from './sketch-base-constants';
@@ -166,21 +161,14 @@ function KindGroup({
 }) {
   const { kind, title } = group;
 
-  // Peer-lock (advisory) for THIS kind's SHEET (rtype 11) — memoize the target so the primitive
-  // selectors stay subscribed to a stable object (they return primitives → Object.is-stable).
-  const sheetTarget = useMemo(() => resolveSketchBaseSheetLockTarget(kind), [kind]);
-  const sheetLockedByOther = useIsLockedByOther(sheetTarget);
-  const sheetHolder = useLockHolderName(sheetTarget);
-  const peerTip = sheetLockedByOther ? `${sheetHolder ?? 'Another editor'} is editing` : undefined;
-
   // Nothing to lay out as sheet cells → BOTH seams are dead ends: ＋ generates an empty sheet (the
   // slice refuses + toasts) and ✏ opens an entity editor with zero tabs. Grey both and say WHY,
   // but keep the group visible.
   const isEmpty = entityCount === 0;
   const emptyHint = emptyEntitiesHint(group);
   const hintId = `base-group-empty-${kind}`;
-  const addBlocked = sheetLockedByOther || isEmpty;
-  const addTip = sheetLockedByOther ? peerTip : isEmpty ? emptyHint : `Add ${title.toLowerCase()} style`;
+  const addBlocked = isEmpty;
+  const addTip = isEmpty ? emptyHint : `Add ${title.toLowerCase()} style`;
   const editTip = isEmpty ? emptyHint : `Edit ${title.toLowerCase()} entities`;
   // `title` is not reliably announced by screen readers, so when a seam is greyed the REASON goes
   // into the accessible name too — "dimmed" with no explanation is the failure mode being avoided.
@@ -204,18 +192,7 @@ function KindGroup({
           )}
           <span className="truncate">{title}</span>
         </button>
-        {/* Peer-lock badge — 🔒 + holder name (never hidden; browse + ✏ stay enabled). */}
-        {sheetLockedByOther && (
-          <span
-            className="flex min-w-0 items-center gap-0.5 rounded bg-background/80 px-1 text-[10px] font-medium text-muted-foreground"
-            title={peerTip}
-          >
-            <Lock className="h-3 w-3 shrink-0" aria-hidden="true" />
-            <span className="max-w-[64px] truncate">{sheetHolder ?? 'Editing'}</span>
-          </span>
-        )}
-        {/* ✏ = grain B (entity text, rtype 3/4) — NOT gated by the sheet lock (a peer holding the
-            sheet does not block entity text). Greyed only when the group has NO entity to edit. */}
+        {/* ✏ = grain B (entity text, rtype 3/4). Greyed only when the group has NO entity to edit. */}
         <Button
           variant="ghost"
           size="icon"
@@ -245,7 +222,7 @@ function KindGroup({
           aria-describedby={isEmpty ? hintId : undefined}
           onClick={() => {
             if (addBlocked) {
-              log.debug('onAddStyle', 'blocked', { kind, peerHeld: sheetLockedByOther, isEmpty });
+              log.debug('onAddStyle', 'blocked — group empty', { kind, isEmpty });
               return;
             }
             onAddStyle(kind);
@@ -281,8 +258,6 @@ function KindGroup({
                 isLocked={style.is_selected}
                 isSelected={selectedStyle?.kind === kind && selectedStyle.index === idx}
                 isGenerating={generateOps[kind]?.styleIndex === idx}
-                lockedByOther={sheetLockedByOther}
-                peerTip={peerTip}
                 onSelect={() => onSelectStyle(kind, idx)}
                 onLock={() => onLockStyle(kind, idx)}
               />
@@ -299,8 +274,6 @@ function StyleRow({
   isLocked,
   isSelected,
   isGenerating,
-  lockedByOther,
-  peerTip,
   onSelect,
   onLock,
 }: {
@@ -308,9 +281,6 @@ function StyleRow({
   isLocked: boolean;
   isSelected: boolean;
   isGenerating: boolean;
-  /** A peer holds this kind's SHEET → the 🔒 (lock-style, grain A) acquire-seam is greyed. */
-  lockedByOther: boolean;
-  peerTip?: string;
   onSelect: () => void;
   onLock: () => void;
 }) {
@@ -343,8 +313,7 @@ function StyleRow({
           aria-label={`${label} generating`}
         />
       )}
-      {/* 🔒 lock-style = sheet acquire-seam (grain A) → greyed + click-guarded when peer-held.
-          aria-disabled (NOT the real attr) keeps it hoverable so the peer tooltip surfaces. */}
+      {/* 🔒 lock-style = mark this style final (is_selected). */}
       <Button
         variant="ghost"
         size="icon"
@@ -352,16 +321,11 @@ function StyleRow({
           'h-6 w-6',
           // Locked = primary-tinted, filled padlock — the visual anchor of the locked style.
           isLocked ? 'text-primary hover:text-primary' : 'text-muted-foreground',
-          lockedByOther && 'cursor-not-allowed opacity-40',
         )}
-        aria-disabled={lockedByOther}
-        onClick={() => {
-          if (lockedByOther) return;
-          onLock();
-        }}
+        onClick={onLock}
         aria-pressed={isLocked}
         aria-label={isLocked ? `Unlock ${label}` : `Lock ${label}`}
-        title={lockedByOther ? peerTip : isLocked ? 'Locked style' : 'Lock as final style'}
+        title={isLocked ? 'Locked style' : 'Lock as final style'}
       >
         {isLocked ? <Lock className="h-4 w-4 fill-primary/20" /> : <LockOpen className="h-4 w-4" />}
       </Button>

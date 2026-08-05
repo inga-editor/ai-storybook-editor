@@ -1,31 +1,24 @@
-// use-variant-entity-lock-session.ts — owns EVERYTHING about holding + persisting a sketch entity
-// in the Variant creative space. Extracted from the space root (500-LOC rule + one concern per
-// module): the root keeps UI state (selection / tabs / zoom / overlays), this hook keeps the collab
-// lock lifecycle.
+// use-variant-entity-lock-session.ts — owns the per-entity SAVE SESSION for the Variant creative
+// space. Extracted from the space root (500-LOC rule + one concern per module): the root keeps UI
+// state (selection / tabs / zoom / overlays), this hook keeps the save-session lifecycle.
 //
 // Grain: the WHOLE sketch ENTITY node at step 1 (rtype 3 character / 4 prop) — `useSaveSession`
 // with `ownedKeys: undefined`.
 //
-// LOCK-ON-INTERACT (browse ≠ lock): `activeLockEntity` starts null and is set ONLY by `adopt()` from
-// a genuine interaction (edit text / edit crop / edit raw / pick crop / generate) — never by browsing,
-// so the lock never auto-acquires on mount.
+// LOCKLESS (ADR-044 addendum 2): entity domains no longer acquire a lock. The session binds
+// DIRECTLY to the SELECTED entity and the engine begins it synchronously as 'held' — no acquire, no
+// peer-lock veil, last-write-wins. The former lock-on-interact model (`adopt`/`releaseUnlessSame`/
+// `isAdopted`) is gone: selecting an entity IS the session target; switching entity re-targets the
+// session (the old node release-saves on the switch).
 //
-// BATCH-AT-RELEASE (ADR-043 Rev 2026-07-16 — supersedes the old eager-atomic per-gesture model):
-// cheap gestures only mutate the store under the hold; the held-session's release-cleanup diffs the
-// whole node against the acquire-time baseline and saves it ONCE (switch entity / unmount / the
-// header's "Unsaved" button → `commitEntity`). `manageHeaderStatus` is left at its default (true) so
-// the hold reads "Unsaved" → release settles "Saving…" → "Saved".
-//   ⚡ EXCEPTION — `flushEntityNow` (H2): see its doc. The generate / re-cut chains persist their own
-//     AI output inside the job slice and are NOT routed through here.
+// BATCH-AT-RELEASE (ADR-043): cheap gestures only mutate the store; the held session diffs the whole
+// node against its begin-time baseline and saves it ONCE (switch entity / unmount / the header's
+// "Unsaved" button → `commitEntity` → saveNow).
+//   ⚡ EXCEPTION — `flushEntityNow`: the crop-pick net, see its doc.
 //
-// SOLO (`collabPersist=false`): every path here is a no-op — `useCollabPersistSession` flips
-// collabPersist ON for any mounted space with a bookId, so solo only happens with no book loaded
-// (nothing to save). The old eager `persistEntity` had an `autoSaveSnapshot()` fallback; it is gone
-// on purpose — the global `use-auto-save` (gated on `!collabPersist`) + `use-flush-on-hidden` own
-// solo persistence, as they do for the characters/props/stages spaces this mirrors.
+// SOLO (no bookId): the global `use-auto-save` + `use-flush-on-hidden` own solo persistence.
 
-import { useCallback, useMemo, useState } from 'react';
-import { toast } from 'sonner';
+import { useCallback, useMemo } from 'react';
 import { type LockTarget } from '@/stores/resource-lock-store';
 import {
   resolveSketchVariantLockTarget,
@@ -40,100 +33,48 @@ import { createLogger } from '@/utils/logger';
 
 const log = createLogger('Editor', 'useVariantEntityLockSession');
 
-/** The entity the user is actively editing → the held-lock target (null = browsing only). */
+/** The entity whose session is held — the SELECTED entity (null = nothing selected). */
 export interface ActiveLockEntity {
   kind: BaseKind;
   entityKey: string;
 }
 
-/** True when two entity refs point at the SAME sketch entity (kind + key — key is unique per kind only). */
-function sameEntity(a: ActiveLockEntity | null, b: ActiveLockEntity | null): boolean {
-  return !!a && !!b && a.kind === b.kind && a.entityKey === b.entityKey;
-}
-
 export interface UseVariantEntityLockSessionResult {
-  /** Lock-on-interact: adopt this entity (idempotent — re-adopting the held one is a no-op). */
-  adopt: (ref: ActiveLockEntity) => void;
-  /** Browse: keep the hold only when it is the SAME entity, else drop it → the session release-saves
-   *  the OLD node. Mount / re-select is a no-op (nothing held yet). */
-  releaseUnlessSame: (ref: ActiveLockEntity) => void;
-  /** True when this entity is the one currently adopted. */
-  isAdopted: (ref: ActiveLockEntity | null) => boolean;
   /** Persist the FRESH entity node NOW, independent of the held-session baseline. See H2 below. */
   flushEntityNow: (ref: ActiveLockEntity) => void;
 }
 
-export function useVariantEntityLockSession(): UseVariantEntityLockSessionResult {
-  const [activeLockEntity, setActiveLockEntity] = useState<ActiveLockEntity | null>(null);
-
-  // Lock target — null until a genuine interaction adopts an entity (browse ≠ lock).
+export function useVariantEntityLockSession(
+  selected: ActiveLockEntity | null,
+): UseVariantEntityLockSessionResult {
+  // Session target binds to the SELECTED entity (lockless ⇒ begins 'held' synchronously). Keyed on
+  // the STRING key inside useSaveSession, so a variant switch within the SAME entity is a no-op.
   const target = useMemo<LockTarget | null>(
-    () =>
-      activeLockEntity
-        ? resolveSketchVariantLockTarget(activeLockEntity.kind, activeLockEntity.entityKey)
-        : null,
-    [activeLockEntity],
+    () => (selected ? resolveSketchVariantLockTarget(selected.kind, selected.entityKey) : null),
+    [selected],
   );
 
-  // getNode (WHOLE entity node) + buildPayload now live in the `sketch-entity` policy (save-policies).
+  // getNode (WHOLE entity node) + buildPayload live in the `sketch-entity` policy (save-policies).
+  // onBlocked/onLost dropped: a lockless session can't be blocked or lost.
+  const { saveNow } = useSaveSession(deriveSaveTarget(target));
 
-  // 409 on acquire → another editor holds this entity. Toast + drop the interaction (idle).
-  const handleLockBlocked = useCallback((holder: string) => {
-    log.info('handleLockBlocked', 'entity held by another editor', { hasHolder: !!holder });
-    toast.info('Another editor is editing this entity — your change was not saved.');
-    setActiveLockEntity(null);
-  }, []);
-
-  // Heartbeat 409 → lock stolen mid-edit. Deselect + toast; content-sync reconciles the winner's node.
-  const handleLockLost = useCallback(() => {
-    log.warn('handleLockLost', 'entity lock lost — deselect');
-    setActiveLockEntity(null);
-    toast.warning('You lost the edit lock for this entity — a later change may not have saved.');
-  }, []);
-
-  useSaveSession({
-    ...deriveSaveTarget(target),
-    onBlocked: handleLockBlocked,
-    onLost: handleLockLost,
-  });
-
-  // Header "Unsaved" button → commit now: null the held target so the session's cleanup release-saves
-  // the entity (Saving…→Saved) and unlocks it. The variant stays DISPLAYED (browse ≠ lock); the next
-  // genuine interaction re-acquires. Mirrors characters/props/stages `commitEntity`.
+  // Header "Unsaved" button → commit now: saveNow persists the entity node + rebases the baseline
+  // (Saving…→Saved) while staying on the same selection. Mirrors characters/props/stages.
   const commitEntity = useCallback(() => {
-    log.info('commitEntity', 'commit held entity session (save + unlock)');
-    setActiveLockEntity(null);
-  }, []);
+    log.info('commitEntity', 'commit entity session (saveNow)');
+    void saveNow();
+  }, [saveNow]);
   useRegisterEditCommit(commitEntity);
 
-  const adopt = useCallback((ref: ActiveLockEntity) => {
-    setActiveLockEntity((prev) => (sameEntity(prev, ref) ? prev : { kind: ref.kind, entityKey: ref.entityKey }));
-  }, []);
-
-  const releaseUnlessSame = useCallback((ref: ActiveLockEntity) => {
-    setActiveLockEntity((prev) => (sameEntity(prev, ref) ? prev : null));
-  }, []);
-
-  const isAdopted = useCallback(
-    (ref: ActiveLockEntity | null) => sameEntity(activeLockEntity, ref),
-    [activeLockEntity],
-  );
-
   /**
-   * ⚡ H2 — the ONE gesture that still persists eagerly (`handleSelectCrop`; everything else batches
-   * to the release-save). Picking a crop mutates the store SYNCHRONOUSLY in the same event that adopts
-   * the entity, so the held-session baseline (captured after the acquire round-trip) can be cloned
-   * ALREADY-PICKED → the release dirty-diff false → the pick lost.
-   *
-   * ⚡ unified-item-save phase 3: this now routes through the engine's `ensureSaved` (via the
-   * `flushSketchEntityUnderLock` seam). When the held session is already established it is a
-   * `saveNow` (keeps the lock, dirty-gated) that lands the pick; in the narrow race where the
-   * held-session acquire is still in flight it is a one-shot acquire→save→release — the idle
-   * auto-save (60s) is the net (spec §4.3). Fire-and-forget; the caller toasts the outcome (the seam
-   * no longer self-toasts).
+   * ⚡ H2 — crop-pick net. Picking a crop is a high-value gesture worth persisting eagerly rather
+   * than waiting for the release-save. Routes through the engine's `ensureSaved` (via the
+   * `flushSketchEntityUnderLock` seam): when the held session is established it is a `saveNow`
+   * (dirty-gated) that lands the pick; the idle auto-save (60s) is the net otherwise (spec §4.3).
+   * Fire-and-forget; the caller toasts the outcome.
    */
   const flushEntityNow = useCallback((ref: ActiveLockEntity) => {
-    log.debug('flushEntityNow', 'engine ensureSaved (H2 net)', {
+    log.debug('flushEntityNow', 'engine ensureSaved (crop-pick net)', {
       kind: ref.kind,
       entityKey: ref.entityKey,
     });
@@ -142,12 +83,6 @@ export function useVariantEntityLockSession(): UseVariantEntityLockSessionResult
     );
   }, []);
 
-  // Memoized so the returned handle is referentially stable: consumers put it in useCallback deps,
-  // and a fresh object literal each render would churn every handler's identity (and any memo'd
-  // child taking them as props). Only `isAdopted` closes over state, so the handle changes exactly
-  // when the adopted entity changes — which is when dependents genuinely must recompute.
-  return useMemo(
-    () => ({ adopt, releaseUnlessSame, isAdopted, flushEntityNow }),
-    [adopt, releaseUnlessSame, isAdopted, flushEntityNow],
-  );
+  // Memoized so the returned handle is referentially stable (consumers put it in useCallback deps).
+  return useMemo(() => ({ flushEntityNow }), [flushEntityNow]);
 }

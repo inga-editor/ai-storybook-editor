@@ -27,9 +27,23 @@ export type SaveDomain =
   | 'sketch-stage' // step 1, rtype 5
   | 'sketch-base-sheet' // step 1, rtype 11
   | 'sketch-lineups' // step 1, rtype 12
+  | 'sketch-base-entities' // step 1, rtype 14 (base space whole-collection column-root + import)
   | 'illustration-entity' // step 2, rtype 3/4/5 (character/prop/stage space)
   | 'scene-spread' // step 2, rtype 6 (SCENE_OWNED_KEYS)
   | 'retouch-spread'; // step 3, rtype 10 (RETOUCH_OWNED_KEYS)
+
+/**
+ * How the engine treats the pessimistic lock for a save-domain (ADR-044 addendum 2, 2026-08-05 —
+ * "lock scope = spread-only"). Controls ONLY acquire/heartbeat/release; baseline/dirty/auto-save/
+ * save-on-leave are identical across all three.
+ *   • `per-item`     — a spread-grain canvas child (rtype 1/2): acquire the child's own lock.
+ *   • `whole-spread` — a whole-spread owned-key partition (rtype 6/10): acquire the spread lock.
+ *   • `none`         — LOCK-EXEMPT: the engine SKIPS acquire/heartbeat/release entirely. The
+ *                      session still carries baseline/dirty/auto-save/save-on-leave, but saves go
+ *                      straight to the gateway (which still gates by `access_rights`), and the
+ *                      `blocked`/`lost` outcomes can never occur. Entity spaces run this way.
+ */
+export type LockMode = 'per-item' | 'whole-spread' | 'none';
 
 /**
  * Declarative registry entry for one save-domain. Everything an item needs to lock, diff,
@@ -44,6 +58,11 @@ export type SaveDomain =
 export interface SavePolicy {
   /** Domain-scoped id (+ optional locale) → the canonical lock target. Parses composite ids. */
   resolveTarget: (id: string, locale?: string | null) => LockTarget;
+  /** ⚡ REV 2026-08-05 (ADR-044 addendum 2) — `'none'` ⇒ engine skips acquire/heartbeat/release; the
+   *  save is NOT lock-preconditioned (gateway lock-exempt) so `blocked`/`lost` can't occur. REQUIRED
+   *  (no default) so a new domain must state its intent — a NEW entry should pick `'none'` unless the
+   *  space is a spread-grain canvas (then `'per-item'`/`'whole-spread'`). */
+  locking: LockMode;
   /** Owned-key sub-tree projection (scene/retouch); undefined ⇒ the WHOLE node. */
   ownedKeys?: readonly string[];
   /** Read the live node from the snapshot store (baseline + dirty-diff source). */

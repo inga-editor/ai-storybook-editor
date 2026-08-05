@@ -38,9 +38,12 @@ vi.mock('./collab-sketch-base-sheet-save-helper', () => ({
 
 // Mock the per-entity gateway flush (grain B, rtype 3/4) — called after a crops replacement on the
 // LOCKED style (the store re-clones entity base variants → those nodes flush too).
-const mockedEntityFlush = vi.hoisted(() => vi.fn(async () => 'saved'));
-vi.mock('./collab-sketch-variant-save-helper', () => ({
-  flushSketchEntityUnderLock: mockedEntityFlush,
+// ⚡ ADR-044 addendum 2 (rtype 14): the LOCKED-style crops replacement re-clones every entity base
+// variant → the WHOLE collection is persisted in ONE column-root save (not N per-entity flushes).
+const mockedCollectionSave = vi.hoisted(() => vi.fn(async () => 'saved'));
+vi.mock('./collab-sketch-base-entities-save-helper', () => ({
+  saveEntityCollection: mockedCollectionSave,
+  BASE_KIND_TO_COLLECTION: { characters: 'characters', props: 'props', alter_characters: 'characters' },
 }));
 
 // Mock sonner toast
@@ -121,7 +124,7 @@ describe('SketchBaseGenerateJobSlice', () => {
     mockedGenerateCall.mockReset();
     mockedCropCall.mockReset();
     mockedSheetFlush.mockReset().mockResolvedValue('saved');
-    mockedEntityFlush.mockReset().mockResolvedValue('saved');
+    mockedCollectionSave.mockReset().mockResolvedValue('saved');
     lockState.collabPersist = false; // default: solo (autoSave path)
     vi.mocked(toast.warning).mockReset();
     ({ store, autoSaveSnapshot } = createTestStore());
@@ -209,10 +212,10 @@ describe('SketchBaseGenerateJobSlice', () => {
     expect(mockedSheetFlush).toHaveBeenCalledWith('characters');
     expect(autoSaveSnapshot).not.toHaveBeenCalled();
     // Fresh add-style is never locked → no entity clone changed → grain B untouched.
-    expect(mockedEntityFlush).not.toHaveBeenCalled();
+    expect(mockedCollectionSave).not.toHaveBeenCalled();
   });
 
-  it('collab persist on the LOCKED style: crops replacement also flushes every entity node (grain B)', async () => {
+  it('collab persist on the LOCKED style: crops replacement saves the whole collection ONCE (grain B, rtype 14)', async () => {
     lockState.collabPersist = true;
     store.getState().setSketchEntities('characters', [
       { key: 'hero', variants: [{ key: 'base', description: '', visual_design: 'w', art_language: '' }] },
@@ -253,11 +256,11 @@ describe('SketchBaseGenerateJobSlice', () => {
     expect(hero.variants[0].raw_sheet?.crops[0].illustrations[0].media_url).toBe('crop-hero.png');
     expect(villain.variants[0].raw_sheet?.crops[0].illustrations[0].media_url).toBe('crop-villain.png');
 
-    // …and BOTH entity nodes flushed through the engine seam (grain B) after the sheet flush.
+    // …and the WHOLE characters collection persisted ONCE (rtype 14) after the sheet flush — the
+    // per-entity N-write loop is gone (both clones ride in the one column-root array save).
     expect(mockedSheetFlush).toHaveBeenCalled();
-    expect(mockedEntityFlush).toHaveBeenCalledTimes(2);
-    expect(mockedEntityFlush).toHaveBeenCalledWith('characters', 'hero');
-    expect(mockedEntityFlush).toHaveBeenCalledWith('characters', 'villain');
+    expect(mockedCollectionSave).toHaveBeenCalledTimes(1);
+    expect(mockedCollectionSave).toHaveBeenCalledWith('characters');
     expect(autoSaveSnapshot).not.toHaveBeenCalled();
   });
 
@@ -291,7 +294,7 @@ describe('SketchBaseGenerateJobSlice', () => {
 
     // Sheet still persists (raw/error state), but no crops landed → clones unchanged → grain B quiet.
     expect(mockedSheetFlush).toHaveBeenCalled();
-    expect(mockedEntityFlush).not.toHaveBeenCalled();
+    expect(mockedCollectionSave).not.toHaveBeenCalled();
   });
 
   it('opStale: reset op mid-await → crops NOT written', async () => {

@@ -11,7 +11,6 @@ import {
   Copy,
   Check,
   X,
-  Lock,
 } from "lucide-react";
 import {
   Collapsible,
@@ -41,11 +40,6 @@ import {
 import { SearchableDropdown } from "@/components/ui/searchable-dropdown";
 import { Separator } from "@/components/ui/separator";
 import { usePropByKey } from "@/stores/snapshot-store/selectors";
-import {
-  useIsLockedByOther,
-  useLockHolderName,
-  type LockTarget,
-} from "@/stores/resource-lock-store";
 import { useAssetCategories } from "@/stores/asset-category-store";
 import { PROP_TYPE_OPTIONS } from "@/constants/prop-constants";
 import { cn } from "@/utils/utils";
@@ -59,14 +53,12 @@ interface PropsSidebarItemProps {
   isSelected: boolean;
   isExpanded: boolean;
   isEditingName: boolean;
-  /** Collab held-session gate (ADR-044): this item is the SELECTED+held prop. When false the
-   *  category/type edits + rename/delete affordances are blocked/disabled. Expand/select + drag
-   *  stay enabled (select is the lock-acquire trigger; reorder is out of scope). */
+  /** Collab save-session gate (ADR-044 addendum 2, lockless): this item is the SELECTED prop (its
+   *  session is held). When false the category/type edits + rename/delete affordances are disabled.
+   *  Expand/select + drag stay enabled (select re-targets the session). */
   editable: boolean;
   onToggle: () => void;
   onSelect: () => void;
-  /** USER interact (rename / click in the expanded detail) → acquire this entity's held lock. */
-  onInteract: () => void;
   onStartRename: () => void;
   onFinishRename: (name: string) => void;
   onDelete: () => void;
@@ -86,7 +78,6 @@ export function PropsSidebarItem({
   editable,
   onToggle,
   onSelect,
-  onInteract,
   onStartRename,
   onFinishRename,
   onDelete,
@@ -108,23 +99,10 @@ export function PropsSidebarItem({
     [assetCategories]
   );
 
-  // Peer-lock (advisory): another editor holding THIS prop's held lock (step 2 / rtype 4) → show a
-  // 🔒 holder badge + disable the acquire seams (rename / detail-click). Browsing stays allowed. The
-  // acquire 409 remains the real authority; this mirrors the realtime registry for a live grey-out.
-  const lockTarget = useMemo<LockTarget>(
-    () => ({ step: 2, resource_type: 4, resource_id: propKey, locale: null }),
-    [propKey]
-  );
-  const lockedByOther = useIsLockedByOther(lockTarget);
-  const holderName = useLockHolderName(lockTarget);
-  const lockTooltip = `${holderName ?? "another editor"} is editing`;
-
-  // Sync editValue when entering rename mode
-  // Clicking the pencil is an edit-intent gesture → acquire the lock (lock-on-interact). The rename
-  // COMMIT stays gated on `editable` in the parent (held by the time the user types + confirms).
+  // Sync editValue when entering rename mode. The rename COMMIT is gated on `editable` in the parent
+  // (true whenever this row is the selected item — its session is held).
   function handleStartRename(e: React.MouseEvent) {
     e.stopPropagation();
-    onInteract();
     setEditValue(prop?.name ?? "");
     onStartRename();
   }
@@ -226,29 +204,13 @@ export function PropsSidebarItem({
               <span className="text-xs text-muted-foreground">@{propKey}</span>
             </div>
 
-            {/* Locked-by-other badge — always visible (advisory), tooltip names the holder */}
-            {lockedByOther && (
-              <span
-                className="mt-0.5 shrink-0 flex items-center text-muted-foreground"
-                title={lockTooltip}
-                onClick={(e) => e.stopPropagation()}
-              >
-                <Lock className="h-3.5 w-3.5" aria-label={lockTooltip} />
-              </span>
-            )}
-
-            {/* Rename button — visible on hover; disabled + greyed when another editor holds this prop */}
+            {/* Rename button — visible on hover */}
             {!isEditingName && (
               <Button
                 variant="ghost"
                 size="icon"
-                className={cn(
-                  "mt-0.5 h-5 w-5 transition-opacity shrink-0",
-                  lockedByOther ? "opacity-40" : "opacity-0 group-hover:opacity-100"
-                )}
+                className="mt-0.5 h-5 w-5 transition-opacity shrink-0 opacity-0 group-hover:opacity-100"
                 onClick={handleStartRename}
-                disabled={lockedByOther}
-                title={lockedByOther ? lockTooltip : undefined}
                 tabIndex={-1}
                 aria-label="Edit name"
               >
@@ -259,10 +221,7 @@ export function PropsSidebarItem({
         </CollapsibleTrigger>
 
         <CollapsibleContent>
-          {/* Clicking anywhere in the expanded detail (category/type fields) = intent to edit →
-              acquire this entity's lock (lock-on-interact). Capture-phase; fields stay disabled
-              until the lock is held. */}
-          <div className="px-3 pb-3 space-y-3" onPointerDownCapture={lockedByOther ? undefined : onInteract}>
+          <div className="px-3 pb-3 space-y-3">
             <Separator />
 
             <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
