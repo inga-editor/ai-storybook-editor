@@ -195,13 +195,16 @@ export function SketchStagesCreativeSpace() {
     setGenerateStyleModal({ stageKey, mode: 'add' });
   }, []);
 
-  // 🔒 lock style: exclusive is_selected + clone refresh (all inside the store setter).
+  // 🔒 lock style: exclusive is_selected + clone refresh (all inside the store setter), then flush
+  // the stage node eagerly — a lock is a high-value pick (mirrors the base space's persistLockStyle
+  // and the crop-pick net): waiting for save-on-leave/idle-sweep risks losing it on a tab kill.
   const handleLockStyle = useCallback(
     (stageKey: string, styleIndex: number) => {
       log.info('handleLockStyle', 'lock style', { stageKey, styleIndex });
       setSketchStageStyleSelected(stageKey, styleIndex);
+      lock.flushStageNow(stageKey);
     },
-    [setSketchStageStyleSelected],
+    [setSketchStageStyleSelected, lock],
   );
 
   // ✏ edit text (Base header → 'base'; variant row → that variant): open the modal.
