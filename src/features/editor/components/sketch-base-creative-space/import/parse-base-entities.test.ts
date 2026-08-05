@@ -619,6 +619,7 @@ describe('describeImportReplacement (replace-confirm copy)', () => {
     expect(copy).toContain('2 alter characters');
     expect(copy).toContain('1 character'); // story count EXCLUDES the alters
     expect(copy).not.toContain('are kept');
+    expect(copy).toContain('resets their base sheets'); // sheet reset is part of the consent (2026-08-05)
   });
 
   it('alter tab ABSENT → the copy promises the alter cast is KEPT, never destroyed', () => {
@@ -626,6 +627,7 @@ describe('describeImportReplacement (replace-confirm copy)', () => {
     expect(copy).toContain('kept');
     expect(copy).toContain('Alter Characters');
     expect(copy).toContain('2 characters');
+    expect(copy).toContain('resets their base sheets'); // char+prop sheets reset even without alters
   });
 
   it('the story count never silently includes alters (the old bug)', () => {

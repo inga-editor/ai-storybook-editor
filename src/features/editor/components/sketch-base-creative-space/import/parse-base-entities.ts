@@ -347,14 +347,16 @@ export function describeImportReplacement(parsed: BaseImportParse): string {
   const from = `${plural(story, 'character')} and ${plural(parsed.result.props.length, 'prop')}`;
   if (!parsed.sheetsPresent.alter_characters) {
     return (
-      `This replaces all existing character and prop base entities with ${from} from the file. ` +
+      `This replaces all existing character and prop base entities with ${from} from the file, ` +
+      `and resets their base sheets (generated images + locked style). ` +
       `Your existing alter characters are kept — this file has no "Alter Characters" tab. ` +
       `This cannot be undone.`
     );
   }
   return (
     `This replaces all existing character, prop AND alter character base entities with ${from} ` +
-    `and ${plural(alter, 'alter character')} from the file. This cannot be undone.`
+    `and ${plural(alter, 'alter character')} from the file, and resets their base sheets ` +
+    `(generated images + locked style). This cannot be undone.`
   );
 }
 

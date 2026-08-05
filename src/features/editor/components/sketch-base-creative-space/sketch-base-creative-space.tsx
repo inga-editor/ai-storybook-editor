@@ -327,6 +327,12 @@ export function SketchBaseSpace() {
       // the gateway ALREADY carries the preserved alters and the replace stays safe.
       const payload = resolveImportCommit(parse, useSnapshotStore.getState().sketch.characters);
       const count = parse.result.characters.length + parse.result.props.length;
+      // Sheets to reset alongside the cast replace (2026-08-05): char + prop always (their tabs
+      // whole-replace); the alter sheet ONLY when the workbook carries the Alter Characters tab —
+      // an absent tab preserves the alter cast, so its sheet must survive too.
+      const resetSheetKinds: BaseKind[] = parse.sheetsPresent.alter_characters
+        ? ['characters', 'props', 'alter_characters']
+        : ['characters', 'props'];
 
       const reportIssues = () => {
         if (parse.issues.warnings.length > 0) {
@@ -342,7 +348,7 @@ export function SketchBaseSpace() {
       };
 
       if (!useResourceLockStore.getState().collabPersist) {
-        setSketchBaseEntities(payload);
+        setSketchBaseEntities({ ...payload, resetSheetKinds });
         void autoSaveSnapshot();
         reportIssues();
         toast.success(`Imported ${count} base entities`);
@@ -356,8 +362,13 @@ export function SketchBaseSpace() {
       ess.markSaving();
       let outcomes: SaveOutcome[];
       try {
-        setSketchBaseEntities(payload);
+        setSketchBaseEntities({ ...payload, resetSheetKinds });
         outcomes = [await saveEntityCollection('characters'), await saveEntityCollection('props')];
+        // Persist the reset sheets too (rtype 11, one node per kind) — without this the DB keeps the
+        // old sheet imagery/locked pick and a refetch resurrects the mismatch the reset just fixed.
+        for (const kind of resetSheetKinds) {
+          outcomes.push(await flushSketchBaseSheetUnderLock(kind));
+        }
       } finally {
         ess.markSaved();
       }

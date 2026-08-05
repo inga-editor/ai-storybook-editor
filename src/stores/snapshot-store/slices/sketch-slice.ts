@@ -362,15 +362,22 @@ export const createSketchSlice: StateCreator<
   // points at. The only caller (`commitImport`) builds it via `resolveImportedCharacters`, which
   // whole-replaces the story cast (its tab is required) but PRESERVES existing alters when the
   // optional `Alter Characters` tab is absent from the workbook.
-  setSketchBaseEntities: ({ characters, props }) =>
+  setSketchBaseEntities: ({ characters, props, resetSheetKinds }) =>
     set((state) => {
       log.debug('setSketchBaseEntities', 'bulk import', {
         characters: characters.length,
         alterCharacters: characters.filter((e) => e.actor_role === 1).length,
         props: props.length,
+        resetSheetKinds: resetSheetKinds ?? [],
       });
       state.sketch.characters = characters;
       state.sketch.props = props;
+      // Reset the replaced kinds' base sheets IN THE SAME update (2026-08-05): a sheet's raw lineup
+      // images + locked pick picture the OLD cast — keeping them after a replace leaves a sheet
+      // "đã chốt" whose entities no longer carry the cropped base images (data mismatch).
+      for (const kind of resetSheetKinds ?? []) {
+        sheetOf(state.sketch.base, kind).styles = [];
+      }
       state.sync.isDirty = true;
     }),
 

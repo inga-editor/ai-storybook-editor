@@ -227,7 +227,13 @@ export interface SketchSlice {
 
   // ── Base workspace (char + prop sheets) — pure setters ─────────────────────
   // (generate orchestration lives in the base-generate job slice; these are the write sinks)
-  setSketchBaseEntities: (entities: { characters: SketchEntity[]; props: SketchEntity[] }) => void; // bulk Excel import
+  setSketchBaseEntities: (entities: {
+    characters: SketchEntity[];
+    props: SketchEntity[];
+    /** Base sheets to reset ({styles: []}) in the SAME atomic update — an import replaces the cast,
+     *  so the kinds' sheets (raw lineup images + locked pick) picture entities that no longer exist. */
+    resetSheetKinds?: BaseKind[];
+  }) => void; // bulk Excel import
   addSketchBaseStyle: (kind: BaseKind, style: SketchBaseStyle) => void;                 // append a style attempt
   removeSketchBaseStyle: (kind: BaseKind, styleIndex: number) => void;                  // drop a style (is_selected clears with it)
   setSketchBaseStyleSelected: (kind: BaseKind, styleIndex: number) => void;             // 🔒 lock: exclusive is_selected + CLONE crops → variants[base].raw_sheet.crops[0]
