@@ -199,8 +199,9 @@ export function CharacterConfigRow({
 
 /** Read-only value chips for the 4 personalize params (name/gender/age/zodiac).
  *  Renders one chip per param whose BOOK gate is ON; value or "—" when unpicked.
- *  ⚡2026-08-06 — display-only, never written to `remix_config`. */
-function ParamPreviewChips({ preview }: { preview: ParamPreview }) {
+ *  ⚡2026-08-06 — display-only, never written to `remix_config`. Exported for the
+ *  read-only SwapConfigReviewModal (same chips over the frozen config). */
+export function ParamPreviewChips({ preview }: { preview: ParamPreview }) {
   const chips: Array<{ key: keyof ParamPreview; value: string }> = [];
   if (preview.name.enabled) chips.push({ key: 'name', value: preview.name.value ?? '—' });
   if (preview.gender.enabled) chips.push({ key: 'gender', value: preview.gender.value ?? '—' });

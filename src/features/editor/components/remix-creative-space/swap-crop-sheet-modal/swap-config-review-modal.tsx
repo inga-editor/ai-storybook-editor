@@ -21,6 +21,15 @@
 // Runtime effectiveness (is_enabled ∧ profile description non-blank) lives in
 // the backend — sprite_swap_resolver.build_swap_object.
 //
+// ⚡2026-08-06 (per-param personalize): config entries are the PERSONALIZE set,
+// not just the visual-swappable cast. `traits` presence is the visual-
+// availability marker — an entry WITHOUT the key is text-only (name/gender/age/
+// zodiac personalize) and renders "Text-only" instead of the trait cluster.
+// Each row also shows the same ParamPreview chips as the create modal: gates
+// from the LIVE `book.remix.characters[].params` (display-only join, same
+// live-source philosophy as story labels), values derived from the frozen
+// `human_id`/`visual` via the humans cache ("—" when unpicked/deleted).
+//
 // Portal target: like RelayoutConfirmDialog, the dialog portals INTO the swap
 // modal's `[role=dialog]` ancestor so the modal's Interaction-Layer-Stack
 // click-outside router keeps treating clicks on this dialog as "inside"
@@ -39,10 +48,12 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { cn } from '@/utils/utils';
 import { createLogger } from '@/utils/logger';
 import { TRAIT_TYPES, TRAIT_LABELS } from '@/constants/trait-constants';
-import { useBookCastingSlot } from '@/stores/book-store';
+import { useBookCastingSlot, useBookRemix } from '@/stores/book-store';
 import { useBranchSpreadOptions } from '../hooks/use-branch-spread-options';
 import { usePoolSpreadOptions } from '../hooks/use-pool-spread-options';
 import { PoolSpreadCard } from '../tabs/pool-spread-card';
+import { ParamPreviewChips } from '../tabs/character-config-row';
+import { buildParamPreview, type ParamPreview } from '../cast-param-preview';
 import type { Human, VisualProfile } from '@/types/human';
 import type { PoolSpreadOption, Remix, RemixCharacterChoice } from '@/types/remix';
 import { Z_INDEX } from './swap-modal-constants';
@@ -67,6 +78,9 @@ interface CharacterRowView {
   /** Resolved visual profile (null when human/visual unset or human deleted). */
   profile: VisualProfile | null;
   thumbnail: string | null;
+  /** ⚡2026-08-06 — derived value chips (gates = live book params, values from
+   *  the frozen human/visual choice). Display-only, mirror of the create modal. */
+  paramPreview: ParamPreview;
 }
 
 /** One resolved preset choice row. Unresolved soft refs keep the raw id. */
@@ -106,12 +120,13 @@ const TH_CLASS =
 const TD_CLASS = 'border-b px-3 py-3 align-top';
 
 /** Vertical trait list (5 rows, canonical order). checked = the frozen
- *  `is_enabled` saved at create time, verbatim — no runtime masking. */
+ *  `is_enabled` saved at create time, verbatim — no runtime masking. Rendered
+ *  only when the entry HAS `traits` (visual-availability marker ⚡2026-08-06);
+ *  the caller renders "Text-only" for entries without it. */
 function TraitColumn({ entry }: { entry: RemixCharacterChoice }) {
   return (
     <div className="flex flex-col gap-1.5">
       {TRAIT_TYPES.map((type) => {
-        // ⚡2026-08-06 — `traits` optional (text-only entry has none → all off).
         const checked =
           entry.traits?.find((t) => t.type === type)?.is_enabled ?? false;
         return (
@@ -166,6 +181,10 @@ export function SwapConfigReviewModal({
   const castingSlot = useBookCastingSlot();
   const branchSpreads = useBranchSpreadOptions();
   const poolSpreadOptions = usePoolSpreadOptions();
+  // ⚡2026-08-06 — live per-param gates for the ParamPreview chips (same source
+  // the create modal reads; a book character since removed falls back to the
+  // legacy all-on shape inside buildParamPreview → chips still render honestly).
+  const bookRemix = useBookRemix();
 
   const presetRows = useMemo<PresetRowView[]>(() => {
     const axes = castingSlot?.casting_axes ?? [];
@@ -228,6 +247,9 @@ export function SwapConfigReviewModal({
   // character/prop snapshots, human name/profile on the live humans cache.
   const characterRows = useMemo<CharacterRowView[]>(() => {
     const nameByKey = new Map(remix.characters.map((c) => [c.key, c.name]));
+    const bookCharByKey = new Map(
+      (bookRemix?.characters ?? []).map((c) => [c.key, c]),
+    );
     return configCharacters.map((entry) => {
       const human = entry.human_id
         ? (humans.find((h) => h.id === entry.human_id) ?? null)
@@ -246,9 +268,10 @@ export function SwapConfigReviewModal({
         thumbnail: profile
           ? (profile.convertedImage ?? profile.nobgImage ?? profile.rawImages[0] ?? null)
           : null,
+        paramPreview: buildParamPreview(bookCharByKey.get(entry.key), entry, humans),
       };
     });
-  }, [configCharacters, remix.characters, humans]);
+  }, [configCharacters, remix.characters, humans, bookRemix]);
 
   // Component stays mounted while closed (VariantsTab renders it whenever the
   // remix exists) — only log renders that actually show the dialog.
@@ -419,6 +442,9 @@ export function SwapConfigReviewModal({
                           <div className="text-xs leading-tight text-muted-foreground">
                             @{row.entry.key}
                           </div>
+                          {/* ⚡2026-08-06 — derived personalize values (chips per
+                              live book gate; "—" until a human/profile resolves). */}
+                          <ParamPreviewChips preview={row.paramPreview} />
                         </td>
                         <td className={TD_CLASS}>
                           {row.humanName ?? <EmptyValue label="No human" />}
@@ -446,7 +472,14 @@ export function SwapConfigReviewModal({
                           )}
                         </td>
                         <td className={TD_CLASS}>
-                          <TraitColumn entry={row.entry} />
+                          {/* Presence marker ⚡2026-08-06: no `traits` key = the
+                              entry never had visual availability at create —
+                              text-only personalize, not "5 traits off". */}
+                          {row.entry.traits ? (
+                            <TraitColumn entry={row.entry} />
+                          ) : (
+                            <EmptyValue label="Text-only" />
+                          )}
                         </td>
                       </tr>
                     ))}
