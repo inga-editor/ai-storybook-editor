@@ -12,7 +12,6 @@ import {
 } from '@/apis/human-api';
 import {
   extractHumanTraits,
-  normalizeHuman,
   toStoredTraits,
 } from '@/apis/image-api';
 import type { ImageApiFailure } from '@/apis/image-api-client';
@@ -496,32 +495,23 @@ export const useHumansStore = create<HumansStore>()(
             log.debug('runProfilePipeline', 'skip remove-bg (already nobg)', { clientId });
           }
 
-          // Step 2 — normalize (skip if already converted; force regen when nobg was just remade).
+          // Step 2 — converted image. ⚡2026-08-06: face-to-many normalize TEMPORARILY disabled —
+          // convertedImage is copied directly from nobgImage. To re-enable stylization, restore the
+          // `normalizeHuman(profile.nobgImage, '3D', ...)` call here (client kept in apis/image-api.ts).
           profile = resolveByClientId();
           if (regeneratedNobg || !profile?.convertedImage) {
             if (!profile?.nobgImage) {
-              log.warn('runProfilePipeline', 'nobgImage missing before normalize', { clientId });
-              return;
-            }
-            // Opt-in auto-persist — absolute humans table target (patches visual_profiles[].convertedImage).
-            const norm = await normalizeHuman(profile.nobgImage, '3D', {
-              type: 'human_profile_image',
-              path: `table:humans/id:${humanId}`,
-            });
-            if (!norm.success) {
-              log.error('runProfilePipeline', 'normalize failed', { clientId, errorCode: norm.errorCode });
-              toast.error(mapPipelineError(norm));
-              get().setExtractCooldown(clientId);
+              log.warn('runProfilePipeline', 'nobgImage missing before convert', { clientId });
               return;
             }
             const idx = indexByClientId();
             if (idx < 0) {
-              log.warn('runProfilePipeline', 'profile removed after normalize', { clientId });
+              log.warn('runProfilePipeline', 'profile removed before convert', { clientId });
               return;
             }
-            await get().updateVisualProfile(humanId, idx, { convertedImage: norm.data.imageUrl });
+            await get().updateVisualProfile(humanId, idx, { convertedImage: profile.nobgImage });
           } else {
-            log.debug('runProfilePipeline', 'skip normalize (already converted, nobg not regenerated)', { clientId });
+            log.debug('runProfilePipeline', 'skip convert (already converted, nobg not regenerated)', { clientId });
           }
 
           // Step 3 — extract traits.

@@ -23,8 +23,6 @@ import { createLogger } from '@/utils/logger';
 
 const log = createLogger('Humans', 'VisualProfilesSection');
 
-const STYLE_BADGE_LABEL = '3D';
-
 type CardState = 'processing' | 'done' | 'failed';
 
 function deriveCardState(p: VisualProfile, isProcessing: boolean): CardState {
@@ -74,8 +72,9 @@ function VisualProfileCardImpl({
     onUpdate({ name: trimmed });
   };
 
-  // Prefer the normalized 3D output once ready; fall back to the raw photo while processing/failed.
-  const thumb = profile.convertedImage ?? profile.rawImages[0];
+  // ⚡2026-08-06: always show the ORIGINAL uploaded photo (face-to-many normalize temporarily
+  // disabled — convertedImage is just the white-bg copy, not a stylized output).
+  const thumb = profile.rawImages[0] ?? profile.convertedImage;
   // Render in canonical TRAIT_TYPES order (display-only; traits[] is keyed by type
   // and may arrive in any order from the API/DB).
   const presentTraits = (profile.traits ?? []).filter((t) => t.description != null);
@@ -104,9 +103,6 @@ function VisualProfileCardImpl({
           </div>
         )}
 
-        <span className="absolute left-1.5 top-1.5 rounded-full bg-background/80 px-2 py-0.5 text-xs font-medium backdrop-blur">
-          {STYLE_BADGE_LABEL}
-        </span>
         {profile.rawImages.length > 1 ? (
           <span className="absolute bottom-1.5 left-1.5 rounded-full bg-background/80 px-2 py-0.5 text-xs font-medium backdrop-blur">
             {profile.rawImages.length}
