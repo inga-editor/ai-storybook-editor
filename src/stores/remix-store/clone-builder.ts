@@ -259,13 +259,14 @@ export function buildRemixClonePayload(
   // 2026-07-31). Modal preview + this clone share the SAME resolver, so they
   // can't drift.
   const snapshotCharacterKeys = input.characters.map((c) => c.key);
-  const { visualCastKeys, swappableKeys } = resolveRemixCastSets({
+  const { visualCastKeys, personalizeKeys, swappableKeys } = resolveRemixCastSets({
     storyPresets: config.story.presets,
     castingAxes: input.castingAxes,
     bookRemix: input.bookRemix,
     snapshotCharacterKeys,
   });
   const rosterKeys = new Set(visualCastKeys);
+  const personalize = new Set(personalizeKeys);
   const swappable = new Set(swappableKeys);
 
   // ── 4. Clone characters to the VISUAL roster + purge config to swappable ───
@@ -279,9 +280,20 @@ export function buildRemixClonePayload(
     // reference is DERIVED from sprite finals client-side (`useRemixVariants`).
     .map((c) => structuredClone(c) as RemixCharacter);
 
+  // ⚡2026-08-06 — purge to the PERSONALIZE set (not swappable): a text-only
+  // entry (personalize but visual OFF / re-cast out) SURVIVES so its name swap
+  // applies. Entries OUTSIDE the swappable set are stripped of `traits` +
+  // `base_image_url` → NO `traits` key marks them text-only, so the swap
+  // pipeline (crop/sprite) filters them out by `traits != null`.
   const purgedConfig: RemixConfig = {
     ...config,
-    characters: config.characters.filter((c) => swappable.has(c.key)),
+    characters: config.characters
+      .filter((c) => personalize.has(c.key))
+      .map((c) => {
+        if (swappable.has(c.key)) return c; // visual-swappable — keep traits verbatim
+        const { traits: _traits, base_image_url: _base, ...textOnly } = c;
+        return textOnly; // text-only — no traits, no base_image_url
+      }),
     // ⚠️ Voices carry verbatim — NEVER purged by cast (voice ⊥ visual swap ⊥
     // casting): a visually re-cast role still speaks in the unchanged text, so
     // its voice slot must survive. Seeding already applied the book voice gate.
@@ -303,6 +315,7 @@ export function buildRemixClonePayload(
     castedLayerCount,
     materializedCount,
     visualCastCount: rosterKeys.size,
+    personalizeCount: personalize.size,
     swappableCount: swappable.size,
     purgedCharacterCount: purgedConfig.characters.length,
     voiceCount: purgedConfig.voices.length,

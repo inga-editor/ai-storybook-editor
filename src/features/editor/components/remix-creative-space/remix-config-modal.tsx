@@ -40,7 +40,8 @@ import type { BookRemix, RemixCharacterEntry } from '@/types/editor';
 import { REMIX_NAME_DEFAULT, type RemixConfig } from '@/types/remix';
 import type { RemixCharacterChoice } from '@/types/remix';
 import type { RemixLookupSources } from './hooks/use-remix-lookup-sources';
-import { swappableCastKeys } from '@/features/remix/effective-cast';
+import { resolveRemixCastSets } from '@/features/remix/effective-cast';
+import { buildParamPreview, type ParamPreview } from './cast-param-preview';
 import { normalizeRemixConfig } from './remix-config-normalize';
 import {
   patchMemories,
@@ -67,13 +68,18 @@ const TAB_LABELS: Record<TabKey, string> = {
   languages: 'Languages',
 };
 
-/** One effective-cast row derived from the chosen story presets. Consumed by the
- *  Cast tab (Phase 04) — `bookEntry` supplies the book gate, `draftEntry` the
- *  current human/visual/trait choices. */
+/** One personalize-set row derived from the chosen story presets (⚡2026-08-06).
+ *  `bookEntry` supplies the per-param gates, `draftEntry` the current
+ *  human/visual/trait choices. `isVisualActive` = the row is VISUAL-swappable
+ *  (`params.visual` ON ∧ key ∈ swappableKeys) → render the trait cluster;
+ *  otherwise the row is TEXT-ONLY (Human/Visual picker only, no traits).
+ *  `paramPreview` is the display-only derived value chips. */
 export interface RemixCastRow {
   key: string;
   bookEntry: RemixCharacterEntry | undefined;
   draftEntry: RemixCharacterChoice | undefined;
+  isVisualActive: boolean;
+  paramPreview: ParamPreview;
 }
 
 interface Props {
@@ -122,18 +128,23 @@ export function RemixConfigModal({
     [bookRemix],
   );
 
-  // ── Swappable cast — CAST tab rows (recompute when the chosen presets
-  // change). Swap surface only: a cast-in actor locked for swap gets no row but
-  // is still cloned into the remix content (visual roster). ─────────────────
-  const castKeys = useMemo(
+  // ── Personalize set — CAST tab rows (recompute when the chosen presets
+  // change). ⚡2026-08-06: rows = every char with ≥1 param on (NOT ∩ cast).
+  // `swappableKeys` (params.visual ON ∩ cast) decides per-row `isVisualActive`
+  // → whether the trait cluster renders. ────────────────────────────────────
+  const castSets = useMemo(
     () =>
-      swappableCastKeys({
+      resolveRemixCastSets({
         storyPresets: draft.story.presets,
         castingAxes: lookups.castingAxes,
         bookRemix,
         snapshotCharacterKeys: lookups.snapshotCharacterKeys,
       }),
     [draft.story.presets, lookups.castingAxes, lookups.snapshotCharacterKeys, bookRemix],
+  );
+  const swappableSet = useMemo(
+    () => new Set(castSets.swappableKeys),
+    [castSets.swappableKeys],
   );
   const bookCharByKey = useMemo(
     () => new Map(bookRemix.characters.map((c) => [c.key, c])),
@@ -143,15 +154,22 @@ export function RemixConfigModal({
     () => new Map(draft.characters.map((c) => [c.key, c])),
     [draft.characters],
   );
-  // Cast rows exposed for the Cast tab (Phase 04 consumes the full shape).
+  // Cast rows exposed for the Cast tab. `isVisualActive` gates the trait cluster;
+  // `paramPreview` derives display-only value chips from the picked human/profile.
   const castRows = useMemo<RemixCastRow[]>(
     () =>
-      castKeys.map((key) => ({
-        key,
-        bookEntry: bookCharByKey.get(key),
-        draftEntry: draftCharByKey.get(key),
-      })),
-    [castKeys, bookCharByKey, draftCharByKey],
+      castSets.personalizeKeys.map((key) => {
+        const bookEntry = bookCharByKey.get(key);
+        const draftEntry = draftCharByKey.get(key);
+        return {
+          key,
+          bookEntry,
+          draftEntry,
+          isVisualActive: swappableSet.has(key),
+          paramPreview: buildParamPreview(bookEntry, draftEntry, humans),
+        };
+      }),
+    [castSets.personalizeKeys, swappableSet, bookCharByKey, draftCharByKey, humans],
   );
   // ── Draft mutations (pure reducers + dirty flag) ────────────────────────────
   const selectPreset = (axisId: string, presetId: string) => {

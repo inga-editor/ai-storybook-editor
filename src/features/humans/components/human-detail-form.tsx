@@ -19,6 +19,7 @@ import {
   SUPPORTED_LANGUAGES,
   SUPPORTED_COUNTRIES,
   GENDER_OPTIONS,
+  ZODIAC_OPTIONS,
 } from '@/constants/config-constants';
 import type { Human, HumanGender, HumanMetadataPatch } from '@/types/human';
 import { createLogger } from '@/utils/logger';
@@ -36,6 +37,12 @@ function parseGender(raw: string): HumanGender {
   if (raw === '0') return 0;
   if (raw === '1') return 1;
   return null;
+}
+
+function parseZodiac(raw: string): number | null {
+  if (raw === 'null') return null;
+  const n = Number(raw);
+  return Number.isInteger(n) && n >= 1 && n <= 12 ? n : null;
 }
 
 function shallowEqualMap(a: Record<string, string>, b: Record<string, string>): boolean {
@@ -164,6 +171,24 @@ export function HumanDetailForm({ human, onChange }: HumanDetailFormProps) {
           </Select>
         </FormField>
       </div>
+
+      <FormField label="Zodiac">
+        <Select
+          value={human.zodiac === null ? 'null' : String(human.zodiac)}
+          onValueChange={(v) => onChange({ zodiac: parseZodiac(v) })}
+        >
+          <SelectTrigger>
+            <SelectValue placeholder="Unspecified" />
+          </SelectTrigger>
+          <SelectContent>
+            {ZODIAC_OPTIONS.map((opt) => (
+              <SelectItem key={opt.value} value={opt.value}>
+                {opt.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </FormField>
 
       <FormField label="Description">
         <Textarea

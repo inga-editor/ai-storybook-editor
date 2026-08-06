@@ -72,16 +72,24 @@ interface RemixOpts {
    *  (roster == swappable, the common case). Pass a subset to test the
    *  roster ⊃ swappable split (amend 2026-07-31). */
   swappableCharKeys?: string[];
+  /** ⚡2026-08-06 — config keys present WITHOUT a `traits` key (text-only
+   *  personalize entries). They must be EXCLUDED from crop grouping. */
+  textOnlyCharKeys?: string[];
 }
 function makeRemix(o: RemixOpts = {}): Remix {
+  const swappable = (o.swappableCharKeys ?? o.charKeys ?? []).map((k) => ({
+    key: k, human_id: null, visual: null, traits: [], base_image_url: null, is_enabled: true,
+  }));
+  // Text-only entries carry NO `traits` / `base_image_url` key (marker semantics).
+  const textOnly = (o.textOnlyCharKeys ?? []).map((k) => ({
+    key: k, human_id: null, visual: null, is_enabled: true,
+  }));
   return {
     id: 'remix-1',
     characters: (o.charKeys ?? []).map((k) => ({ key: k, name: k, variants: [] })),
     props: (o.propKeys ?? []).map((k) => ({ key: k, name: k, variants: [] })),
     remix_config: {
-      characters: (o.swappableCharKeys ?? o.charKeys ?? []).map((k) => ({
-        key: k, human_id: null, visual: null, traits: [], base_image_url: null, is_enabled: true,
-      })),
+      characters: [...swappable, ...textOnly],
     },
     illustration: { spreads: o.spreads ?? [], sections: [] },
   } as unknown as Remix;
@@ -141,6 +149,24 @@ describe('groupCropsForBatch — image-only crop selection', () => {
     });
     const { cropInputs } = groupCropsForBatch(r);
     expect(cropInputs.map((c) => c.id)).toEqual(['i1']);
+  });
+
+  it('⚡2026-08-06 excludes a TEXT-ONLY config entry (no `traits` key) — not visual-swappable', () => {
+    const r = makeRemix({
+      charKeys: ['c1', 'c2'], // c2 has a config entry but is text-only (no traits)
+      swappableCharKeys: ['c1'],
+      textOnlyCharKeys: ['c2'],
+      spreads: [spread({
+        id: 's1',
+        pageNumber: 1,
+        images: [
+          img({ id: 'i1', tags: [tag('character', 'c1')] }),
+          img({ id: 'i2', tags: [tag('character', 'c2')] }),
+        ],
+      })],
+    });
+    // c2 present in remix_config but WITHOUT traits → filtered out of grouping.
+    expect(groupCropsForBatch(r).cropInputs.map((c) => c.id)).toEqual(['i1']);
   });
 });
 

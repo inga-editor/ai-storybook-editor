@@ -42,7 +42,8 @@ export function bookTraitGate(
   bookChar: RemixCharacterEntry | undefined,
   type: TraitType,
 ): boolean {
-  return bookChar?.traits.find((t) => t.type === type)?.is_enabled ?? true;
+  // Reshape 2026-08-06 (phase 03): trait gates moved to params.visual.traits.
+  return bookChar?.params.visual.traits.find((t) => t.type === type)?.is_enabled ?? true;
 }
 
 /** Trait types the picked visual profile can configure = traits with a
@@ -93,12 +94,16 @@ export function normalizeRemixConfigTraits(
   return {
     ...config,
     characters: config.characters.map((entry) => {
+      // ⚡2026-08-06 — a text-only personalize entry carries NO `traits` key
+      // (presence = visual-availability marker). Leave it untouched — there is
+      // no visual swap surface to mask.
+      if (entry.traits == null) return entry;
       const bookChar = bookByKey.get(entry.key);
       const supported = supportedTraitSetFor(humans, entry.human_id, entry.visual);
       const traits: RemixTraitChoice[] = TRAIT_TYPES.map((type) => {
         // `?? false` mirrors the checkbox render (CharacterConfigRow), NOT the
         // DB-reader `?? true` — WYSIWYG persists what the user saw.
-        const raw = entry.traits.find((t) => t.type === type)?.is_enabled ?? false;
+        const raw = entry.traits?.find((t) => t.type === type)?.is_enabled ?? false;
         return {
           type,
           is_enabled:

@@ -442,13 +442,19 @@ export interface RemixCharacterChoice {
   key: string;
   human_id: string | null;
   visual: string | null;
-  /** 5 trait toggles; only enabled traits (with a human description) are sent
-   *  to the swap endpoint. */
-  traits: RemixTraitChoice[];
-  /** Base-variant swapped appearance staged in the create modal. Copied into
-   *  the cloned variant `visual_swap_url` at create time. */
-  base_image_url: string | null;
+  /** ⚡2026-08-06 OPTIONAL — presence = VISUAL-AVAILABILITY marker. An entry that
+   *  is personalize-only (text params on, but visual swap OFF / not cast) carries
+   *  NO `traits` key at all; the clone purge strips it (see clone-builder). Every
+   *  swap consumer (crop grouping, sprite seed/layout, sprite-swap gating) MUST
+   *  filter by `traits != null`, NEVER by `is_enabled`. When present: 5 trait
+   *  toggles; only enabled traits (with a human description) are sent to swap. */
+  traits?: RemixTraitChoice[];
+  /** @deprecated dead field (always null). ⚡2026-08-06 OPTIONAL — stripped from
+   *  text-only entries at clone purge (kept only on visual-swappable entries). */
+  base_image_url?: string | null;
   is_enabled: boolean;
+  // ⚠️ NO name/gender/age/zodiac value fields — those derive-at-execution from
+  // `human_id` (never persisted into remix_config; ParamPreview is display-only).
 }
 
 export interface RemixPropChoice {
@@ -977,6 +983,10 @@ export interface TextSwapInput {
    *  role's original name, so an actor row's swap source comes from here.
    *  Keys absent from the map fall back to the character's own name. */
   castingNameMap: Record<string, string>;
+  /** ⚡2026-08-06 — book-level `params.name` gate per character key. A config
+   *  entry whose key is ABSENT keeps its ORIGINAL name (no name swap), even when
+   *  a human is picked. Derived from `bookRemix.characters[].params.name.is_enabled`. */
+  nameGateKeys: Set<string>;
 }
 
 export interface TextSwapResult {

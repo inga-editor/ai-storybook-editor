@@ -93,6 +93,7 @@ export function CreateHumanModal({ onClose, onCreated }: CreateHumanModalProps) 
       source_name: form.sourceName.trim(),
       display_name: normalizeDisplayNames(form.displayName, form.sourceName),
       gender: form.gender,
+      zodiac: null,
       country: form.country.trim() || null,
       description: form.description.trim() || null,
       visual_profiles: [],

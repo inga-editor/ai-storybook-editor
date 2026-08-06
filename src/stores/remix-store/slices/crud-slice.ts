@@ -8,6 +8,7 @@ import type { Human } from '@/types/human';
 import type { BookRemix } from '@/types/editor';
 import { applyTextSwap } from '@/features/remix/text-swap-engine';
 import { buildCastingNameMap } from '@/features/remix/effective-cast';
+import { normalizeParams } from '@/constants/config-constants';
 import { buildRemixClonePayload } from '../clone-builder';
 import { mapRowToRemix } from '../supabase-mapping';
 import { computeCropSheets } from '../crop-sheet-layout';
@@ -84,6 +85,15 @@ export const createCrudSlice: RemixSliceCreator<RemixCrudSlice> = (
       snapshotState.characters,
     );
 
+    // ⚡2026-08-06 — book-level `params.name` gate per character key. A char
+    // whose name param is OFF keeps its ORIGINAL name (no swap). Legacy book
+    // rows resolve `name: true` (normalizeParams), preserving the old behavior.
+    const nameGateKeys = new Set(
+      bookRemix.characters
+        .filter((c) => normalizeParams(c).name.is_enabled)
+        .map((c) => c.key),
+    );
+
     const swap = applyTextSwap({
       illustration: payload.illustration,
       remixCharacters: payload.characters,
@@ -91,6 +101,7 @@ export const createCrudSlice: RemixSliceCreator<RemixCrudSlice> = (
       enabledLanguages,
       humans: humansMap,
       castingNameMap,
+      nameGateKeys,
     });
 
     const finalPayload = { ...payload, illustration: swap.illustration };

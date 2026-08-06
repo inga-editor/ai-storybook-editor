@@ -15,17 +15,20 @@ import { render, screen, fireEvent, within, cleanup } from '@testing-library/rea
 import { CastTab } from './cast-tab';
 import { upsertCharacterChoice, patchMemories } from '../remix-config-draft-helpers';
 import { TRAIT_TYPES } from '@/constants/trait-constants';
+import { makeDefaultParams } from '@/constants/config-constants';
+import { buildParamPreview } from '../cast-param-preview';
 import type { Human } from '@/types/human';
 import type { RemixCharacterEntry } from '@/types/editor';
 import type { RemixConfig } from '@/types/remix';
 import type { RemixCastRow } from '../remix-config-modal';
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
+// Reshape 2026-08-06 (phase 03): trait gates live under params.visual.traits.
 const bookChar = (key: string, name: string): RemixCharacterEntry => ({
   key,
   name,
   is_enabled: true,
-  traits: TRAIT_TYPES.map((type) => ({ type, is_enabled: true })),
+  params: makeDefaultParams(),
 });
 
 const BOOK_CHARS: RemixCharacterEntry[] = [
@@ -40,6 +43,7 @@ const HUMANS: Human[] = [
     sourceName: 'Alice',
     displayName: {},
     gender: null,
+    zodiac: null,
     country: null,
     description: null,
     visualProfiles: [
@@ -47,7 +51,6 @@ const HUMANS: Human[] = [
         clientId: 'vp1',
         name: 'Teen',
         age: 16,
-        type: 'full_body',
         rawImages: ['u'],
         nobgImage: null,
         convertedImage: null,
@@ -97,11 +100,18 @@ function Harness() {
   );
   const castRows = useMemo<RemixCastRow[]>(
     () =>
-      CAST_BY_PRESET[preset].map((key) => ({
-        key,
-        bookEntry: bookByKey.get(key),
-        draftEntry: draftByKey.get(key),
-      })),
+      CAST_BY_PRESET[preset].map((key) => {
+        const bookEntry = bookByKey.get(key);
+        const draftEntry = draftByKey.get(key);
+        return {
+          key,
+          bookEntry,
+          draftEntry,
+          // Harness rows are visual-active (book gates all ON via makeDefaultParams).
+          isVisualActive: true,
+          paramPreview: buildParamPreview(bookEntry, draftEntry, HUMANS),
+        };
+      }),
     [preset, bookByKey, draftByKey],
   );
 
@@ -210,5 +220,49 @@ describe('CastTab', () => {
       style: 'real',
       photos: [{ key: 'p1', is_enabled: true, media_url: null }],
     });
+  });
+
+  it('⚡2026-08-06 TEXT-ONLY row: no trait cluster, ParamPreview chips per book gate', () => {
+    // Book gate: name ON only (gender/age/zodiac/visual OFF) → chip "name:" only.
+    const textOnlyBook: RemixCharacterEntry = {
+      key: 'didi',
+      name: 'Didi',
+      is_enabled: true,
+      params: {
+        name: { is_enabled: true },
+        gender: { is_enabled: false },
+        age: { is_enabled: false },
+        zodiac: { is_enabled: false },
+        visual: { is_enabled: false, traits: [] },
+      },
+    };
+    const rows: RemixCastRow[] = [
+      {
+        key: 'didi',
+        bookEntry: textOnlyBook,
+        draftEntry: undefined,
+        isVisualActive: false,
+        paramPreview: buildParamPreview(textOnlyBook, undefined, HUMANS),
+      },
+    ];
+    render(
+      <CastTab
+        castRows={rows}
+        humans={HUMANS}
+        memories={INITIAL_CONFIG.memories}
+        showMemories={false}
+        onUpsertCharacter={() => {}}
+        onMemoriesChange={() => {}}
+      />,
+    );
+    const row = rowOf('Didi');
+    // No trait cluster for a text-only row.
+    expect(within(row).queryByRole('checkbox', { name: 'Face' })).not.toBeInTheDocument();
+    // Human/Visual pickers still present (2 comboboxes).
+    expect(within(row).getAllByRole('combobox')).toHaveLength(2);
+    // ParamPreview: only the enabled `name` param renders a chip (value "—" unpicked).
+    expect(within(row).getByText(/name:/)).toBeInTheDocument();
+    expect(within(row).queryByText(/gender:/)).not.toBeInTheDocument();
+    expect(within(row).queryByText(/zodiac:/)).not.toBeInTheDocument();
   });
 });

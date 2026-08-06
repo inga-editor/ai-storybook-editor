@@ -172,6 +172,19 @@ describe('normalizeParametricSlot', () => {
     expect(n?.characters[0].age_min).toBe(10);
     expect(n?.characters[0].age_max).toBe(10);
   });
+  it('zodiac absent → null (axis OFF)', () => {
+    const n = normalizeParametricSlot({ characters: [{ key: 'a', name: null, gender: null, age_min: null, age_max: null }] });
+    expect(n?.characters[0].zodiac).toBeNull();
+  });
+  it('zodiac in 1..12 → preserved', () => {
+    const n = normalizeParametricSlot({ characters: [{ key: 'a', zodiac: 7 }] });
+    expect(n?.characters[0].zodiac).toBe(7);
+  });
+  it('zodiac out of range / non-integer → null', () => {
+    expect(normalizeParametricSlot({ characters: [{ key: 'a', zodiac: 0 }] })?.characters[0].zodiac).toBeNull();
+    expect(normalizeParametricSlot({ characters: [{ key: 'a', zodiac: 13 }] })?.characters[0].zodiac).toBeNull();
+    expect(normalizeParametricSlot({ characters: [{ key: 'a', zodiac: 3.5 }] })?.characters[0].zodiac).toBeNull();
+  });
   it('uppercases + de-dupes country codes; keeps explicit is_enabled false', () => {
     const n = normalizeParametricSlot({
       country: { is_enabled: true, values: [{ code: 'vn', is_enabled: false }, { code: 'VN' }, { code: 'us' }] },

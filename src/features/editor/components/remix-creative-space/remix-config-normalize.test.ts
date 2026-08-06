@@ -31,7 +31,6 @@ const human: Human = {
       clientId: 'c1',
       name: 'vp1',
       age: 30,
-      type: 'full_body',
       rawImages: [],
       nobgImage: null,
       convertedImage: 'https://x/img.png',
@@ -50,11 +49,21 @@ const bookChar: RemixCharacterEntry = {
   key: 'char_a',
   name: 'Character A',
   is_enabled: true,
+  // Reshape 2026-08-06 (phase 03): trait gates live under params.visual.traits.
   // Book gates outfit off; missing entries (face/facewear/hair) default enabled.
-  traits: [
-    { type: 'skin', is_enabled: true },
-    { type: 'outfit', is_enabled: false },
-  ],
+  params: {
+    name: { is_enabled: true },
+    gender: { is_enabled: true },
+    age: { is_enabled: true },
+    zodiac: { is_enabled: true },
+    visual: {
+      is_enabled: true,
+      traits: [
+        { type: 'skin', is_enabled: true },
+        { type: 'outfit', is_enabled: false },
+      ],
+    },
+  },
 };
 
 function choice(overrides: Partial<RemixCharacterChoice>): RemixCharacterChoice {
@@ -81,9 +90,8 @@ function configWith(characters: RemixCharacterChoice[]): RemixConfig {
 }
 
 const enabledTypes = (cfg: RemixConfig, key: string): TraitType[] =>
-  cfg.characters
-    .find((c) => c.key === key)!
-    .traits.filter((t) => t.is_enabled)
+  (cfg.characters.find((c) => c.key === key)!.traits ?? [])
+    .filter((t) => t.is_enabled)
     .map((t) => t.type);
 
 // ── bookTraitGate ────────────────────────────────────────────────────────────
@@ -181,7 +189,7 @@ describe('normalizeRemixConfigTraits — WYSIWYG', () => {
     const out = normalizeRemixConfigTraits(configWith([entry]), [bookChar], [human]);
     expect(enabledTypes(out, 'char_a')).toEqual(['face']);
     // Writer always emits all 5 in canonical order.
-    expect(out.characters[0].traits.map((t) => t.type)).toEqual(TRAIT_TYPES);
+    expect(out.characters[0].traits!.map((t) => t.type)).toEqual(TRAIT_TYPES);
   });
 
   it('character absent from book list → gates open, profile mask still applies', () => {
@@ -205,6 +213,14 @@ describe('normalizeRemixConfigTraits — WYSIWYG', () => {
     const snapshot = JSON.parse(JSON.stringify(cfg));
     normalizeRemixConfigTraits(cfg, [bookChar], [human]);
     expect(cfg).toEqual(snapshot);
+  });
+
+  it('⚡2026-08-06 tolerates a TEXT-ONLY entry (no traits key) — passes through untouched', () => {
+    // Strip the traits key entirely (text-only personalize entry).
+    const { traits: _drop, ...textOnly } = choice({});
+    const out = normalizeRemixConfigTraits(configWith([textOnly as RemixCharacterChoice]), [bookChar], [human]);
+    expect(out.characters[0]).not.toHaveProperty('traits');
+    expect(out.characters[0]).toEqual(textOnly);
   });
 });
 

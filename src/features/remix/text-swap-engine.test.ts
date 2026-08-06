@@ -32,6 +32,7 @@ function makeHuman(
     sourceName,
     displayName,
     gender: null,
+    zodiac: null,
     country: null,
     description: null,
     visualProfiles: [],
@@ -122,16 +123,21 @@ interface BuildInputOpts {
   humans?: Human[];
   enabledLanguages?: string[];
   castingNameMap?: Record<string, string>;
+  /** ⚡2026-08-06 — book `params.name` gate. Defaults to ALL config char keys
+   *  (name-swap ON), preserving pre-per-param behavior for existing cases. */
+  nameGateKeys?: Set<string>;
 }
 
 function makeInput(opts: BuildInputOpts = {}): TextSwapInput {
+  const configCharacters = opts.configCharacters ?? [];
   return {
     illustration: makeIllustration(opts.spreads ?? []),
     remixCharacters: opts.remixCharacters ?? [],
-    configCharacters: opts.configCharacters ?? [],
+    configCharacters,
     enabledLanguages: opts.enabledLanguages ?? ['vi_VN'],
     humans: Object.fromEntries((opts.humans ?? []).map((h) => [h.id, h])),
     castingNameMap: opts.castingNameMap ?? {},
+    nameGateKeys: opts.nameGateKeys ?? new Set(configCharacters.map((c) => c.key)),
   };
 }
 
@@ -264,6 +270,37 @@ describe('applyTextSwap', () => {
       }));
       const tb = r.illustration.spreads[0].textboxes![0] as Record<string, SpreadTextboxContent>;
       expect(tb.vi_VN.text).toBe('Sophie chạy đi.');
+    });
+  });
+
+  // ── Name gate (⚡2026-08-06 — params.name) ───────────────────────────────
+
+  describe('nameGateKeys (params.name gate)', () => {
+    it('key NOT in the gate → ORIGINAL name kept, no swap, no warning', () => {
+      const r = applyTextSwap(makeInput({
+        spreads: [makeSpread('s1', [makeTextbox('tb1', { vi_VN: makeContent('Miu chạy đi.') })])],
+        remixCharacters: [makeRemixChar('c1', 'Miu')],
+        configCharacters: [makeConfigChar('c1', 'h1')],
+        humans: [makeHuman('h1', 'Sophie', { vi_VN: 'Sophie' })],
+        nameGateKeys: new Set(), // name param OFF for every character
+      }));
+      const tb = r.illustration.spreads[0].textboxes![0] as Record<string, SpreadTextboxContent>;
+      expect(tb.vi_VN.text).toBe('Miu chạy đi.'); // unchanged
+      expect(r.matchCount).toBe(0);
+      expect(r.warnings).toHaveLength(0); // gated-out → silent, not a warning
+    });
+
+    it('key in the gate → swap runs (baseline parity)', () => {
+      const r = applyTextSwap(makeInput({
+        spreads: [makeSpread('s1', [makeTextbox('tb1', { vi_VN: makeContent('Miu chạy đi.') })])],
+        remixCharacters: [makeRemixChar('c1', 'Miu')],
+        configCharacters: [makeConfigChar('c1', 'h1')],
+        humans: [makeHuman('h1', 'Sophie', { vi_VN: 'Sophie' })],
+        nameGateKeys: new Set(['c1']),
+      }));
+      const tb = r.illustration.spreads[0].textboxes![0] as Record<string, SpreadTextboxContent>;
+      expect(tb.vi_VN.text).toBe('Sophie chạy đi.');
+      expect(r.matchCount).toBe(1);
     });
   });
 

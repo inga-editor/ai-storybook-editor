@@ -22,7 +22,6 @@ export function mapVisualProfileRow(row: VisualProfileRow): VisualProfile {
     clientId: genUuid(),
     name: typeof row.name === 'string' ? row.name : '',
     age: typeof row.age === 'number' ? row.age : 0,
-    type: row.type ?? 'face',
     rawImages: Array.isArray(row.raw_images) ? row.raw_images : [],
     nobgImage: row.nobg_image ?? null,
     convertedImage: row.converted_image ?? null,
@@ -45,6 +44,7 @@ export function mapHumanRow(row: HumanRow): Human {
     sourceName: row.source_name,
     displayName: row.display_name ?? {},
     gender: (row.gender === null ? null : row.gender) as HumanGender,
+    zodiac: row.zodiac ?? null,
     country: row.country,
     description: row.description,
     visualProfiles: (row.visual_profiles ?? []).map(mapVisualProfileRow),
@@ -58,7 +58,6 @@ export function toVisualProfileRow(profile: VisualProfile): VisualProfileRow {
   return {
     name: profile.name,
     age: profile.age,
-    type: profile.type,
     raw_images: profile.rawImages,
     nobg_image: profile.nobgImage,
     converted_image: profile.convertedImage,

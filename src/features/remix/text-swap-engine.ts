@@ -55,6 +55,11 @@ function buildSwapMap(
   for (const cfg of input.configCharacters) {
     if (!cfg.is_enabled) continue;
 
+    // ⚡2026-08-06 — `params.name` gate: absent from the gate set → keep the
+    // ORIGINAL name (no swap) even when a human is picked. Silent skip (the
+    // book chose not to personalize this character's name).
+    if (!input.nameGateKeys.has(cfg.key)) continue;
+
     if (cfg.human_id === null) {
       warnings.push({ kind: 'no_human_picked', characterKey: cfg.key });
       continue;

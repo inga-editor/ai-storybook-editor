@@ -35,12 +35,12 @@ function makeBook(): Book {
   return {
     parametric_slot: {
       characters: [
-        { key: 'miu', name: 'Miu', gender: 'female', age_min: 3, age_max: 6 },
-        { key: 'bo', name: 'Bo', gender: null, age_min: null, age_max: null },
+        { key: 'miu', name: 'Miu', gender: 'female', age_min: 3, age_max: 6, zodiac: null },
+        { key: 'bo', name: 'Bo', gender: null, age_min: null, age_max: null, zodiac: null },
         // Config panel seeds the literal 'unspecified' for a character with no snapshot gender.
-        { key: 'sun', name: 'Sun', gender: 'unspecified', age_min: null, age_max: null },
+        { key: 'sun', name: 'Sun', gender: 'unspecified', age_min: null, age_max: null, zodiac: null },
         // Free-text gender straight from an imported / AI-authored character.
-        { key: 'lan', name: 'Lan', gender: 'Nữ', age_min: null, age_max: null },
+        { key: 'lan', name: 'Lan', gender: 'Nữ', age_min: null, age_max: null, zodiac: null },
       ],
       photos: [
         { key: 'photo_1', is_enabled: true, original: true, real: true, styled: false },

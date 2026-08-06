@@ -121,11 +121,13 @@ export function originalVariantArtwork(variant: {
   return selected?.media_url ?? list[0]?.media_url ?? null;
 }
 
-/** True when a character is enabled in the remix config (drives sprite scope).
- *  Char absent from `remix_config.characters` → not in scope (excluded). */
+/** True when a character is VISUAL-swappable in the remix config (drives sprite
+ *  scope). ⚡2026-08-06: requires the entry to carry a `traits` key (presence =
+ *  visual-availability marker) — a text-only personalize entry (no `traits`) is
+ *  NOT sprite-swapped. Char absent from `remix_config.characters` → excluded. */
 function isCharacterEnabled(remix: Remix, charKey: string): boolean {
   const cfg = remix.remix_config.characters.find((c) => c.key === charKey);
-  return !!cfg && cfg.is_enabled;
+  return !!cfg && cfg.is_enabled && cfg.traits != null;
 }
 
 /**

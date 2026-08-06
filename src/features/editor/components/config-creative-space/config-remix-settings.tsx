@@ -20,15 +20,17 @@ import {
   REMIX_LANGUAGES,
   REMIX_SETTINGS_DEFAULT_TAB,
   REMIX_STORY_FEATURES,
+  makeDefaultParams,
   makeDefaultRemixMemories,
   makeDefaultTraits,
+  normalizeParams,
   normalizeRemixStory,
-  normalizeRemixTraits,
   type RemixSettingsTab,
   type RemixStoryFeatureKey,
 } from '@/constants/config-constants';
 import type {
   BookRemix,
+  CharacterParamKey,
   RemixLanguageEntry,
   RemixVoiceEntry,
   ParametricPhotoEntry,
@@ -38,7 +40,7 @@ import type { Character } from '@/types/character-types';
 import { Switch } from '@/components/ui/switch';
 import { RemixSettingsTabHeader } from './remix/remix-settings-tab-header';
 import { StoryFeatureRow } from './remix/story-feature-row';
-import { CharacterRemixRow } from './remix/character-remix-row';
+import { CharacterRemixBlock } from './remix/character-remix-block';
 import { MemoryRemixRow } from './remix/memory-remix-row';
 import { LanguageRemixRow } from './remix/language-remix-row';
 import { VoiceRemixRow } from './remix/voice-remix-row';
@@ -148,16 +150,42 @@ export function ConfigRemixSettings() {
 
   // ── CAST: characters ───────────────────────────────────────────────────────
 
+  // Master row toggle. New entries are built FRESH via makeDefaultParams so no
+  // legacy top-level traits[] is ever re-emitted (double-write guard).
   const upsertCharacter = (ch: Character, patch: { is_enabled: boolean }) => {
     log.debug('upsertCharacter', 'patch draft', { key: ch.key, enabled: patch.is_enabled });
     patchDraft((prev) => {
       const next = [...prev.characters];
       const idx = next.findIndex((c) => c.key === ch.key);
       if (idx >= 0) {
-        next[idx] = { ...next[idx], ...patch, name: ch.name, traits: normalizeRemixTraits(next[idx].traits) };
+        next[idx] = { ...next[idx], is_enabled: patch.is_enabled, name: ch.name, params: normalizeParams(next[idx]) };
       } else {
-        next.push({ key: ch.key, name: ch.name, is_enabled: patch.is_enabled, traits: makeDefaultTraits() });
+        next.push({ key: ch.key, name: ch.name, is_enabled: patch.is_enabled, params: makeDefaultParams() });
       }
+      return { ...prev, characters: next };
+    });
+  };
+
+  // Per-param toggle (name/gender/age/zodiac/visual). Enabling `visual` when its
+  // traits[] is somehow empty re-seeds the 5 canonical traits (R6); un-checking
+  // preserves the traits so a re-check restores prior gates.
+  const upsertCharacterParam = (ch: Character, paramKey: CharacterParamKey, isEnabled: boolean) => {
+    log.debug('upsertCharacterParam', 'patch draft', { key: ch.key, param: paramKey, enabled: isEnabled });
+    patchDraft((prev) => {
+      const next = [...prev.characters];
+      let idx = next.findIndex((c) => c.key === ch.key);
+      if (idx < 0) {
+        next.push({ key: ch.key, name: ch.name, is_enabled: false, params: makeDefaultParams() });
+        idx = next.length - 1;
+      }
+      const params = normalizeParams(next[idx]);
+      if (paramKey === 'visual') {
+        const traits = isEnabled && params.visual.traits.length === 0 ? makeDefaultTraits() : params.visual.traits;
+        params.visual = { is_enabled: isEnabled, traits };
+      } else {
+        params[paramKey] = { is_enabled: isEnabled };
+      }
+      next[idx] = { ...next[idx], name: ch.name, params };
       return { ...prev, characters: next };
     });
   };
@@ -168,14 +196,40 @@ export function ConfigRemixSettings() {
       const next = [...prev.characters];
       let idx = next.findIndex((c) => c.key === ch.key);
       if (idx < 0) {
-        next.push({ key: ch.key, name: ch.name, is_enabled: false, traits: makeDefaultTraits() });
+        next.push({ key: ch.key, name: ch.name, is_enabled: false, params: makeDefaultParams() });
         idx = next.length - 1;
       }
-      const traits = normalizeRemixTraits(next[idx].traits).map((t) =>
+      const params = normalizeParams(next[idx]);
+      const traits = params.visual.traits.map((t) =>
         t.type === type ? { ...t, is_enabled: isEnabled } : t,
       );
-      next[idx] = { ...next[idx], name: ch.name, traits };
+      params.visual = { ...params.visual, traits };
+      next[idx] = { ...next[idx], name: ch.name, params };
       return { ...prev, characters: next };
+    });
+  };
+
+  // Bulk header — first-time gate (UI-only, no schema field). Acts ONLY when 0
+  // rows are ON: enables every snapshot character (materializing absent entries)
+  // in one patch. If ≥1 row is already ON (user has chosen) it is a no-op.
+  const toggleAllCharacters = () => {
+    patchDraft((prev) => {
+      if (prev.characters.some((c) => c.is_enabled)) {
+        log.debug('toggleAllCharacters', 'no-op — a row is already ON', {});
+        return prev;
+      }
+      log.debug('toggleAllCharacters', 'first-time gate — enabling all rows', { chars: snapshotChars.length });
+      const byKey = new Map(prev.characters.map((c) => [c.key, c]));
+      const enabled = snapshotChars.map((ch) => {
+        const existing = byKey.get(ch.key);
+        return existing
+          ? { ...existing, is_enabled: true, name: ch.name, params: normalizeParams(existing) }
+          : { key: ch.key, name: ch.name, is_enabled: true, params: makeDefaultParams() };
+      });
+      // Preserve any dangling entries not present in the snapshot (pruned on save).
+      const snapshotKeys = new Set(snapshotChars.map((c) => c.key));
+      for (const c of prev.characters) if (!snapshotKeys.has(c.key)) enabled.push(c);
+      return { ...prev, characters: enabled };
     });
   };
 
@@ -249,6 +303,16 @@ export function ConfigRemixSettings() {
   }
   voiceSubjects.push({ key: NARRATOR_VOICE_KEY, name: 'Narrator' });
 
+  // Bulk-header state (derived): a row is ON when its entry.is_enabled is true.
+  // The bulk toggle is a one-way first-time gate — interactive only when no row
+  // is ON; once any row is ON it renders greyed/disabled (never hidden).
+  const enabledCharKeys = new Set(
+    remix.characters.filter((c) => c.is_enabled).map((c) => c.key),
+  );
+  const anyCharacterOn = enabledCharKeys.size > 0;
+  const allCharactersOn =
+    snapshotChars.length > 0 && snapshotChars.every((ch) => enabledCharKeys.has(ch.key));
+
   return (
     <div className="flex h-full flex-col overflow-hidden">
       <ConfigSectionHeader
@@ -275,7 +339,18 @@ export function ConfigRemixSettings() {
         {activeTab === 'cast' && (
           <>
             <div>
-              <GroupHeader>Characters</GroupHeader>
+              <GroupHeader
+                trailing={
+                  <Switch
+                    checked={allCharactersOn}
+                    disabled={anyCharacterOn || snapshotChars.length === 0}
+                    onCheckedChange={toggleAllCharacters}
+                    aria-label="Enable remix for all characters"
+                  />
+                }
+              >
+                Characters
+              </GroupHeader>
               {snapshotChars.length === 0 ? (
                 <EmptyState>No characters in book yet</EmptyState>
               ) : (
@@ -283,14 +358,15 @@ export function ConfigRemixSettings() {
                   {snapshotChars.map((ch) => {
                     const entry = remix.characters.find((c) => c.key === ch.key);
                     const isEnabled = entry?.is_enabled ?? false;
-                    const traits = normalizeRemixTraits(entry?.traits);
+                    const params = normalizeParams(entry);
                     return (
-                      <CharacterRemixRow
+                      <CharacterRemixBlock
                         key={ch.key}
                         name={ch.name}
                         checked={isEnabled}
-                        traits={traits}
+                        params={params}
                         onToggle={(next) => upsertCharacter(ch, { is_enabled: next })}
+                        onParamToggle={(paramKey, next) => upsertCharacterParam(ch, paramKey, next)}
                         onTraitToggle={(type, next) => upsertCharacterTrait(ch, type, next)}
                       />
                     );

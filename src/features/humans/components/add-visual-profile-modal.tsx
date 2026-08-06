@@ -11,16 +11,8 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
 import { FormField } from '@/features/humans/components/shared/form-field';
 import { uploadHumanImage, removeHumanStorageObjects } from '@/apis/human-api';
-import { VISUAL_PROFILE_TYPES } from '@/constants/config-constants';
 import type { VisualProfile } from '@/types/human';
 import { cn } from '@/utils/utils';
 import { createLogger } from '@/utils/logger';
@@ -68,7 +60,6 @@ export function AddVisualProfileModal({
 }: AddVisualProfileModalProps) {
   const [name, setName] = useState(defaultName);
   const [ageRaw, setAgeRaw] = useState<string>('');
-  const [type, setType] = useState<string>('face');
   const [images, setImages] = useState<PendingImage[]>([]);
   const [step, setStep] = useState<Step>('form');
   const [error, setError] = useState<string | null>(null);
@@ -146,7 +137,6 @@ export function AddVisualProfileModal({
         clientId: genId(),
         name: name.trim(),
         age: parsedAge,
-        type,
         rawImages: urls,
         nobgImage: null,
         convertedImage: null,
@@ -193,38 +183,18 @@ export function AddVisualProfileModal({
             />
           </FormField>
 
-          <div className="grid grid-cols-2 gap-3">
-            <FormField label="Age" required>
-              <Input
-                type="number"
-                min={0}
-                max={120}
-                step={1}
-                value={ageRaw}
-                onChange={(e) => setAgeRaw(e.target.value)}
-                placeholder="0-120"
-                disabled={step === 'uploading'}
-              />
-            </FormField>
-            <FormField label="Type" required>
-              <Select
-                value={type}
-                onValueChange={setType}
-                disabled={step === 'uploading'}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {VISUAL_PROFILE_TYPES.map((t) => (
-                    <SelectItem key={t.value} value={t.value}>
-                      {t.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </FormField>
-          </div>
+          <FormField label="Age" required>
+            <Input
+              type="number"
+              min={0}
+              max={120}
+              step={1}
+              value={ageRaw}
+              onChange={(e) => setAgeRaw(e.target.value)}
+              placeholder="0-120"
+              disabled={step === 'uploading'}
+            />
+          </FormField>
 
           <FormField label={`Images (${images.length}/${MAX_IMAGES})`} required>
             <div className="grid grid-cols-3 gap-2">

@@ -227,12 +227,24 @@ function normalizeCharacters(raw: unknown): ParametricCharacterEntry[] {
       ageMax = ageMin; // §4.4: age_max = max(age_min, age_max)
     }
 
+    // Zodiac (1..12): absent → null (axis OFF); out-of-range / non-integer →
+    // null + warn (external data). No seed here — enableCharacter seeds DEFAULT_ZODIAC.
+    let zodiac: number | null = null;
+    if (typeof entry.zodiac === 'number') {
+      if (Number.isInteger(entry.zodiac) && entry.zodiac >= 1 && entry.zodiac <= 12) {
+        zodiac = entry.zodiac;
+      } else {
+        log.warn('normalizeCharacters', 'zodiac out of 1..12, nulling', { key: entry.key });
+      }
+    }
+
     out.push({
       key: entry.key,
       name: typeof entry.name === 'string' ? entry.name : null,
       gender: typeof entry.gender === 'string' ? entry.gender : null,
       age_min: ageMin,
       age_max: ageMax,
+      zodiac,
     });
   }
   return out;

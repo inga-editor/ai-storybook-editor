@@ -146,7 +146,12 @@ export const useRemixConfigCharacter = (
     return {
       human_id: configChar.human_id,
       visual: configChar.visual,
-      traits: configChar.traits,
+      // ⚡2026-08-06 — `traits` is optional (absent = text-only personalize entry,
+      // not visual-swappable). This is the SINGLE view-layer `?? []` fallback;
+      // downstream `hasCompleteSwapConfig` then reports no enabled trait → the
+      // Generate gate stays disabled for a text-only entry. Pipeline consumers
+      // FILTER by presence instead (never fall back).
+      traits: configChar.traits ?? [],
       converted_image: convertedImage,
     };
   }, [configChar, humans]);
@@ -223,8 +228,10 @@ export const useRemixVariants = (
     // (`remix_config.characters[]` KEY membership; the remixer's `is_enabled`
     // is intentionally ignored, parity with crop grouping, so batch gating
     // still sees remixer-disabled entries referenced by lineup tokens).
+    // ⚡2026-08-06: only entries WITH a `traits` key are visual-swappable — a
+    // text-only personalize entry (no traits) is excluded from the Variants tab.
     const swappableKeys = new Set(
-      remix.remix_config.characters.map((c) => c.key),
+      remix.remix_config.characters.filter((c) => c.traits != null).map((c) => c.key),
     );
     for (const c of remix.characters) {
       if (!swappableKeys.has(c.key)) continue;

@@ -116,7 +116,11 @@ export function RemixAccordionItem({
     // ⚠️ Amend 2026-07-31: characters[] is the unGated visual roster — prefer
     // the first SWAPPABLE character (has a remix_config entry) so the modal
     // opens on an entity that can actually generate; roster-first fallback.
-    const swappable = new Set(remix.remix_config.characters.map((cc) => cc.key));
+    // ⚡2026-08-06: a swappable entry MUST carry a `traits` key — a text-only
+    // personalize entry (no traits) cannot generate, so exclude it here.
+    const swappable = new Set(
+      remix.remix_config.characters.filter((cc) => cc.traits != null).map((cc) => cc.key),
+    );
     const c =
       remix.characters.find((rc) => swappable.has(rc.key)) ?? remix.characters[0];
     if (c) return { type: 'character', key: c.key };

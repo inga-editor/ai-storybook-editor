@@ -13,6 +13,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   normalizeBookRemix,
+  normalizeParams,
   normalizeRemixStory,
   normalizeRemixTraits,
   normalizeBookTypography,
@@ -115,13 +116,81 @@ describe('normalizeBookRemix', () => {
     expect(result!.voices).toEqual(voices);
   });
 
-  it('normalizes each character traits[] to the 5 canonical entries', () => {
+  it('migrates a legacy character (top-level traits[]) into params.visual.traits', () => {
     const result = normalizeBookRemix({
       characters: [{ key: 'elara', name: 'Elara', is_enabled: true, traits: [] }],
     });
-    const traits = result!.characters[0].traits;
+    const entry = result!.characters[0] as unknown as Record<string, unknown>;
+    // Legacy top-level traits[] is NOT re-emitted (no double-write).
+    expect(entry).not.toHaveProperty('traits');
+    const traits = result!.characters[0].params.visual.traits;
     expect(traits.map((t) => t.type)).toEqual(TRAIT_TYPES);
     expect(traits.every((t) => t.is_enabled === true)).toBe(true);
+    // Legacy fully (no params) → all 4 text params ON (preserve name-swap, USER S1).
+    expect(result!.characters[0].params.name.is_enabled).toBe(true);
+    expect(result!.characters[0].params.visual.is_enabled).toBe(true);
+  });
+});
+
+describe('normalizeParams (CAST per-param reader tolerance, phase 03)', () => {
+  it('legacy entry (no params) → 4 text params ON + visual ON with traits from top-level traits[]', () => {
+    const p = normalizeParams({ traits: [{ type: 'outfit', is_enabled: false }] });
+    expect(p.name.is_enabled).toBe(true);
+    expect(p.gender.is_enabled).toBe(true);
+    expect(p.age.is_enabled).toBe(true);
+    expect(p.zodiac.is_enabled).toBe(true);
+    expect(p.visual.is_enabled).toBe(true);
+    // Traits materialized to 5 canonical; the gated-off outfit is preserved.
+    expect(p.visual.traits.map((t) => t.type)).toEqual(TRAIT_TYPES);
+    expect(p.visual.traits.find((t) => t.type === 'outfit')!.is_enabled).toBe(false);
+    expect(p.visual.traits.find((t) => t.type === 'face')!.is_enabled).toBe(true);
+  });
+
+  it('legacy entry with no traits at all → 5 traits default ON', () => {
+    const p = normalizeParams({});
+    expect(p.visual.traits.map((t) => t.type)).toEqual(TRAIT_TYPES);
+    expect(p.visual.traits.every((t) => t.is_enabled)).toBe(true);
+  });
+
+  it('shape-new but a text key missing → that param OFF', () => {
+    const p = normalizeParams({
+      params: {
+        name: { is_enabled: true },
+        // gender / age / zodiac missing → OFF
+        visual: { is_enabled: false, traits: [] },
+      },
+    });
+    expect(p.name.is_enabled).toBe(true);
+    expect(p.gender.is_enabled).toBe(false);
+    expect(p.age.is_enabled).toBe(false);
+    expect(p.zodiac.is_enabled).toBe(false);
+    // Visual node present → its is_enabled honored (false); traits refilled to 5 ON.
+    expect(p.visual.is_enabled).toBe(false);
+    expect(p.visual.traits.map((t) => t.type)).toEqual(TRAIT_TYPES);
+    expect(p.visual.traits.every((t) => t.is_enabled)).toBe(true);
+  });
+
+  it('shape-new with empty visual.traits → refilled to 5 canonical entries ON', () => {
+    const p = normalizeParams({
+      params: {
+        name: { is_enabled: false },
+        gender: { is_enabled: false },
+        age: { is_enabled: false },
+        zodiac: { is_enabled: false },
+        visual: { is_enabled: true, traits: [] },
+      },
+    });
+    expect(p.visual.traits.map((t) => t.type)).toEqual(TRAIT_TYPES);
+    expect(p.visual.traits.every((t) => t.is_enabled)).toBe(true);
+  });
+
+  it('shape-new missing visual node → falls back to legacy top-level traits[], visual ON', () => {
+    const p = normalizeParams({
+      params: { name: { is_enabled: true } },
+      traits: [{ type: 'hair', is_enabled: false }],
+    });
+    expect(p.visual.is_enabled).toBe(true);
+    expect(p.visual.traits.find((t) => t.type === 'hair')!.is_enabled).toBe(false);
   });
 });
 

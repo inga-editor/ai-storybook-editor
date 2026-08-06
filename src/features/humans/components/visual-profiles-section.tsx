@@ -24,10 +24,6 @@ import { createLogger } from '@/utils/logger';
 const log = createLogger('Humans', 'VisualProfilesSection');
 
 const STYLE_BADGE_LABEL = '3D';
-const VISUAL_PROFILE_TYPE_LABEL: Record<string, string> = {
-  face: 'face',
-  full_body: 'full body',
-};
 
 type CardState = 'processing' | 'done' | 'failed';
 
@@ -88,7 +84,6 @@ function VisualProfileCardImpl({
         .map((type) => TRAIT_LABELS[type])
         .join(', ')
     : null;
-  const typeLabel = VISUAL_PROFILE_TYPE_LABEL[profile.type] ?? profile.type;
 
   return (
     <article
@@ -193,7 +188,6 @@ function VisualProfileCardImpl({
         />
         <div className="flex items-center gap-3 text-xs text-muted-foreground">
           <span>Age: {profile.age}</span>
-          <span>Type: {typeLabel}</span>
         </div>
         <p className="text-xs text-muted-foreground">
           {state === 'processing'

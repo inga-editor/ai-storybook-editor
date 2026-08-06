@@ -15,6 +15,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { buildRemixClonePayload, makeBatchSkeleton } from './clone-builder';
+import { makeDefaultParams } from '@/constants/config-constants';
 import type { CloneBuilderInput } from './clone-builder';
 import type { RemixConfig } from '@/types/remix';
 import type { BookRemix, CastingAxis } from '@/types/editor';
@@ -67,7 +68,7 @@ function makeAxis(): CastingAxis {
 function makeBookRemix(enabledKeys: string[]): BookRemix {
   return {
     story: { preset: { is_enabled: true }, branch: { is_enabled: true }, spread_pool: { is_enabled: false } },
-    characters: enabledKeys.map((k) => ({ key: k, name: k, is_enabled: true, traits: [] })),
+    characters: enabledKeys.map((k) => ({ key: k, name: k, is_enabled: true, params: makeDefaultParams() })),
     memories: { is_enabled: false, photos: [] },
     voices: [],
     languages: [],
@@ -305,9 +306,56 @@ describe('buildRemixClonePayload — cast sets', () => {
     expect(r.remix_config.characters.map((c) => c.key)).toEqual(['c3']);
   });
 
-  it('purges remix_config.characters to the swappable set', () => {
+  it('⚡2026-08-06 purges to the PERSONALIZE set; strips traits/base_image_url on the text-only (re-cast-out) entry', () => {
+    // alt preset drops c1 from visuals, but c1 is book-enabled (all params on) →
+    // it SURVIVES the purge as a TEXT-ONLY entry (no traits, no base_image_url).
+    // c2/c3 are visual-swappable → traits kept verbatim.
     const cfg = makeConfig({
       story: { presets: [{ axis_id: 'ax1', preset_id: 'p_alt' }], branches: [], pool_spreads: [] },
+      characters: [
+        { key: 'c1', human_id: null, visual: null, traits: [{ type: 'face', is_enabled: true }], base_image_url: null, is_enabled: true },
+        { key: 'c2', human_id: null, visual: null, traits: [], base_image_url: null, is_enabled: true },
+        { key: 'c3', human_id: null, visual: null, traits: [], base_image_url: null, is_enabled: true },
+      ],
+    });
+    const r = build({
+      characters: [makeChar('c1'), makeChar('c2'), makeChar('c3')],
+      castingAxes: [makeAxis()],
+      config: cfg,
+    });
+    // Personalize set (book-enabled ∧ ≥1 param on) = all 3 → all kept.
+    expect(r.remix_config.characters.map((c) => c.key)).toEqual(['c1', 'c2', 'c3']);
+    const byKey = new Map(r.remix_config.characters.map((c) => [c.key, c]));
+    // c1 = text-only: NO traits key, NO base_image_url key.
+    expect(byKey.get('c1')).not.toHaveProperty('traits');
+    expect(byKey.get('c1')).not.toHaveProperty('base_image_url');
+    // c2 / c3 = visual-swappable: traits key present (verbatim).
+    expect(byKey.get('c2')).toHaveProperty('traits');
+    expect(byKey.get('c3')).toHaveProperty('traits');
+  });
+
+  it('⚡2026-08-06 excludes an out-of-personalize entry entirely (all book params OFF)', () => {
+    // c1 has EVERY param off in the book → not personalize → purged completely.
+    const bookRemix: BookRemix = {
+      story: { preset: { is_enabled: true }, branch: { is_enabled: false }, spread_pool: { is_enabled: false } },
+      characters: [
+        {
+          key: 'c1', name: 'c1', is_enabled: true,
+          params: {
+            name: { is_enabled: false }, gender: { is_enabled: false },
+            age: { is_enabled: false }, zodiac: { is_enabled: false },
+            visual: { is_enabled: false, traits: [] },
+          },
+        },
+        { key: 'c2', name: 'c2', is_enabled: true, params: makeDefaultParams() },
+        { key: 'c3', name: 'c3', is_enabled: true, params: makeDefaultParams() },
+      ],
+      memories: { is_enabled: false, photos: [] },
+      voices: [],
+      languages: [],
+    };
+    const cfg = makeConfig({
+      story: { presets: [{ axis_id: 'ax1', preset_id: 'p_def' }], branches: [], pool_spreads: [] },
       characters: [
         { key: 'c1', human_id: null, visual: null, traits: [], base_image_url: null, is_enabled: true },
         { key: 'c2', human_id: null, visual: null, traits: [], base_image_url: null, is_enabled: true },
@@ -318,7 +366,10 @@ describe('buildRemixClonePayload — cast sets', () => {
       characters: [makeChar('c1'), makeChar('c2'), makeChar('c3')],
       castingAxes: [makeAxis()],
       config: cfg,
+      bookRemix,
     });
+    // c1 all-params-off → no row → purged; c2/c3 survive (default preset keeps c1
+    // in the visual roster but it has no config entry).
     expect(r.remix_config.characters.map((c) => c.key)).toEqual(['c2', 'c3']);
   });
 

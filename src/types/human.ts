@@ -24,7 +24,6 @@ export interface VisualProfile {
   clientId: string;
   name: string;
   age: number;
-  type: 'face' | 'full_body' | string;
   rawImages: string[];
   nobgImage: string | null;        // step-1 output (remove-bg white); intermediate, NOT in `done`
   convertedImage: string | null;   // set by normalize-human pipeline step
@@ -44,6 +43,7 @@ export interface Human {
   sourceName: string;
   displayName: Record<string, string>;
   gender: HumanGender;
+  zodiac: number | null; // 1..12 (Aries..Pisces); null = unspecified
   country: string | null;
   description: string | null;
   visualProfiles: VisualProfile[];
@@ -55,6 +55,7 @@ export interface HumanMetadataPatch {
   sourceName?: string;
   displayName?: Record<string, string>;
   gender?: HumanGender;
+  zodiac?: number | null;
   country?: string | null;
   description?: string | null;
 }
@@ -62,7 +63,6 @@ export interface HumanMetadataPatch {
 export interface VisualProfileRow {
   name?: string;
   age: number;
-  type: string;
   raw_images: string[];
   nobg_image: string | null;
   converted_image: string | null;
@@ -80,6 +80,7 @@ export interface HumanRow {
   source_name: string;
   display_name: Record<string, string> | null;
   gender: number | null;
+  zodiac: number | null;
   country: string | null;
   description: string | null;
   visual_profiles: VisualProfileRow[] | null;

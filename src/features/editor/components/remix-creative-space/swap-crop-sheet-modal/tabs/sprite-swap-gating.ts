@@ -28,6 +28,9 @@ export function buildSwapConfigViews(
 ): Map<string, RemixConfigCharacterView> {
   const map = new Map<string, RemixConfigCharacterView>();
   for (const cfg of remix.remix_config.characters) {
+    // ⚡2026-08-06 — skip text-only personalize entries (no `traits` key): they
+    // are NOT visual-swappable, so they never gate a sprite lineup.
+    if (cfg.traits == null) continue;
     let convertedImage: string | null = null;
     if (cfg.human_id && cfg.visual) {
       const human = humans.find((h) => h.id === cfg.human_id);

@@ -23,6 +23,7 @@ import type {
   ParametricReligionValue,
 } from '@/types/editor';
 import type { Character } from '@/types/character-types';
+import { DEFAULT_ZODIAC } from '@/constants/config-constants';
 import {
   DEFAULT_AGE_RANGE,
   DEFAULT_PARAMETRIC_SLOT,
@@ -148,6 +149,7 @@ export function ConfigParametricSlotSettings() {
         gender: normalizeGenderSeed(ch.basic_info.gender) ?? UNSPECIFIED_GENDER,
         age_min: DEFAULT_AGE_RANGE.age_min,
         age_max: DEFAULT_AGE_RANGE.age_max,
+        zodiac: DEFAULT_ZODIAC,
       };
       return { ...prev, characters: [...prev.characters, entry] };
     });
@@ -161,7 +163,7 @@ export function ConfigParametricSlotSettings() {
     }));
   };
 
-  const toggleProperty = (ch: Character, prop: 'name' | 'gender' | 'age', next: boolean) => {
+  const toggleProperty = (ch: Character, prop: 'name' | 'gender' | 'age' | 'zodiac', next: boolean) => {
     log.debug('toggleProperty', 'patch draft', { key: ch.key, prop, next });
     patchDraft((prev) => {
       const idx = prev.characters.findIndex((c) => c.key === ch.key);
@@ -174,12 +176,28 @@ export function ConfigParametricSlotSettings() {
         entry.name = next ? ch.name : null;
       } else if (prop === 'gender') {
         entry.gender = next ? normalizeGenderSeed(ch.basic_info.gender) ?? UNSPECIFIED_GENDER : null;
+      } else if (prop === 'zodiac') {
+        entry.zodiac = next ? DEFAULT_ZODIAC : null;
       } else {
         entry.age_min = next ? DEFAULT_AGE_RANGE.age_min : null;
         entry.age_max = next ? DEFAULT_AGE_RANGE.age_max : null;
       }
       const characters = [...prev.characters];
       characters[idx] = entry;
+      return { ...prev, characters };
+    });
+  };
+
+  const setZodiac = (ch: Character, value: number) => {
+    log.debug('setZodiac', 'patch draft', { key: ch.key });
+    patchDraft((prev) => {
+      const idx = prev.characters.findIndex((c) => c.key === ch.key);
+      if (idx < 0) {
+        log.warn('setZodiac', 'no entry for character', { key: ch.key });
+        return prev;
+      }
+      const characters = [...prev.characters];
+      characters[idx] = { ...characters[idx], zodiac: value };
       return { ...prev, characters };
     });
   };
@@ -312,6 +330,7 @@ export function ConfigParametricSlotSettings() {
                     onToggle={(next) => (next ? enableCharacter(ch) : disableCharacter(ch))}
                     onPropToggle={(prop, next) => toggleProperty(ch, prop, next)}
                     onAgeChange={(field, value) => handleAgeChange(ch, field, value)}
+                    onZodiacChange={(value) => setZodiac(ch, value)}
                   />
                 );
               })}

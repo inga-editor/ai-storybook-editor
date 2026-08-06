@@ -18,7 +18,7 @@ function projectConfigCharacter(
     key: string;
     human_id: string | null;
     visual: string | null;
-    traits: RemixTraitChoice[];
+    traits?: RemixTraitChoice[]; // ⚡2026-08-06 optional (text-only entries omit)
   } | null,
   humans: Human[],
 ): RemixConfigCharacterView | null {
@@ -36,7 +36,9 @@ function projectConfigCharacter(
   return {
     human_id: configChar.human_id,
     visual: configChar.visual,
-    traits: configChar.traits,
+    // ⚡2026-08-06 — single view-layer fallback: absent traits (text-only entry)
+    // → [] so the Generate gate reports no enabled trait (stays disabled).
+    traits: configChar.traits ?? [],
     converted_image: convertedImage,
   };
 }
@@ -197,6 +199,18 @@ describe('useRemixConfigCharacter selector — projection logic', () => {
     expect(result?.human_id).toBe('h1');
     expect(result?.visual).toBeNull();
     expect(result?.converted_image).toBeNull();
+  });
+
+  it('⚡2026-08-06 text-only entry (traits absent) → view.traits falls back to []', () => {
+    const humans: Human[] = [
+      makeHuman('h1', 'Person', [makeVisualProfile('vp1', 'https://converted.png')]),
+    ];
+    // Text-only config entry — no `traits` key at all.
+    const configChar = { key: 'c1', human_id: 'h1', visual: 'vp1' };
+
+    const result = projectConfigCharacter(configChar, humans);
+
+    expect(result?.traits).toEqual([]);
   });
 
   it('passes traits through unchanged', () => {

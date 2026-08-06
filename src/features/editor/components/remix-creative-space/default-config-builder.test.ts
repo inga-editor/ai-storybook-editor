@@ -30,17 +30,38 @@ const book: BookRemix = {
     { key: 'char_a', name: 'Alice', is_enabled: true },
     { key: 'char_b', name: 'Bob', is_enabled: false },
   ],
+  // Reshape 2026-08-06 (phase 03): trait gates live under params.visual.traits.
   characters: [
     {
       key: 'char_a',
       name: 'Alice',
       is_enabled: true,
-      traits: [
-        { type: 'face', is_enabled: true },
-        { type: 'hair', is_enabled: false },
-      ],
+      params: {
+        name: { is_enabled: true },
+        gender: { is_enabled: true },
+        age: { is_enabled: true },
+        zodiac: { is_enabled: true },
+        visual: {
+          is_enabled: true,
+          traits: [
+            { type: 'face', is_enabled: true },
+            { type: 'hair', is_enabled: false },
+          ],
+        },
+      },
     },
-    { key: 'char_b', name: 'Bob', is_enabled: false, traits: [] },
+    {
+      key: 'char_b',
+      name: 'Bob',
+      is_enabled: false,
+      params: {
+        name: { is_enabled: true },
+        gender: { is_enabled: true },
+        age: { is_enabled: true },
+        zodiac: { is_enabled: true },
+        visual: { is_enabled: true, traits: [] },
+      },
+    },
   ],
 };
 
@@ -102,18 +123,51 @@ describe('defaultConfigFromBookRemix — reshape 2026-07-31', () => {
     ]);
   });
 
-  it('seeds characters from the effective cast (default presets), snapshot order + 5 traits', () => {
+  it('seeds characters from the personalize set (default presets), snapshot order + 5 traits', () => {
     expect(config.characters.map((c) => c.key)).toEqual(['char_a']);
     const a = config.characters[0];
-    expect(a.traits).toHaveLength(TRAIT_TYPES.length);
-    expect(a.traits.map((t) => t.type)).toEqual(TRAIT_TYPES);
-    expect(a.traits.find((t) => t.type === 'face')?.is_enabled).toBe(true);
-    expect(a.traits.find((t) => t.type === 'hair')?.is_enabled).toBe(false);
+    const aTraits = a.traits!; // char_a is visual-swappable → traits present
+    expect(aTraits).toHaveLength(TRAIT_TYPES.length);
+    expect(aTraits.map((t) => t.type)).toEqual(TRAIT_TYPES);
+    expect(aTraits.find((t) => t.type === 'face')?.is_enabled).toBe(true);
+    expect(aTraits.find((t) => t.type === 'hair')?.is_enabled).toBe(false);
     // Missing-in-book trait → defaults enabled (normalizeRemixTraits).
-    expect(a.traits.find((t) => t.type === 'outfit')?.is_enabled).toBe(true);
+    expect(aTraits.find((t) => t.type === 'outfit')?.is_enabled).toBe(true);
     expect(a.base_image_url).toBeNull();
     expect(a.human_id).toBeNull();
     expect(a.visual).toBeNull();
+  });
+
+  it('⚡2026-08-06 seeds a TEXT-ONLY entry (visual OFF) WITHOUT traits / base_image_url', () => {
+    // char_c: master ON, name ON, visual OFF, not cast → personalize but not swappable.
+    const textOnlyBook: BookRemix = {
+      ...book,
+      characters: [
+        ...book.characters,
+        {
+          key: 'char_c',
+          name: 'Cara',
+          is_enabled: true,
+          params: {
+            name: { is_enabled: true },
+            gender: { is_enabled: false },
+            age: { is_enabled: false },
+            zodiac: { is_enabled: false },
+            visual: { is_enabled: false, traits: [] },
+          },
+        },
+      ],
+    };
+    const cfg = defaultConfigFromBookRemix({
+      ...input,
+      bookRemix: textOnlyBook,
+      snapshotCharacterKeys: ['char_a', 'char_b', 'char_c'],
+    });
+    const c = cfg.characters.find((x) => x.key === 'char_c');
+    expect(c).toBeDefined();
+    expect(c).not.toHaveProperty('traits');
+    expect(c).not.toHaveProperty('base_image_url');
+    expect(c!.is_enabled).toBe(true);
   });
 
   it('filters memories photos to enabled ∩ parametric_slot; style default; url null', () => {

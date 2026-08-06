@@ -112,8 +112,14 @@ export function groupCropsForBatch(remix: Remix): GroupCropsResult {
       charCount: remix.characters.length,
     });
   }
+  // ⚡2026-08-06 — VISUAL-swap surface = config entries WITH a `traits` key
+  // (presence marks visual-availability). A text-only personalize entry (no
+  // `traits`) is NOT visually swapped → excluded from crop grouping. Legacy
+  // roster fallback (no remix_config) keeps every character (pre-marker rows).
   const swappableCharKeys = new Set(
-    (configChars ?? remix.characters).map((c) => c.key),
+    configChars
+      ? configChars.filter((c) => c.traits != null).map((c) => c.key)
+      : remix.characters.map((c) => c.key),
   );
   const charKeys = remix.characters
     .map((c) => c.key)

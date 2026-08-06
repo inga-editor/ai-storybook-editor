@@ -44,8 +44,10 @@ export const PHOTO_ORIGINAL_VALUE = 'original';
 /**
  * Build the grouped CONTROL KEY option list: one group per configured character
  * (gender / age), then PHOTO, then SHARED (country / religion).
- * Deliberately omits the `name` axis (text-only, no media variant) and `zodiac`
- * (present in the mock but absent from the DB shape — rejected 2026-07-27).
+ * Deliberately omits the `name` axis (text-only, no media variant) and `zodiac`.
+ * As of phase 03 (2026-08-06) `zodiac` DOES exist on the parametric_slot schema
+ * (characters[].zodiac), but it stays text/prompt-only — it drives no media
+ * variant here, so item-slot CONTROL KEYs still exclude it (regression-guarded).
  */
 export function buildParametricOptions(
   slot: BookParametricSlot | null,

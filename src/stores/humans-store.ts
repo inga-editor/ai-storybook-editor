@@ -53,7 +53,7 @@ interface HumansStore {
   updateVisualProfile: (
     id: string,
     index: number,
-    patch: Partial<Pick<VisualProfile, 'name' | 'age' | 'type' | 'nobgImage' | 'convertedImage' | 'traits'>>,
+    patch: Partial<Pick<VisualProfile, 'name' | 'age' | 'nobgImage' | 'convertedImage' | 'traits'>>,
   ) => Promise<Human | null>;
   removeVisualProfile: (id: string, index: number) => Promise<Human | null>;
   runProfilePipeline: (humanId: string, clientId: string) => Promise<void>;
@@ -93,6 +93,7 @@ function metadataPatchToDb(patch: HumanMetadataPatch): Record<string, unknown> {
   if (patch.sourceName !== undefined) out.source_name = patch.sourceName;
   if (patch.displayName !== undefined) out.display_name = patch.displayName;
   if (patch.gender !== undefined) out.gender = patch.gender;
+  if (patch.zodiac !== undefined) out.zodiac = patch.zodiac;
   if (patch.country !== undefined) out.country = patch.country;
   if (patch.description !== undefined) out.description = patch.description;
   return out;
@@ -209,6 +210,7 @@ export const useHumansStore = create<HumansStore>()(
           if (patch.sourceName !== undefined) state.humans[idx].sourceName = patch.sourceName;
           if (patch.displayName !== undefined) state.humans[idx].displayName = patch.displayName;
           if (patch.gender !== undefined) state.humans[idx].gender = patch.gender;
+          if (patch.zodiac !== undefined) state.humans[idx].zodiac = patch.zodiac;
           if (patch.country !== undefined) state.humans[idx].country = patch.country;
           if (patch.description !== undefined) state.humans[idx].description = patch.description;
         });

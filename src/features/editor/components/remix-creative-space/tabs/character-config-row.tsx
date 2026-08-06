@@ -32,6 +32,8 @@ import type { Human, TraitType } from '@/types/human';
 import type { RemixCharacterEntry } from '@/types/editor';
 import type { RemixCharacterChoice } from '@/types/remix';
 import { bookTraitGate, supportedTraitSetFor } from '../remix-config-normalize';
+import { CHARACTER_PARAM_LABELS } from '@/constants/config-constants';
+import type { ParamPreview } from '../cast-param-preview';
 
 const log = createLogger('Editor', 'CharacterConfigRow');
 
@@ -40,6 +42,11 @@ export interface CharacterConfigRowProps {
   /** Parent (CharactersSection) inits a default when the draft entry is absent,
    *  so this is always a concrete choice. */
   entry: RemixCharacterChoice;
+  /** ⚡2026-08-06 — false = TEXT-ONLY row: no trait cluster; Human/Visual picker
+   *  stays active (the profile still fixes `age`). */
+  isVisualActive: boolean;
+  /** ⚡2026-08-06 — display-only derived value chips (name/gender/age/zodiac). */
+  paramPreview: ParamPreview;
   humans: Human[];
   /** Shared human picker options — derived ONCE in the parent (deps: humans). */
   humanOptions: SearchableDropdownOption[];
@@ -52,6 +59,8 @@ export interface CharacterConfigRowProps {
 export function CharacterConfigRow({
   bookChar,
   entry,
+  isVisualActive,
+  paramPreview,
   humans,
   humanOptions,
   onToggle,
@@ -62,7 +71,7 @@ export function CharacterConfigRow({
   const enabled = entry.is_enabled;
   const humanId = entry.human_id;
   const visual = entry.visual;
-  const traits = entry.traits;
+  const traits = entry.traits ?? [];
 
   // Visual options for the picked human — cascade source. Derived here (not in
   // parent) so the parent list doesn't allocate one array per row per render.
@@ -121,6 +130,10 @@ export function CharacterConfigRow({
         <div className="truncate text-xs leading-tight text-muted-foreground">
           @{bookChar.key}
         </div>
+        {/* ParamPreview chips — only params with the book gate ON. Value derives
+            from the picked human/profile; unpicked → "—" (execution falls back to
+            the character's original value). Display-only, never persisted. */}
+        <ParamPreviewChips preview={paramPreview} />
       </div>
 
       <SearchableDropdown
@@ -140,7 +153,10 @@ export function CharacterConfigRow({
         className="w-[108px] shrink-0"
       />
 
-      {/* Trait checkboxes — canonical order, 2-layer gate (book + visual support). */}
+      {/* Trait checkboxes — canonical order, 2-layer gate (book + visual support).
+          ⚡2026-08-06: rendered ONLY for a visual-active row; a text-only row
+          stops at the Visual picker (no traits, presence-marker semantics). */}
+      {isVisualActive && (
       <div className="flex shrink-0 items-center gap-x-2.5">
         {TRAIT_TYPES.map((type) => {
           const gated = bookTraitGate(bookChar, type);
@@ -176,6 +192,30 @@ export function CharacterConfigRow({
           );
         })}
       </div>
+      )}
+    </div>
+  );
+}
+
+/** Read-only value chips for the 4 personalize params (name/gender/age/zodiac).
+ *  Renders one chip per param whose BOOK gate is ON; value or "—" when unpicked.
+ *  ⚡2026-08-06 — display-only, never written to `remix_config`. */
+function ParamPreviewChips({ preview }: { preview: ParamPreview }) {
+  const chips: Array<{ key: keyof ParamPreview; value: string }> = [];
+  if (preview.name.enabled) chips.push({ key: 'name', value: preview.name.value ?? '—' });
+  if (preview.gender.enabled) chips.push({ key: 'gender', value: preview.gender.value ?? '—' });
+  if (preview.age.enabled) {
+    chips.push({ key: 'age', value: preview.age.value != null ? String(preview.age.value) : '—' });
+  }
+  if (preview.zodiac.enabled) chips.push({ key: 'zodiac', value: preview.zodiac.value ?? '—' });
+  if (chips.length === 0) return null;
+  return (
+    <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] leading-tight text-muted-foreground">
+      {chips.map((c) => (
+        <span key={c.key}>
+          {CHARACTER_PARAM_LABELS[c.key]}: {c.value}
+        </span>
+      ))}
     </div>
   );
 }

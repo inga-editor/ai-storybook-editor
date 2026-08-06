@@ -12,7 +12,10 @@ import type {
   TransitionType,
   BookRemix,
   CharacterRemixType,
+  CharacterParamKey,
   RemixCharacterEntry,
+  RemixCharacterParams,
+  RemixToggleEntry,
   RemixTraitEntry,
   RemixStory,
   RemixMemories,
@@ -121,10 +124,22 @@ export const GENDER_OPTIONS = [
   { value: '1',    label: 'Male'        },
 ] as const;
 
-export const VISUAL_PROFILE_TYPES = [
-  { value: 'face',      label: 'Face'      },
-  { value: 'full_body', label: 'Full body' },
-] as const;
+// Zodiac enum 1..12 (Aries=1 → Pisces=12). Shared with ConfigParametricSlotSettings (remix personalize axis).
+export const ZODIAC_SIGNS: { value: number; label: string }[] = [
+  { value: 1,  label: 'Aries' },       { value: 2,  label: 'Taurus' },
+  { value: 3,  label: 'Gemini' },      { value: 4,  label: 'Cancer' },
+  { value: 5,  label: 'Leo' },         { value: 6,  label: 'Virgo' },
+  { value: 7,  label: 'Libra' },       { value: 8,  label: 'Scorpio' },
+  { value: 9,  label: 'Sagittarius' }, { value: 10, label: 'Capricorn' },
+  { value: 11, label: 'Aquarius' },    { value: 12, label: 'Pisces' },
+];
+export const DEFAULT_ZODIAC = 1; // Aries — seed khi bật axis (phase 03)
+
+// Select options for humans detail form (string values; 'null' = Unspecified).
+export const ZODIAC_OPTIONS: { value: string; label: string }[] = [
+  { value: 'null', label: 'Unspecified' },
+  ...ZODIAC_SIGNS.map((s) => ({ value: String(s.value), label: s.label })),
+];
 
 export const TARGET_AUDIENCE_LABELS: Record<number, string> = {
   1: 'Kindergarten (ages 2-3)',
@@ -297,6 +312,91 @@ export const REMIX_STORY_FEATURES: ReadonlyArray<{ key: RemixStoryFeatureKey; la
 export const makeDefaultTraits = (): RemixTraitEntry[] =>
   TRAIT_TYPES.map((type) => ({ type, is_enabled: true }));
 
+// ── CAST per-param (reshape 2026-08-06, phase 03) ─────────────────────────────
+
+/** Render order of the per-character param checkboxes (matches the mock). */
+export const CHARACTER_PARAM_KEYS: CharacterParamKey[] = [
+  'name',
+  'gender',
+  'age',
+  'zodiac',
+  'visual',
+];
+
+/** Display labels per param key (lowercase per mock). */
+export const CHARACTER_PARAM_LABELS: Record<CharacterParamKey, string> = {
+  name: 'name',
+  gender: 'gender',
+  age: 'age',
+  zodiac: 'zodiac',
+  visual: 'visual',
+};
+
+/**
+ * Fresh params map seeded when a character is first enabled in remix: every param
+ * ON (4 text + visual) and all 5 traits ON. Fresh objects — callers own the copy.
+ */
+export const makeDefaultParams = (): RemixCharacterParams => ({
+  name: { is_enabled: true },
+  gender: { is_enabled: true },
+  age: { is_enabled: true },
+  zodiac: { is_enabled: true },
+  visual: { is_enabled: true, traits: makeDefaultTraits() },
+});
+
+/**
+ * Reader tolerance for a raw remix character entry's params (phase 03). Two cases:
+ *
+ * - LEGACY (no `params`): visual.is_enabled := true + traits from the top-level
+ *   `traits[]` (preserve the old visual-swap semantics), AND all 4 text params
+ *   (name/gender/age/zodiac) := true. The text-param default is a USER decision
+ *   (Validation Session 1 — preserve name-swap for books already in flight) and
+ *   INTENTIONALLY diverges from the spec's `false`; the spec is synced in phase 05.
+ * - SHAPE-NEW (`params` present): each missing text key → `{is_enabled:false}`
+ *   (OFF); visual node → traits re-normalized to 5 canonical, falling back to the
+ *   legacy top-level `traits[]` only when the `visual` node itself is absent.
+ *
+ * Never emits a top-level `traits[]` — the writer always builds fresh via
+ * makeDefaultParams so the DB shape carries only `params`.
+ */
+export function normalizeParams(entry: unknown): RemixCharacterParams {
+  const e = (entry && typeof entry === 'object' ? entry : {}) as {
+    params?: Partial<RemixCharacterParams> & Record<string, unknown>;
+    traits?: RemixTraitEntry[];
+  };
+  const legacyTraits = e.traits;
+  const p = e.params;
+
+  if (p && typeof p === 'object') {
+    const textParam = (k: 'name' | 'gender' | 'age' | 'zodiac'): RemixToggleEntry => {
+      const node = p[k];
+      return node && typeof node === 'object'
+        ? { is_enabled: (node as RemixToggleEntry).is_enabled === true }
+        : { is_enabled: false }; // shape-new but key missing → OFF
+    };
+    const rawVisual = p.visual as (RemixToggleEntry & { traits?: RemixTraitEntry[] }) | undefined;
+    const visual = rawVisual && typeof rawVisual === 'object'
+      ? { is_enabled: rawVisual.is_enabled === true, traits: normalizeRemixTraits(rawVisual.traits) }
+      : { is_enabled: true, traits: normalizeRemixTraits(legacyTraits) };
+    return {
+      name: textParam('name'),
+      gender: textParam('gender'),
+      age: textParam('age'),
+      zodiac: textParam('zodiac'),
+      visual,
+    };
+  }
+
+  // Fully legacy (no `params`) — 4 text params ON + visual ON with legacy traits.
+  return {
+    name: { is_enabled: true },
+    gender: { is_enabled: true },
+    age: { is_enabled: true },
+    zodiac: { is_enabled: true },
+    visual: { is_enabled: true, traits: normalizeRemixTraits(legacyTraits) },
+  };
+}
+
 // Fresh default sub-objects (factories — callers get their own copies).
 export const makeDefaultRemixStory = (): RemixStory => ({
   preset: { is_enabled: false },
@@ -352,10 +452,17 @@ export function normalizeBookRemix(raw: unknown): BookRemix | null {
       hadProps: true,
     });
   }
-  const characters = (Array.isArray(r.characters) ? r.characters : []).map((c) => ({
-    ...c,
-    traits: normalizeRemixTraits((c as Partial<RemixCharacterEntry>).traits),
-  }));
+  // Build each entry FRESH (never spread the raw `c`) so a legacy top-level
+  // `traits[]` is not re-emitted — it lives inside `params.visual.traits` now.
+  const rawChars: unknown[] = Array.isArray(r.characters) ? r.characters : [];
+  const characters: RemixCharacterEntry[] = rawChars
+    .filter((c): c is Record<string, unknown> => c != null && typeof c === 'object')
+    .map((c) => ({
+      key: typeof c.key === 'string' ? c.key : '',
+      name: typeof c.name === 'string' ? c.name : '',
+      is_enabled: c.is_enabled === true,
+      params: normalizeParams(c),
+    }));
   return {
     story: normalizeRemixStory(r.story),
     characters,

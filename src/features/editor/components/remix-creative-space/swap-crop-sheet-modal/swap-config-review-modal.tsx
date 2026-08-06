@@ -111,8 +111,9 @@ function TraitColumn({ entry }: { entry: RemixCharacterChoice }) {
   return (
     <div className="flex flex-col gap-1.5">
       {TRAIT_TYPES.map((type) => {
+        // ⚡2026-08-06 — `traits` optional (text-only entry has none → all off).
         const checked =
-          entry.traits.find((t) => t.type === type)?.is_enabled ?? false;
+          entry.traits?.find((t) => t.type === type)?.is_enabled ?? false;
         return (
           <label
             key={type}

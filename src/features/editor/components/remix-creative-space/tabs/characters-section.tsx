@@ -13,6 +13,7 @@ import type { Human, TraitType } from '@/types/human';
 import type { RemixCharacterEntry } from '@/types/editor';
 import type { RemixCharacterChoice } from '@/types/remix';
 import { TRAIT_TYPES } from '@/constants/trait-constants';
+import { makeDefaultParams } from '@/constants/config-constants';
 import { createLogger } from '@/utils/logger';
 import {
   maxTraitChoicesFor,
@@ -30,16 +31,19 @@ interface Props {
 }
 
 /** Display-only default choice for a row that has no draft entry yet. Mirrors the
- *  seed in `upsertCharacterChoice`; not written to the draft until the user acts. */
-function initCharacterChoice(key: string): RemixCharacterChoice {
-  return {
+ *  seed in `upsertCharacterChoice`; not written to the draft until the user acts.
+ *  ⚡2026-08-06: `traits` is seeded ONLY for a visual-active row (presence =
+ *  visual-availability marker); a text-only row omits it. */
+function initCharacterChoice(key: string, isVisualActive: boolean): RemixCharacterChoice {
+  const base: RemixCharacterChoice = {
     key,
     human_id: null,
     visual: null,
-    traits: TRAIT_TYPES.map((type) => ({ type, is_enabled: true })),
     base_image_url: null,
     is_enabled: true,
   };
+  if (!isVisualActive) return base;
+  return { ...base, traits: TRAIT_TYPES.map((type) => ({ type, is_enabled: true })) };
 }
 
 /** Fallback book character when the effective-cast key is missing from
@@ -49,7 +53,8 @@ function fallbackBookChar(key: string): RemixCharacterEntry {
     key,
     name: key,
     is_enabled: true,
-    traits: TRAIT_TYPES.map((type) => ({ type, is_enabled: true })),
+    // Reshape 2026-08-06 (phase 03): trait gates live under params.visual.traits.
+    params: makeDefaultParams(),
   };
 }
 
@@ -79,39 +84,46 @@ export function CharactersSection({ castRows, humans, onUpsertCharacter }: Props
             key: row.key,
           });
         }
-        const entry = row.draftEntry ?? initCharacterChoice(row.key);
+        const entry = row.draftEntry ?? initCharacterChoice(row.key, row.isVisualActive);
+        const visualActive = row.isVisualActive;
         return (
           <CharacterConfigRow
             key={row.key}
             bookChar={bookChar}
             entry={entry}
+            isVisualActive={visualActive}
+            paramPreview={row.paramPreview}
             humans={humans}
             humanOptions={humanOptions}
             onToggle={(next) => onUpsertCharacter(row.key, { is_enabled: next })}
             // Cascade: changing the human clears the visual (its options depend on
-            // the human) AND resets traits to the max checkable set (no profile yet
-            // → book gate only). Prior ticks discarded by design (2026-06-10).
+            // the human). ⚡2026-08-06: reset `traits` ONLY for a visual-active row
+            // (a text-only row has no traits key). Prior ticks discarded (2026-06-10).
             onChangeHuman={(id) =>
               onUpsertCharacter(row.key, {
                 human_id: id,
                 visual: null,
-                traits: maxTraitChoicesFor(bookChar, null),
+                ...(visualActive ? { traits: maxTraitChoicesFor(bookChar, null) } : {}),
               })
             }
             // Picking a visual resets traits to everything that profile can swap
-            // (∧ book gate) — default-max, prior ticks discarded.
+            // (∧ book gate) — default-max, prior ticks discarded. Visual-active only.
             onChangeVisual={(name) =>
               onUpsertCharacter(row.key, {
                 visual: name,
-                traits: maxTraitChoicesFor(
-                  bookChar,
-                  supportedTraitSetFor(humans, entry.human_id, name),
-                ),
+                ...(visualActive
+                  ? {
+                      traits: maxTraitChoicesFor(
+                        bookChar,
+                        supportedTraitSetFor(humans, entry.human_id, name),
+                      ),
+                    }
+                  : {}),
               })
             }
             onToggleTrait={(type: TraitType, next: boolean) =>
               onUpsertCharacter(row.key, {
-                traits: entry.traits.map((t) =>
+                traits: (entry.traits ?? []).map((t) =>
                   t.type === type ? { ...t, is_enabled: next } : t,
                 ),
               })

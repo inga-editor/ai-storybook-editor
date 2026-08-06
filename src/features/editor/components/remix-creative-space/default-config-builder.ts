@@ -16,7 +16,7 @@ import type {
 } from '@/types/remix';
 import { normalizeRemixTraits, MEMORY_STYLE_DEFAULT } from '@/constants/config-constants';
 import { resolveDefaultPreset } from '@/features/editor/components/config-creative-space/casting-slot-helpers';
-import { swappableCastKeys } from '@/features/remix/effective-cast';
+import { resolveRemixCastSets } from '@/features/remix/effective-cast';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('Util', 'RemixDefaultConfig');
@@ -79,27 +79,32 @@ export function defaultConfigFromBookRemix(input: DefaultConfigInput): RemixConf
 
   const story = { presets, branches, pool_spreads };
 
-  // 3. characters — swappable cast of the default presets, mapped to draft
-  // entries (config entries exist only for the swap surface).
+  // 3. characters — PERSONALIZE set of the default presets (⚡2026-08-06: every
+  // char with ≥1 param on gets a draft entry, not just the swap surface). Only
+  // the VISUAL-swappable subset carries `traits` (+ dead `base_image_url`); a
+  // text-only entry omits both (presence of `traits` = visual-availability marker).
   const bookCharByKey = new Map(bookRemix.characters.map((c) => [c.key, c]));
-  const castKeys = swappableCastKeys({
+  const { personalizeKeys, swappableKeys } = resolveRemixCastSets({
     storyPresets: presets,
     castingAxes,
     bookRemix,
     snapshotCharacterKeys,
   });
-  const characters = castKeys.map((key) => ({
-    key,
-    human_id: null,
-    visual: null,
-    // Clone the book character's trait gate (5 canonical entries); missing → true.
-    traits: normalizeRemixTraits(bookCharByKey.get(key)?.traits).map((t) => ({
-      type: t.type,
-      is_enabled: t.is_enabled,
-    })),
-    base_image_url: null,
-    is_enabled: true,
-  }));
+  const swappable = new Set(swappableKeys);
+  const characters = personalizeKeys.map((key) => {
+    const base = { key, human_id: null, visual: null, is_enabled: true };
+    if (!swappable.has(key)) return base; // text-only — no traits, no base_image_url
+    return {
+      ...base,
+      base_image_url: null,
+      // Clone the book character's trait gate (5 canonical entries); missing → true.
+      // Reshape 2026-08-06 (phase 03): trait gates live under params.visual.traits.
+      traits: normalizeRemixTraits(bookCharByKey.get(key)?.params.visual.traits).map((t) => ({
+        type: t.type,
+        is_enabled: t.is_enabled,
+      })),
+    };
+  });
 
   // 4. memories — enabled ∩ present photo slots; style global default; url null.
   const photoKeys = new Set(parametricPhotos.map((p) => p.key));

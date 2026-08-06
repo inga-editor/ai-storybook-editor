@@ -34,18 +34,15 @@ export function resolveDisplayName(human: Human, locale: string): string {
 }
 
 /**
- * Resolve avatar URL: prefer face profile with smallest age (rawImages[0]),
- * fallback to any visual profile with images. Returns null if none.
+ * Resolve avatar URL: visual profile with smallest age that has images (rawImages[0]).
+ * Returns null if none.
  */
 export function resolveAvatarUrl(human: Human): string | null {
-  const faces = human.visualProfiles
-    .filter((p) => p.type === 'face' && p.rawImages.length > 0)
+  const withImages = human.visualProfiles
+    .filter((p) => p.rawImages.length > 0)
     .slice()
     .sort((a, b) => a.age - b.age);
-  if (faces.length > 0) return faces[0].rawImages[0];
-
-  const any = human.visualProfiles.find((p) => p.rawImages.length > 0);
-  return any ? any.rawImages[0] : null;
+  return withImages.length > 0 ? withImages[0].rawImages[0] : null;
 }
 
 function pluralize(count: number, singular: string): string {

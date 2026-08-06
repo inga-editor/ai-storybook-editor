@@ -135,11 +135,27 @@ export interface RemixVoiceEntry {
   is_enabled: boolean;
 }
 
+// Per-character remix param keys (CAST tab). Reshape 2026-08-06 (phase 03): the
+// top-level traits[] moved into params.visual.traits; 4 text params (name/gender/
+// age/zodiac) join it as independent toggles. Order = render order (matches mock).
+export type CharacterParamKey = 'name' | 'gender' | 'age' | 'zodiac' | 'visual';
+
+// Per-character remix availability map. Each text param is a single toggle; the
+// `visual` param additionally carries the 5 canonical trait gates. Reader always
+// materializes 5 params + 5 traits (see normalizeParams / normalizeRemixTraits).
+export interface RemixCharacterParams {
+  name: RemixToggleEntry;
+  gender: RemixToggleEntry;
+  age: RemixToggleEntry;
+  zodiac: RemixToggleEntry;
+  visual: RemixToggleEntry & { traits: RemixTraitEntry[] }; // always 5 trait entries
+}
+
 export interface RemixCharacterEntry {
   key: string;
   name: string;
-  is_enabled: boolean;
-  traits: RemixTraitEntry[]; // always 5 entries (TRAIT_TYPES); reader fills missing → true
+  is_enabled: boolean;          // ⚡ MASTER row toggle (no longer = visual-swappable)
+  params: RemixCharacterParams; // ⚡ reshape 2026-08-06 — replaces top-level traits[]
 }
 
 /**
@@ -383,6 +399,7 @@ export interface ParametricCharacterEntry {
   gender: string | null; // null = gender axis OFF; non-null = default gender
   age_min: number | null; // paired with age_max (null together)
   age_max: number | null; // enabled → both non-null, age_min ≤ age_max
+  zodiac: number | null; // 1..12 (Aries=1 → Pisces=12); null = zodiac axis OFF
 }
 
 export interface ParametricPhotoEntry {

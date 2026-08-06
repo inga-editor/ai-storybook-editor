@@ -105,7 +105,7 @@ describe('parseAgeSeed', () => {
 describe('buildParametricOptions', () => {
   it('character with gender + age_min/max → 2 options', () => {
     const slot = makeParametricSlot({
-      characters: [{ key: 'char_a', name: null, gender: 'male', age_min: 5, age_max: 12 }],
+      characters: [{ key: 'char_a', name: null, gender: 'male', age_min: 5, age_max: 12, zodiac: null }],
     });
     const chars = [makeCharacter('char_a', { name: 'Alice' })];
     const groups = buildParametricOptions(slot, chars);
@@ -121,7 +121,7 @@ describe('buildParametricOptions', () => {
 
   it('character with only age_min/max → only age option', () => {
     const slot = makeParametricSlot({
-      characters: [{ key: 'char_b', name: null, gender: null, age_min: 5, age_max: 12 }],
+      characters: [{ key: 'char_b', name: null, gender: null, age_min: 5, age_max: 12, zodiac: null }],
     });
     const chars = [makeCharacter('char_b', { name: 'Bob' })];
     const groups = buildParametricOptions(slot, chars);
@@ -132,7 +132,7 @@ describe('buildParametricOptions', () => {
 
   it('character with only name (no gender/age) → no group', () => {
     const slot = makeParametricSlot({
-      characters: [{ key: 'char_c', name: null, gender: null, age_min: null, age_max: null }],
+      characters: [{ key: 'char_c', name: null, gender: null, age_min: null, age_max: null, zodiac: null }],
     });
     const chars = [makeCharacter('char_c')];
     const groups = buildParametricOptions(slot, chars);
@@ -172,7 +172,7 @@ describe('buildParametricOptions', () => {
 
   it('dangling character → isDangling: true, header falls back to key', () => {
     const slot = makeParametricSlot({
-      characters: [{ key: 'missing_char', name: null, gender: 'male', age_min: 5, age_max: 12 }],
+      characters: [{ key: 'missing_char', name: null, gender: 'male', age_min: 5, age_max: 12, zodiac: null }],
     });
     const groups = buildParametricOptions(slot, []);
 
@@ -186,7 +186,7 @@ describe('buildParametricOptions', () => {
 
   it('does NOT emit zodiac (regression guard)', () => {
     const slot = makeParametricSlot({
-      characters: [{ key: 'char_a', name: null, gender: 'male', age_min: 5, age_max: 12 }],
+      characters: [{ key: 'char_a', name: null, gender: 'male', age_min: 5, age_max: 12, zodiac: null }],
     });
     const groups = buildParametricOptions(slot, []);
     const allKeys = groups.flatMap((g) => g.options.map((o) => o.key));
@@ -234,7 +234,7 @@ describe('deriveParametricDefaultValue', () => {
 
   it('character.gender → snapshot first, book config fallback', () => {
     const slot = makeParametricSlot({
-      characters: [{ key: 'alice', name: null, gender: 'from_book', age_min: null, age_max: null }],
+      characters: [{ key: 'alice', name: null, gender: 'from_book', age_min: null, age_max: null, zodiac: null }],
     });
     const chars = [makeCharacter('alice', { basic_info: { gender: 'from_snapshot', age: '', description: '', category_id: '', role: '' } })];
     expect(deriveParametricDefaultValue('alice.gender', slot, chars)).toBe('from_snapshot');
@@ -246,7 +246,7 @@ describe('deriveParametricDefaultValue', () => {
 
   it('character.age → parseAgeSeed via snapshot, respects age_min/max', () => {
     const slot = makeParametricSlot({
-      characters: [{ key: 'alice', name: null, gender: null, age_min: 5, age_max: 12 }],
+      characters: [{ key: 'alice', name: null, gender: null, age_min: 5, age_max: 12, zodiac: null }],
     });
     const chars = [makeCharacter('alice', { basic_info: { age: '8 tuổi', gender: '', description: '', category_id: '', role: '' } })];
     expect(deriveParametricDefaultValue('alice.age', slot, chars)).toBe('8');
@@ -642,7 +642,7 @@ describe('describeItemSlot', () => {
     });
     const book = makeBook({
       parametric_slot: makeParametricSlot({
-        characters: [{ key: 'char_a', name: null, gender: 'male', age_min: 5, age_max: 12 }],
+        characters: [{ key: 'char_a', name: null, gender: 'male', age_min: 5, age_max: 12, zodiac: null }],
       }),
     });
     const chars = [makeCharacter('char_a', { name: 'Alice' })];
@@ -709,7 +709,7 @@ describe('describeItemSlot', () => {
     });
     const book = makeBook({
       parametric_slot: makeParametricSlot({
-        characters: [{ key: 'char_a', name: null, gender: 'male', age_min: 5, age_max: 12 }],
+        characters: [{ key: 'char_a', name: null, gender: 'male', age_min: 5, age_max: 12, zodiac: null }],
       }),
     });
 

@@ -72,8 +72,8 @@ describe('upsertCharacterChoice', () => {
   it('initializes a missing character with 5 enabled traits + patch override', () => {
     const out = upsertCharacterChoice(baseConfig(), 'c2', { visual: 'vpX' });
     const added = out.characters.find((c) => c.key === 'c2')!;
-    expect(added.traits.map((t) => t.type)).toEqual(TRAIT_TYPES);
-    expect(added.traits.every((t) => t.is_enabled)).toBe(true);
+    expect(added.traits!.map((t) => t.type)).toEqual(TRAIT_TYPES);
+    expect(added.traits!.every((t) => t.is_enabled)).toBe(true);
     expect(added.visual).toBe('vpX');
     expect(added.is_enabled).toBe(true);
   });

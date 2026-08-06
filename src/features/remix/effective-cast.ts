@@ -3,13 +3,19 @@
 // createRemix clone pipeline — ONE resolver (`resolveRemixCastSets`), so modal
 // preview and clone can never drift.
 //
-// ⚠️ Remixable ⊥ casting_slot (amend 2026-07-31): the swap gate
-// (`book.remix.characters[].is_enabled`) and casting are ORTHOGONAL axes, so
-// the resolver returns TWO sets:
+// ⚠️ Remixable ⊥ casting_slot (amend 2026-07-31, per-param 2026-08-06): the
+// per-param gates (`book.remix.characters[].params.*`) and casting are
+// ORTHOGONAL axes, so the resolver returns THREE sets:
 //   - visualCastKeys: who is visually present after casting (NO gate) — clones
 //     `remixes.characters[]` (the content roster; tags/filters always resolve).
-//   - swappableKeys:  enabledKeys ∩ visualCastKeys — the swap surface (CAST tab
-//     rows, `remix_config.characters[]` purge, crop grouping, sprite seed).
+//   - personalizeKeys: `is_enabled ∧ ≥1 param enabled` — the CAST-tab rows +
+//     `remix_config.characters[]` purge surface. ⚡ NOT intersected with cast:
+//     a character re-cast OUT of the visual roster still appears in the story
+//     TEXT, so its name/gender/age/zodiac personalize applies (same rationale as
+//     voices — text ⊥ visual swap).
+//   - swappableKeys: visualGateKeys ∩ visualCastKeys — the VISUAL swap surface
+//     (traits, crop grouping, sprite seed). `visualGateKeys` = chars whose
+//     `params.visual` gate is ON.
 //
 // ⚠️ NO appearance-check (chốt 2026-07-31). The design's old "scan plain-layer
 // tags before dropping a replaced default actor" mechanism is REMOVED: an item's
@@ -26,6 +32,7 @@ import {
   ACTOR_TYPE_CHARACTER,
   resolveDefaultPreset,
 } from '@/features/editor/components/config-creative-space/casting-slot-helpers';
+import { CHARACTER_PARAM_KEYS, normalizeParams } from '@/constants/config-constants';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('Util', 'RemixEffectiveCast');
@@ -112,23 +119,36 @@ export interface RemixCastSets {
   /** Visual content roster — who is depicted after casting, NO swap gate.
    *  Clones `remixes.characters[]`. Snapshot order, deduped. */
   visualCastKeys: string[];
-  /** `enabledKeys ∩ visualCastKeys` — the swap surface (CAST tab rows,
-   *  `remix_config.characters[]` purge, crop grouping, sprite seed). */
+  /** ⚡2026-08-06 — `is_enabled ∧ ≥1 param enabled` (NOT ∩ cast). CAST-tab rows
+   *  + `remix_config.characters[]` purge. Book-order (bookRemix.characters). */
+  personalizeKeys: string[];
+  /** `visualGateKeys ∩ visualCastKeys` — the VISUAL swap surface (traits, crop
+   *  grouping, sprite seed). `visualGateKeys` = chars with `params.visual` ON. */
   swappableKeys: string[];
 }
 
 /**
- * Resolve both cast sets for a remix, in `snapshot.characters[]` order
- * (dedupe natural).
+ * Resolve the three cast sets for a remix.
  *
- * visual    = (snapshotKeys − replacedDefaults) ∪ chosenActors
- * swappable = visual.filter(enabled)
+ * visual      = (snapshotKeys − replacedDefaults) ∪ chosenActors   (snapshot order)
+ * personalize = bookRemix.characters.filter(is_enabled ∧ anyParamOn)  (book order)
+ * swappable   = visual ∩ visualGateKeys                            (params.visual ON)
  */
 export function resolveRemixCastSets(input: RemixCastSetsInput): RemixCastSets {
   const { storyPresets, castingAxes, bookRemix, snapshotCharacterKeys } = input;
-  const enabled = new Set(
-    bookRemix.characters.filter((c) => c.is_enabled).map((c) => c.key),
-  );
+
+  // Per-param gates over the book roster (one normalize per character).
+  const personalizeKeys: string[] = [];
+  const visualGateKeys = new Set<string>();
+  for (const c of bookRemix.characters) {
+    if (!c.is_enabled) continue;
+    const params = normalizeParams(c);
+    if (CHARACTER_PARAM_KEYS.some((k) => params[k].is_enabled)) {
+      personalizeKeys.push(c.key);
+    }
+    if (params.visual.is_enabled) visualGateKeys.add(c.key);
+  }
+
   const { chosenActors, replacedDefaults } = collectCastActors(
     castingAxes,
     storyPresets,
@@ -140,21 +160,23 @@ export function resolveRemixCastSets(input: RemixCastSetsInput): RemixCastSets {
   const visualCastKeys = snapshotCharacterKeys.filter(
     (k) => !replaced.has(k) || chosen.has(k),
   );
-  const swappableKeys = visualCastKeys.filter((k) => enabled.has(k));
+  const swappableKeys = visualCastKeys.filter((k) => visualGateKeys.has(k));
   log.debug('resolveRemixCastSets', 'computed', {
     axisCount: castingAxes.length,
-    enabledCount: enabled.size,
+    personalizeCount: personalizeKeys.length,
+    visualGateCount: visualGateKeys.size,
     chosenCount: chosen.size,
     replacedCount: replaced.size,
     visualCount: visualCastKeys.length,
     swappableCount: swappableKeys.length,
   });
-  return { visualCastKeys, swappableKeys };
+  return { visualCastKeys, personalizeKeys, swappableKeys };
 }
 
-/** Convenience for the modal (CAST tab rows) — swap surface only. */
-export function swappableCastKeys(input: RemixCastSetsInput): string[] {
-  return resolveRemixCastSets(input).swappableKeys;
+/** Convenience for the modal (CAST tab rows) — the personalize set (⚡2026-08-06,
+ *  replaces `swappableCastKeys`: rows now show every char with ≥1 param on). */
+export function personalizeCastKeys(input: RemixCastSetsInput): string[] {
+  return resolveRemixCastSets(input).personalizeKeys;
 }
 
 /**
