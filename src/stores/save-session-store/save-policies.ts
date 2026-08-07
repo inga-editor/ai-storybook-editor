@@ -58,6 +58,7 @@ import { sheetOf, getSketchTextboxContent, type BaseKind } from '@/types/sketch'
 import type { SketchLineupTab, SketchSpread, SketchSpreadImage } from '@/types/sketch';
 import { parseEntityId } from './entity-id';
 import { splitSketchImageId, splitSketchTextboxId } from './sketch-spread-item-id';
+import { recomputeSupportLanguagesAfterSave } from './after-save-support-languages';
 import type { SaveDomain, SavePolicy } from './types';
 
 /** Default idle auto-save cadence (phase 2 — the timer is a no-op stub in phase 1). */
@@ -222,6 +223,9 @@ export const SAVE_POLICIES: Record<SaveDomain, SavePolicy> = {
     getNode: getSpreadNode,
     buildPayload: buildWholeNodeEditPayload,
     idleAutoSaveMs: DEFAULT_IDLE_AUTO_SAVE_MS,
+    // AFTER a successful step-3 save (🚪/⚡/⏱): recompute book.support_languages translation_status
+    // over the whole snapshot + persist diff-gated (design §4.5 recompute events 1–2).
+    afterSave: recomputeSupportLanguagesAfterSave,
   },
 
   'sketch-entity': {

@@ -20,18 +20,13 @@ import {
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { MultiSelectDropdown, type MultiSelectOption } from '@/components/ui/multi-select-dropdown';
-import { SUPPORTED_LANGUAGES, SUPPORTED_COUNTRIES } from '@/constants/config-constants';
+import { SUPPORTED_LANGUAGES, COUNTRY_OPTIONS } from '@/constants/config-constants';
 import { createLogger } from '@/utils/logger';
 import { Field } from './field';
 import { cloneBookLocalization } from '../localization/clone-book-localization';
 import type { ProjectBookItem } from '../types';
 
 const log = createLogger('Books', 'NewLocalizationModal');
-
-const COUNTRY_OPTIONS: MultiSelectOption[] = SUPPORTED_COUNTRIES.map((c) => ({
-  value: c.code,
-  label: c.label,
-}));
 
 interface NewLocalizationModalProps {
   /** Kept for the design contract + parent wiring; the clone derives project_id from the

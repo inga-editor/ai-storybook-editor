@@ -73,6 +73,18 @@ export interface SavePolicy {
   idleAutoSaveMs?: number;
   /** 404 → nested CREATE fallback (unused by the 9 whole-node phase-1 domains; reserved). */
   createFallback?: { parentId: (id: string) => string; collection: string };
+  /**
+   * ⚡ Optional side-effect fired by the engine AFTER a save SUCCEEDS on one of the 3 canonical
+   * paths (unified-item-save-spec §8.3): 🚪 save-on-leave (`end`), ⚡ `saveNow`/`commitOnModalClose`,
+   * ⏱ idle auto-save (60s). Deliberately NOT fired on `ensureSaved` one-shot (no-session) writes —
+   * the next real save self-heals. `id` = the domain-scoped item id (spreadId for the spread domains).
+   *
+   * MUST be SYNCHRONOUS and NON-BLOCKING: it does its own fire-and-forget I/O; the engine does not
+   * await it. The engine wraps the call in try/catch (`fireAfterSave`) so a throw can NEVER break the
+   * save flow, but the hook SHOULD still swallow its own async rejections. Registered per-domain in
+   * `save-policies.ts` (only `retouch-spread` today → recompute `book.support_languages`).
+   */
+  afterSave?: (id: string) => void;
 }
 
 /** Tri-state save outcome (fixes the old `saveNow() === true` = saved∨clean ambiguity). */

@@ -1,4 +1,5 @@
 import type { TraitType } from '@/types/human';
+import type { SupportLanguagesMap, SupportCountryEntry } from '@/utils/support-languages';
 
 // Language type for editor localization
 export interface Language {
@@ -500,6 +501,10 @@ export interface Book {
   crop_presets?: CropPreset[] | null; // Crops-tab reusable frames (additive, optional)
   parametric_slot?: BookParametricSlot | null; // reader-config param axes (additive, optional; absent = not configured)
   casting_slot?: BookCastingSlot | null; // casting axes / presets (additive, optional; absent = not configured)
+  // Localization config (additive, optional; absent = legacy book). See
+  // ai-storybook-design/DATABASE-SCHEMA.md § Bảng Book → support_languages / support_countries.
+  support_languages?: SupportLanguagesMap | null; // per-language translation_status map (0/1/2)
+  support_countries?: SupportCountryEntry[] | null; // ISO 3166-1 alpha-2 country codes
   created_at: string;
   updated_at: string;
 }

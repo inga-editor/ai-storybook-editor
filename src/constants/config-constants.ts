@@ -102,6 +102,14 @@ export function getLanguageName(code: string): string {
   return entry.name;
 }
 
+// Shared `{ value, label }` options (assignable to MultiSelectOption[]). Hoisted so the
+// Config General panel + NewLocalizationModal reuse ONE source (DRY) — new-localization
+// derives its language list by filtering SUPPORTED_LANGUAGES, so only COUNTRY_OPTIONS is
+// shared there; LANGUAGE_OPTIONS is reused across the two Config General fields.
+export const LANGUAGE_OPTIONS: { value: string; label: string }[] = SUPPORTED_LANGUAGES.map(
+  (l) => ({ value: l.code, label: l.label }),
+);
+
 // ── Humans feature constants ─────────────────────────────────────────────────
 
 export const SUPPORTED_COUNTRIES = [
@@ -117,6 +125,12 @@ export function getCountryName(code: string | null | undefined): string {
   const entry = SUPPORTED_COUNTRIES.find(c => c.code === code);
   return entry?.label ?? code;
 }
+
+// Shared country options (assignable to MultiSelectOption[]) — reused by the Config General
+// SUPPORT COUNTRIES field + NewLocalizationModal Country field.
+export const COUNTRY_OPTIONS: { value: string; label: string }[] = SUPPORTED_COUNTRIES.map(
+  (c) => ({ value: c.code, label: c.label }),
+);
 
 export const GENDER_OPTIONS = [
   { value: 'null', label: 'Unspecified' },

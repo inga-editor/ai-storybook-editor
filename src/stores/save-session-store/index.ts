@@ -26,6 +26,7 @@ import {
 } from '@/stores/resource-lock-store';
 import { saveResource } from '@/apis/resource-lock-api';
 import { useSnapshotStore } from '@/stores/snapshot-store';
+import { useBookStore } from '@/stores/book-store';
 import { useEditSessionStatusStore } from '@/stores/edit-session-status-store';
 import { beginHistory, endHistory } from './history-bridge';
 import { SAVE_POLICIES, projectNode } from './save-policies';
@@ -135,6 +136,31 @@ export const useSaveSessionStore = create<SaveSessionState>()((set, get) => {
     // solo — whole-snapshot flush (legacy fallback; the engine chooses, the caller never forks).
     await useSnapshotStore.getState().flushSnapshot();
     return { ok: true };
+  };
+
+  /**
+   * Fire a domain's optional `afterSave` side-effect (spec §8.3) AFTER a successful save on one of
+   * the 3 canonical paths (🚪 save-on-leave / ⚡ saveNow+commitOnModalClose / ⏱ idle-sweep). NOT
+   * fired on `ensureSaved` one-shot writes (next save self-heals). Guarded by `capturedBookId`: a
+   * session that outlived a book switch (multi-book tab) must NEVER recompute against the wrong open
+   * book. Wrapped in try/catch — the hook can NEVER break the save flow.
+   */
+  const fireAfterSave = (domain: SaveDomain, id: string, capturedBookId: string) => {
+    const policy = SAVE_POLICIES[domain];
+    if (!policy.afterSave) return;
+    const currentBookId = useBookStore.getState().currentBook?.id ?? null;
+    if (currentBookId !== capturedBookId) {
+      log.debug('fireAfterSave', 'open book differs from session book — skip', {
+        domain,
+        capturedBookId,
+      });
+      return;
+    }
+    try {
+      policy.afterSave(id);
+    } catch (err) {
+      log.warn('fireAfterSave', 'hook threw — ignored', { domain, id, error: errMsg(err) });
+    }
   };
 
   /** Heartbeat lock-lost handler (registered per session). Mirrors the old hook's onLost: leave
@@ -295,11 +321,17 @@ export const useSaveSessionStore = create<SaveSessionState>()((set, get) => {
         if (manage && dirty) ess.markSaving();
         if (dirty) {
           const payload = policy.buildPayload(projected, entry.id);
+          // Capture the identity BEFORE dropEntry (below) — this `.then` resolves after cleanup.
+          const afterSaveDomain = entry.domain;
+          const afterSaveId = entry.id;
+          const afterSaveBookId = entry.capturedBookId;
           // Fire-and-forget (mirror the held cleanup): settle the header on resolve; warn on failure.
           void persistUnderFork(entry, payload, false, true)
             .then((res) => {
               if (manage) ess.markSaved();
-              if (!res.ok) {
+              if (res.ok) {
+                fireAfterSave(afterSaveDomain, afterSaveId, afterSaveBookId);
+              } else {
                 log.warn('end', 'lockless save-on-leave failed', {
                   key,
                   domain: entry.domain,
@@ -339,10 +371,17 @@ export const useSaveSessionStore = create<SaveSessionState>()((set, get) => {
         if (dirty) ess.markSaving();
       }
       const payload = dirty ? policy.buildPayload(projected, entry.id) : undefined;
+      // Capture the identity BEFORE dropEntry (below) — this `.then` resolves after cleanup.
+      const afterSaveDomain = entry.domain;
+      const afterSaveId = entry.id;
+      const afterSaveBookId = entry.capturedBookId;
       // Fire-and-forget release (mirror the old cleanup): settle the header label on resolve.
       void persistUnderFork(entry, payload, true, dirty)
         .then(() => {
           if (manage) ess.markSaved();
+          // Only when a write actually happened (dirty): a clean release does no write ⇒ no recompute.
+          // NB releaseAndSave resolves {ok:true} unconditionally, so the dirty flag is the gate here.
+          if (dirty) fireAfterSave(afterSaveDomain, afterSaveId, afterSaveBookId);
         })
         .catch(() => {
           if (manage) ess.markSaved();
@@ -389,7 +428,12 @@ export const useSaveSessionStore = create<SaveSessionState>()((set, get) => {
       } finally {
         if (locklessManaged) ess.markSaved();
       }
-      if (res.ok) return 'saved';
+      if (res.ok) {
+        // ⚡/⏱ path: covers explicit saveNow, commitOnModalClose, and the 60s idle-sweep (all route
+        // here). Fire AFTER the baseline rebase so the recompute reads the just-persisted content.
+        fireAfterSave(entry.domain, entry.id, entry.capturedBookId);
+        return 'saved';
+      }
       log.warn('saveNow', 'save rejected', { key, blocked: res.blocked });
       return res.blocked ? 'blocked' : 'failed';
     },
@@ -422,6 +466,12 @@ export const useSaveSessionStore = create<SaveSessionState>()((set, get) => {
       }
 
       // ── ONE-SHOT (no live session) ──────────────────────────────────────────────────────────
+      // NOTE: `afterSave` is DELIBERATELY NOT fired on any of these one-shot branches (spec §8.3 /
+      // validation session 1). Only the 3 canonical paths — 🚪 save-on-leave (`end`), ⚡ `saveNow`,
+      // ⏱ idle-sweep — run it. A one-shot write that changed textbox status is self-healed by the
+      // next real save's recompute, so skipping the recompute here costs at most a transient stale
+      // status (never a lost write). The held-session branch above delegates to `saveNow`, which
+      // DOES fire afterSave — that is the ⚡ path, not a one-shot.
       // Solo book (no collab persist): the whole-snapshot flush is the durable write; no lock/node.
       if (!rl.collabPersist) {
         log.info('ensureSaved', 'one-shot solo flush', { key, domain });

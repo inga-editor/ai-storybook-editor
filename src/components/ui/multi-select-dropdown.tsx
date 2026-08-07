@@ -37,6 +37,10 @@ export interface MultiSelectDropdownProps {
   searchable?: boolean;
   /** ⚡ Placeholder for the search box (only when `searchable`). */
   searchPlaceholder?: string;
+  /** ⚡ Values that cannot be removed: their chip has NO ✕, their panel item is disabled
+   *  (click no-op, ✓ still shown), and `onChange` defensively re-adds any dropped locked
+   *  value. Default `undefined` ⇒ zero behavior change for existing callers. */
+  lockedValues?: string[];
 }
 
 export function MultiSelectDropdown({
@@ -50,9 +54,31 @@ export function MultiSelectDropdown({
   onPrimaryChange,
   searchable = false,
   searchPlaceholder = 'Search...',
+  lockedValues,
 }: MultiSelectDropdownProps) {
   const [open, setOpen] = React.useState(false);
   const [query, setQuery] = React.useState('');
+
+  const lockedSet = React.useMemo(() => new Set(lockedValues ?? []), [lockedValues]);
+
+  // Defensive emit: never surface a selection that dropped a locked value (re-add any
+  // missing locked value, preserving current order + appending the recovered ones).
+  const emitChange = React.useCallback(
+    (next: string[]) => {
+      if (lockedSet.size === 0) {
+        onChange(next);
+        return;
+      }
+      const missing = [...lockedSet].filter((v) => !next.includes(v));
+      if (missing.length > 0) {
+        log.warn('emitChange', 're-adding dropped locked value(s)', { recovered: missing.length });
+        onChange([...next, ...missing]);
+        return;
+      }
+      onChange(next);
+    },
+    [onChange, lockedSet],
+  );
 
   // Reset the query when the panel closes (event handler, not effect — React 19 safe).
   const handleOpenChange = React.useCallback(
@@ -89,14 +115,15 @@ export function MultiSelectDropdown({
 
   const handleToggle = React.useCallback(
     (value: string) => {
+      if (lockedSet.has(value)) return; // locked items are non-interactive
       const isSelected = selectedValues.includes(value);
       const next = isSelected
         ? selectedValues.filter((v) => v !== value)
         : [...selectedValues, value];
       log.info('handleToggle', 'selection changed', { value, selected: !isSelected, total: next.length });
-      onChange(next);
+      emitChange(next);
     },
-    [selectedValues, onChange]
+    [selectedValues, emitChange, lockedSet]
   );
 
   const handleRemoveTag = React.useCallback(
@@ -104,9 +131,9 @@ export function MultiSelectDropdown({
       e.stopPropagation();
       const next = selectedValues.filter((v) => v !== value);
       log.info('handleRemoveTag', 'tag removed', { value, remaining: next.length });
-      onChange(next);
+      emitChange(next);
     },
-    [selectedValues, onChange]
+    [selectedValues, emitChange]
   );
 
   const handleTagClick = React.useCallback(
@@ -137,6 +164,7 @@ export function MultiSelectDropdown({
             {selectedLabels.length > 0 ? (
               selectedLabels.map((item) => {
                 const isPrimary = item.value === primaryValue;
+                const isLocked = lockedSet.has(item.value);
                 return (
                   <span
                     key={item.value}
@@ -150,27 +178,30 @@ export function MultiSelectDropdown({
                   >
                     {isPrimary && <Star className="h-3 w-3 fill-current text-primary" />}
                     {item.label}
-                    <span
-                      role="button"
-                      tabIndex={0}
-                      onClick={(e) => handleRemoveTag(e, item.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' || e.key === ' ') {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          const next = selectedValues.filter((v) => v !== item.value);
-                          log.info('handleRemoveTag', 'tag removed via keyboard', {
-                            value: item.value,
-                            remaining: next.length,
-                          });
-                          onChange(next);
-                        }
-                      }}
-                      className="inline-flex cursor-pointer items-center text-muted-foreground hover:text-foreground focus:outline-none focus:ring-1 focus:ring-ring rounded"
-                      aria-label={`Remove ${item.label}`}
-                    >
-                      <X className="h-3 w-3" />
-                    </span>
+                    {/* Locked value → no ✕ (cannot be removed). */}
+                    {!isLocked && (
+                      <span
+                        role="button"
+                        tabIndex={0}
+                        onClick={(e) => handleRemoveTag(e, item.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            const next = selectedValues.filter((v) => v !== item.value);
+                            log.info('handleRemoveTag', 'tag removed via keyboard', {
+                              value: item.value,
+                              remaining: next.length,
+                            });
+                            emitChange(next);
+                          }
+                        }}
+                        className="inline-flex cursor-pointer items-center text-muted-foreground hover:text-foreground focus:outline-none focus:ring-1 focus:ring-ring rounded"
+                        aria-label={`Remove ${item.label}`}
+                      >
+                        <X className="h-3 w-3" />
+                      </span>
+                    )}
                   </span>
                 );
               })
@@ -213,15 +244,17 @@ export function MultiSelectDropdown({
             visibleOptions.map((option) => {
               const isSelected = selectedValues.includes(option.value);
               const isPrimary = option.value === primaryValue;
+              const isLocked = lockedSet.has(option.value);
               return (
                 <div
                   key={option.value}
                   role="option"
                   aria-selected={isSelected}
+                  aria-disabled={isLocked || undefined}
                   onClick={() => handleToggle(option.value)}
                   className={cn(
-                    'flex cursor-pointer items-center justify-between rounded-sm px-2 py-1.5 text-sm',
-                    'hover:bg-accent',
+                    'flex items-center justify-between rounded-sm px-2 py-1.5 text-sm',
+                    isLocked ? 'cursor-default opacity-60' : 'cursor-pointer hover:bg-accent',
                     isSelected && 'font-medium'
                   )}
                 >
