@@ -1,9 +1,11 @@
 // new-international-book-modal.tsx — Unified "create the international (master) book of
 // a project" modal (design books-page/06). Merges the three legacy entry points
 // (New Book + Import Zip + Import Script) behind a single Source radio:
-//   • scratch → createBook(...) with the shared <BookMetaFields> + optional style pickers.
+//   • scratch → createBook(...) with the shared <BookMetaFields>.
 //   • script  → client-side Excel ingest (importScript pipeline, design 07-01).
 //   • zip     → deferred shell (radio present, submit disabled + "coming soon" helper).
+// The optional Sketch/Art style pickers render for ALL sources (2026-08-07 — was
+// scratch-only): import paths already persist artstyle_id/sketchstyle_id.
 // Every path creates the book scoped to the project with is_international: true. Switching
 // the radio preserves entered metadata (only the file / errors reset).
 //
@@ -279,7 +281,6 @@ export function NewInternationalBookModal({
             onChange={patchMeta}
             disabled={formDisabled}
             idPrefix="intl-book"
-            showStylePickers={source === 'scratch'}
           />
 
           {isImport && (
