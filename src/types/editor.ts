@@ -515,6 +515,8 @@ export interface BookListItem {
   type: number;
   created_at: string;
   updated_at: string;
+  project_id: string | null; // localization-project scope (NULL for legacy/imported)
+  is_international: boolean; // the project's original/international edition
 }
 
 // File attachment for PromptPanel

@@ -20,14 +20,15 @@ interface BooksListProps {
   onNew?: () => void; // LibraryEmptyState CTA
 }
 
-/** DB has no books yet → invite to create the first one. */
+/** This project has no books yet → invite to create/import the first edition. */
 function LibraryEmptyState({ onNew }: { onNew?: () => void }) {
   return (
     <div className="flex flex-col items-center gap-3 py-16 text-center">
       <BookOpen className="h-10 w-10 text-muted-foreground" aria-hidden="true" />
-      <p className="text-base font-medium">No books yet</p>
+      <p className="text-base font-medium">No books in this project yet</p>
       <p className="max-w-sm text-sm text-muted-foreground">
-        Create your first storybook, or import from a Zip or Script.
+        Create the international edition first, or import one from a Zip / Script
+        file.
       </p>
       {onNew ? (
         <Button onClick={onNew} className="mt-2">

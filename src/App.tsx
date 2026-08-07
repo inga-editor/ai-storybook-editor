@@ -12,6 +12,7 @@ import { HumansPage } from '@/features/humans';
 import { UsersPage, RequireAdmin } from '@/features/users';
 import { StylesPage } from '@/features/styles';
 import { BooksPage } from '@/features/books';
+import { ProjectsPage } from '@/features/projects';
 import { DemoCanvasSpreadView, DemoPlayableSpreadView, DemoRivePlayer, DemoRemotionSpike } from '@/features/demo-spread-views';
 import { useAuthStore } from '@/stores/auth-store';
 import { useVoicesActions } from '@/stores/voices-store';
@@ -126,11 +127,13 @@ export default function App() {
         <Route path="/demo/rive-player" element={<DemoRivePlayer />} />
         <Route path="/demo/remotion-spike" element={<DemoRemotionSpike />} />
         <Route element={<AppLayout />}>
-          {/* Default landing = Books library. Single source of the "default"
-              route — login redirect, editor-exit, and the `*` catch-all all
-              navigate('/') and follow this. Home stays reachable at /home
-              (sidebar title link). */}
-          <Route index element={<Navigate to="/books" replace />} />
+          {/* Default landing = Projects. Single source of the "default" route —
+              login redirect, editor-exit, and the `*` catch-all all navigate('/')
+              and follow this. Landing here (not /books) avoids a double-redirect:
+              /books is now project-scoped and bounces back to /projects when it
+              has no ?project=. Home stays reachable at /home (sidebar title link). */}
+          <Route index element={<Navigate to="/projects" replace />} />
+          <Route path="/projects" element={<ProjectsPage />} />
           <Route path="/home" element={<HomePage />} />
           <Route path="/voices" element={<VoicesPage />} />
           <Route path="/sounds" element={<SoundsPage />} />

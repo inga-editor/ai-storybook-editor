@@ -15,6 +15,12 @@ export interface BooksFilterState {
   step: StepFilter;
 }
 
+/** Minimal project header context for the project-scoped /books page. */
+export interface ProjectContext {
+  id: string;
+  title: string;
+}
+
 /** Art-style option projected for the (custom Popover) picker — no `cmdk`. */
 export interface ArtStyleOption {
   id: string;

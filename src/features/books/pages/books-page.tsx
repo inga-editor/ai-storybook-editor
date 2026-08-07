@@ -1,13 +1,18 @@
-// books-page.tsx — Root of the /books library page. Owns store wiring + local UI
-// state, derives the type=1 ("normal book") scope client-side, applies filters via
-// useMemo, fetches on mount, and orchestrates Header / Toolbar / (Skeleton | List).
+// books-page.tsx — Root of the (project-scoped) /books library page. Requires a
+// ?project=:id: missing → redirect /projects; a project that can't be read (RLS /
+// deleted / foreign) → redirect /projects (404 and 403 are indistinguishable on
+// purpose — no existence leak). Owns store wiring + local UI state, derives the
+// project-scoped type=1 book list client-side (fetchBooks query is SHARED with the
+// editor — never .eq() it), applies filters via useMemo, and orchestrates
+// Header / Toolbar / (Skeleton | List) + modals.
 //
-// Modal handlers in THIS phase only set local state (isNewOpen, detailsBook,
-// importSource, deletingBook) — the actual modals are rendered in phases 03/04.
-// onEdit navigates to the editor; row-body open routes to the (future) details modal.
+// Create-success (validated S1): STAY on /books + toast — the new row is unshifted
+// into books[] by the store's createBook (now carrying project_id/is_international),
+// so it shows in the scope immediately. Import flow is DEFERRED (imported books get
+// project_id = NULL and stay invisible here — known limitation, handled separately).
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Navigate, useNavigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import {
   applyFilters,
@@ -22,26 +27,32 @@ import {
   NewBookModal,
   type BooksFilterState,
   type ImportSource,
+  type ProjectContext,
 } from '@/features/books';
+import {
+  filterBooksByProject,
+  hasInternationalBook,
+} from '@/features/books/utils/book-project-scope';
+import { supabase } from '@/apis/supabase';
 import { useBooks, useBooksLoading, useBookActions } from '@/stores/book-store';
 import type { BookListItem } from '@/types/editor';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('Books', 'BooksPage');
 
-/** Library scope: only "normal" books (type === 1). Source books (type 0) excluded. */
-const NORMAL_BOOK_TYPE = 1;
-
 export function BooksPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const projectId = searchParams.get('project');
+
   const books = useBooks();
   const isLoading = useBooksLoading();
   const { fetchBooks } = useBookActions();
 
   const [filters, setFilters] = useState<BooksFilterState>(DEFAULT_BOOKS_FILTERS);
+  const [projectContext, setProjectContext] = useState<ProjectContext | null>(null);
+  const [isLoadingProject, setIsLoadingProject] = useState(true);
 
-  // Modal/dialog state — wired here; the modal components themselves land in
-  // phases 03 (new + details) and 04 (delete + import). Placeholders for now.
   const [isNewOpen, setIsNewOpen] = useState(false);
   const [detailsBook, setDetailsBook] = useState<BookListItem | null>(null);
   const [importSource, setImportSource] = useState<ImportSource | null>(null);
@@ -52,17 +63,58 @@ export function BooksPage() {
     void fetchBooks();
   }, [fetchBooks]);
 
-  // type=1 scope is derived client-side (fetchBooks query is shared with the
-  // editor's useIsSourceBook). Keep memo keys on stable raw refs.
-  const normalBooks = useMemo(
-    () => books.filter((b) => b.type === NORMAL_BOOK_TYPE),
-    [books],
+  // Fetch the project header context. null (missing / RLS-blocked / deleted) →
+  // redirect to /projects. `cancelled` guards against setState-after-unmount.
+  useEffect(() => {
+    if (!projectId) return;
+    let cancelled = false;
+
+    void (async () => {
+      setIsLoadingProject(true);
+      const { data, error } = await supabase
+        .from('projects')
+        .select('id, title')
+        .eq('id', projectId)
+        .single();
+
+      if (cancelled) return;
+
+      if (error || !data) {
+        log.warn('loadProjectContext', 'project unreadable → redirect', {
+          projectId,
+          message: error?.message,
+        });
+        navigate('/projects', { replace: true });
+        return;
+      }
+
+      log.info('loadProjectContext', 'done', { projectId });
+      setProjectContext({ id: data.id, title: data.title });
+      setIsLoadingProject(false);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, navigate]);
+
+  // Project-scoped, type=1 book list. Derived client-side (the fetchBooks query is
+  // shared with the editor's useIsSourceBook). Keep memo keys on stable raw refs.
+  const scopedBooks = useMemo(
+    () => (projectId ? filterBooksByProject(books, projectId) : []),
+    [books, projectId],
   );
   const filtered = useMemo(
-    () => applyFilters(normalBooks, filters),
-    [normalBooks, filters],
+    () => applyFilters(scopedBooks, filters),
+    [scopedBooks, filters],
   );
-  const isLibraryEmpty = normalBooks.length === 0;
+  const isLibraryEmpty = scopedBooks.length === 0;
+  const hasInternational = hasInternationalBook(scopedBooks);
+
+  const handleBack = useCallback(() => {
+    log.debug('handleBack', 'navigate projects');
+    navigate('/projects');
+  }, [navigate]);
 
   const handleNew = useCallback(() => {
     log.debug('handleNew', 'open new-book');
@@ -78,12 +130,12 @@ export function BooksPage() {
   }, []);
 
   const handleImportZip = useCallback(() => {
-    log.debug('handleImportZip', 'open import zip (phase 04)');
+    log.debug('handleImportZip', 'open import zip');
     setImportSource('zip');
   }, []);
 
   const handleImportScript = useCallback(() => {
-    log.debug('handleImportScript', 'open import script (phase 04)');
+    log.debug('handleImportScript', 'open import script');
     setImportSource('script');
   }, []);
 
@@ -100,7 +152,6 @@ export function BooksPage() {
     [navigate],
   );
 
-  // Import-success: close the modal + navigate to the editor on the new book.
   const handleImported = useCallback(
     (bookId: string) => {
       log.info('handleImported', 'import ok, navigate editor', { id: bookId });
@@ -110,10 +161,6 @@ export function BooksPage() {
     [navigate],
   );
 
-  // Import-close WITHOUT navigating (the warnings-acknowledged "Close" path). The import writes
-  // the book directly to the DB (createImportedBook never touches the book store), so the list
-  // must be refetched or the freshly created book stays invisible until a reload. A plain Cancel
-  // (nothing written) skips the fetch.
   const handleImportClose = useCallback(
     (didImport?: boolean) => {
       log.debug('handleImportClose', 'close import modal', { didImport: !!didImport });
@@ -127,13 +174,30 @@ export function BooksPage() {
   );
 
   const handleDelete = useCallback((book: BookListItem) => {
-    log.debug('handleDelete', 'open delete dialog (phase 04)', { id: book.id });
+    log.debug('handleDelete', 'open delete dialog', { id: book.id });
     setDeletingBook(book);
   }, []);
+
+  // Guard AFTER all hooks (rules-of-hooks): missing ?project= → bounce to /projects.
+  if (!projectId) {
+    return <Navigate to="/projects" replace />;
+  }
+
+  // Project context still resolving (or redirecting) → skeleton; don't render the
+  // header with an empty title.
+  if (isLoadingProject || !projectContext) {
+    return (
+      <main aria-labelledby="books-heading" className="w-full">
+        <ListSkeleton rows={6} />
+      </main>
+    );
+  }
 
   return (
     <main aria-labelledby="books-heading" className="w-full">
       <BooksHeader
+        projectTitle={projectContext.title}
+        onBack={handleBack}
         onNew={handleNew}
         onImportZip={handleImportZip}
         onImportScript={handleImportScript}
@@ -160,7 +224,12 @@ export function BooksPage() {
       )}
 
       {isNewOpen && (
-        <NewBookModal onClose={() => setIsNewOpen(false)} onCreated={handleCreated} />
+        <NewBookModal
+          projectId={projectId}
+          isFirstBookInProject={!hasInternational}
+          onClose={() => setIsNewOpen(false)}
+          onCreated={handleCreated}
+        />
       )}
       {detailsBook && (
         <BookDetailsModal

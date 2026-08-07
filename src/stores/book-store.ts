@@ -37,6 +37,11 @@ export interface CreateBookParams {
   artstyle_id: string | null;
   original_language: string;
   sketchstyle_id?: string | null;
+  // Project scope. NewBookModal always supplies these; legacy/home + import flows
+  // omit them → the book is created unscoped (project_id NULL) — same known
+  // limitation bucket as imports, invisible in the project-scoped /books list.
+  project_id?: string | null;
+  is_international?: boolean; // first book in a project = the international edition
 }
 
 interface BookStore {
@@ -90,7 +95,7 @@ export const useBookStore = create<BookStore>()(
           const { data, error } = await supabase
             .from("books")
             .select(
-              "id, title, description, cover, owner_id, step, type, created_at, updated_at"
+              "id, title, description, cover, owner_id, step, type, created_at, updated_at, project_id, is_international"
             )
             .order("updated_at", { ascending: false });
 
@@ -150,23 +155,49 @@ export const useBookStore = create<BookStore>()(
             return null;
           }
 
-          const { data: bookData, error: bookError } = await supabase
-            .from("books")
-            .insert({
-              title: params.title,
-              owner_id: user.id,
-              format_id: params.format_id,
-              book_type: 1,
-              dimension: params.dimension,
-              target_audience: params.target_audience,
-              artstyle_id: params.artstyle_id ?? null,
-              sketchstyle_id: params.sketchstyle_id ?? null,
-              step: 1,
-              type: 1,
-              original_language: params.original_language,
-            })
-            .select("*")
-            .single();
+          const basePayload = {
+            title: params.title,
+            owner_id: user.id,
+            format_id: params.format_id,
+            book_type: 1,
+            dimension: params.dimension,
+            target_audience: params.target_audience,
+            artstyle_id: params.artstyle_id ?? null,
+            sketchstyle_id: params.sketchstyle_id ?? null,
+            step: 1,
+            type: 1,
+            original_language: params.original_language,
+            project_id: params.project_id ?? null,
+            is_international: params.is_international ?? false,
+          };
+
+          const insertBook = (isInternational: boolean) =>
+            supabase
+              .from("books")
+              .insert({ ...basePayload, is_international: isInternational })
+              .select("*")
+              .single();
+
+          let { data: bookData, error: bookError } = await insertBook(
+            basePayload.is_international
+          );
+
+          // Race guard: `is_international` is derived from the (possibly stale)
+          // client book list, but the DB enforces one international edition per
+          // project via a partial unique index. If our optimistic `true` collides
+          // (Postgres 23505), another edition already claimed international — retry
+          // once as a NON-international edition instead of wedging the user in an
+          // opaque, self-repeating "please try again".
+          if (
+            bookError?.code === "23505" &&
+            basePayload.is_international &&
+            basePayload.project_id
+          ) {
+            log.warn("createBook", "international collision, retrying non-intl", {
+              projectId: basePayload.project_id,
+            });
+            ({ data: bookData, error: bookError } = await insertBook(false));
+          }
 
           if (bookError || !bookData) {
             log.error("createBook", "book insert failed", { error: bookError });
@@ -210,6 +241,8 @@ export const useBookStore = create<BookStore>()(
                 type: bookData.type,
                 created_at: bookData.created_at,
                 updated_at: bookData.updated_at,
+                project_id: bookData.project_id,
+                is_international: bookData.is_international,
               },
               ...state.books,
             ],

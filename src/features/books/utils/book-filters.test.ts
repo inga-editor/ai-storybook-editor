@@ -14,6 +14,8 @@ function makeBook(overrides: Partial<BookListItem>): BookListItem {
     type: 1,
     created_at: '2026-01-01T00:00:00Z',
     updated_at: '2026-01-01T00:00:00Z',
+    project_id: null,
+    is_international: false,
     ...overrides,
   };
 }

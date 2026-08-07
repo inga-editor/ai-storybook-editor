@@ -31,11 +31,19 @@ import {
 const log = createLogger('Books', 'NewBookModal');
 
 interface NewBookModalProps {
+  projectId: string;
+  /** First book in the project becomes the international/original edition. */
+  isFirstBookInProject: boolean;
   onClose: () => void;
   onCreated: (book: { id: string }) => void;
 }
 
-export function NewBookModal({ onClose, onCreated }: NewBookModalProps) {
+export function NewBookModal({
+  projectId,
+  isFirstBookInProject,
+  onClose,
+  onCreated,
+}: NewBookModalProps) {
   const { createBook } = useBookActions();
 
   const [meta, setMeta] = React.useState<BookMetaValue>(INITIAL_BOOK_META);
@@ -64,6 +72,8 @@ export function NewBookModal({ onClose, onCreated }: NewBookModalProps) {
         original_language: meta.originalLanguage,
         artstyle_id: meta.artstyleId ?? null,
         sketchstyle_id: meta.sketchstyleId ?? null,
+        project_id: projectId,
+        is_international: isFirstBookInProject,
       });
 
       if (!book) {
@@ -83,7 +93,16 @@ export function NewBookModal({ onClose, onCreated }: NewBookModalProps) {
       setError('Could not create book. Please try again.');
       setCreating(false);
     }
-  }, [isValid, creating, meta, createBook, onCreated, onClose]);
+  }, [
+    isValid,
+    creating,
+    meta,
+    createBook,
+    onCreated,
+    onClose,
+    projectId,
+    isFirstBookInProject,
+  ]);
 
   // Block dismiss (Esc / click-outside / [X]) while creating.
   const handleOpenChange = React.useCallback(

@@ -1,8 +1,7 @@
 import { useCallback, useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import {
-  BookOpen,
-  Package,
+  FolderKanban,
   FolderOpen,
   Users,
   Swords,
@@ -71,8 +70,7 @@ const NAV_SECTIONS: NavSectionConfig[] = [
     label: "CREATIVES",
     defaultOpen: false,
     items: [
-      { key: "books", to: "/books", icon: BookOpen, label: "Books" },
-      { key: "products", to: "/products", icon: Package, label: "Products" },
+      { key: "projects", to: "/projects", icon: FolderKanban, label: "Projects" },
     ],
   },
   {
