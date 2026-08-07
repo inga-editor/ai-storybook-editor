@@ -7,7 +7,7 @@
 // Wrapped in React.memo (key = book.id) — list rows are otherwise pure.
 
 import { memo } from 'react';
-import { Clock, Eye, Trash2 } from 'lucide-react';
+import { Clock, Trash2 } from 'lucide-react';
 import { cn } from '@/utils/utils';
 import { Button } from '@/components/ui/button';
 import { EditionBadge, StatusBadge } from '@/features/books/components/book-badges';
@@ -60,11 +60,6 @@ function BookRowImpl({
       e.preventDefault();
       openDetails();
     }
-  };
-
-  const handleView = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    openDetails();
   };
 
   const handleOpenEditor = (e: React.MouseEvent) => {
@@ -126,14 +121,6 @@ function BookRowImpl({
         >
           Open Editor
         </Button>
-        <button
-          type="button"
-          aria-label="View details"
-          onClick={handleView}
-          className="flex h-8 w-8 items-center justify-center rounded-full hover:bg-accent"
-        >
-          <Eye className="h-4 w-4" aria-hidden="true" />
-        </button>
         <button
           type="button"
           aria-label="Delete"
