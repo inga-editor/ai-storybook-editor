@@ -46,6 +46,10 @@ interface BookMetaFieldsProps {
   disabled?: boolean;
   /** Prefixes input ids so two modals can mount distinct field sets. */
   idPrefix?: string;
+  /** Sketch Style + Art Style pickers (scratch only). Hidden for the import
+   *  sources of NewInternationalBookModal — style follows the imported content.
+   *  Default true keeps NewBookModal / ImportBookModal unchanged. */
+  showStylePickers?: boolean;
 }
 
 export function BookMetaFields({
@@ -53,6 +57,7 @@ export function BookMetaFields({
   onChange,
   disabled = false,
   idPrefix = 'book',
+  showStylePickers = true,
 }: BookMetaFieldsProps) {
   const [formats, setFormats] = React.useState<FormatRow[]>([]);
   const [artStyles, setArtStyles] = React.useState<ArtStyleOption[]>([]);
@@ -196,26 +201,30 @@ export function BookMetaFields({
         </Field>
       </div>
 
-      <Field label="Sketch Style">
-        <ArtStyleSelect
-          value={value.sketchstyleId}
-          options={sketchStyles}
-          onChange={(id) => onChange({ sketchstyleId: id })}
-          clearable
-          disabled={lookupsBusy}
-          placeholder="Search sketch style..."
-        />
-      </Field>
+      {showStylePickers && (
+        <>
+          <Field label="Sketch Style">
+            <ArtStyleSelect
+              value={value.sketchstyleId}
+              options={sketchStyles}
+              onChange={(id) => onChange({ sketchstyleId: id })}
+              clearable
+              disabled={lookupsBusy}
+              placeholder="Search sketch style..."
+            />
+          </Field>
 
-      <Field label="Art Style">
-        <ArtStyleSelect
-          value={value.artstyleId}
-          options={artStyles}
-          onChange={(id) => onChange({ artstyleId: id })}
-          clearable
-          disabled={lookupsBusy}
-        />
-      </Field>
+          <Field label="Art Style">
+            <ArtStyleSelect
+              value={value.artstyleId}
+              options={artStyles}
+              onChange={(id) => onChange({ artstyleId: id })}
+              clearable
+              disabled={lookupsBusy}
+            />
+          </Field>
+        </>
+      )}
     </>
   );
 }

@@ -1,37 +1,55 @@
 // books-header.tsx — Title row for the (project-scoped) /books page: a back arrow
-// to /projects + the project title + subtitle, then the 3 CTA. Presentational;
-// emits callbacks, owns no state. Primary "New Book" sits last (rightmost).
+// to /projects + project title + subtitle (description · Original: {language}) +
+// an info line, then 2 CTA (New International / New Localization). Presentational;
+// emits callbacks, owns no state. Disable rule is symmetric (greyed + tooltip,
+// never hidden): International disabled once one exists; Localization disabled
+// until an international book exists (nothing to clone from). See 01-books-header.
 
-import { ArrowLeft, Download, FileUp, Plus } from 'lucide-react';
+import { ArrowLeft, Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { languageLabel } from '@/features/books/utils/book-labels';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('Books', 'BooksHeader');
 
 interface BooksHeaderProps {
   projectTitle: string;
+  projectDescription: string | null;
+  originalLanguage: string | null; // from the international book; null when none yet
+  hasInternational: boolean; // drives the symmetric disable rule
   onBack: () => void;
-  onNew: () => void;
-  onImportZip: () => void;
-  onImportScript: () => void;
+  onNewInternational: () => void;
+  onNewLocalization: () => void;
 }
+
+const INFO_LINE =
+  'Every book below shares the same story. Each one is a localization with its own translated title.';
 
 export function BooksHeader({
   projectTitle,
+  projectDescription,
+  originalLanguage,
+  hasInternational,
   onBack,
-  onNew,
-  onImportZip,
-  onImportScript,
+  onNewInternational,
+  onNewLocalization,
 }: BooksHeaderProps) {
-  log.debug('render', 'render header');
+  log.debug('render', 'render header', { hasInternational });
+
+  // Subtitle = description + " · Original: {language}" (each part optional).
+  const originalSuffix = originalLanguage
+    ? ` · Original: ${languageLabel(originalLanguage)}`
+    : '';
+  const subtitle = `${projectDescription ?? ''}${originalSuffix}`.trim();
+
   return (
-    <header className="flex items-center justify-between border-b border-border px-6 py-3">
-      <div className="flex min-w-0 items-center gap-3">
+    <header className="flex items-start justify-between gap-4 border-b border-border px-6 py-3">
+      <div className="flex min-w-0 items-start gap-3">
         <button
           type="button"
           onClick={onBack}
           aria-label="Back to projects"
-          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-accent hover:text-foreground"
+          className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-accent hover:text-foreground"
         >
           <ArrowLeft className="h-4 w-4" aria-hidden="true" />
         </button>
@@ -42,21 +60,36 @@ export function BooksHeader({
           >
             {projectTitle}
           </h1>
-          <p className="text-sm text-muted-foreground">Books of this project</p>
+          {subtitle ? (
+            <p className="truncate text-sm text-muted-foreground">{subtitle}</p>
+          ) : null}
+          <p className="text-xs text-muted-foreground">{INFO_LINE}</p>
         </div>
       </div>
       <div className="flex shrink-0 items-center gap-2">
-        <Button variant="outline" onClick={onImportScript}>
-          <FileUp className="mr-1.5 h-4 w-4" />
-          Import Script
-        </Button>
-        <Button variant="outline" onClick={onImportZip}>
-          <Download className="mr-1.5 h-4 w-4" />
-          Import Zip
-        </Button>
-        <Button onClick={onNew}>
+        <Button
+          onClick={onNewInternational}
+          disabled={hasInternational}
+          aria-disabled={hasInternational}
+          title={
+            hasInternational
+              ? 'Project already has an international book'
+              : undefined
+          }
+        >
           <Plus className="mr-1.5 h-4 w-4" />
-          New Book
+          New International
+        </Button>
+        <Button
+          onClick={onNewLocalization}
+          disabled={!hasInternational}
+          aria-disabled={!hasInternational}
+          title={
+            !hasInternational ? 'Create the international book first' : undefined
+          }
+        >
+          <Plus className="mr-1.5 h-4 w-4" />
+          New Localization
         </Button>
       </div>
     </header>

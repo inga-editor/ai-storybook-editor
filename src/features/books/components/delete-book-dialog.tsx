@@ -24,7 +24,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import { CountdownDisplay } from '@/components/ui/countdown-display';
 import { useBookActions } from '@/stores/book-store';
-import type { BookListItem } from '@/types/editor';
+import type { ProjectBookItem } from '@/features/books/types';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('Books', 'DeleteBookDialog');
@@ -32,7 +32,7 @@ const log = createLogger('Books', 'DeleteBookDialog');
 type DeleteStep = 'countdown' | 'confirm' | 'deleting';
 
 interface DeleteBookDialogProps {
-  book: BookListItem;
+  book: ProjectBookItem;
   onClose: () => void;
   /** Anti-misclick countdown before Delete enables. Default 5s. */
   countdownSeconds?: number;

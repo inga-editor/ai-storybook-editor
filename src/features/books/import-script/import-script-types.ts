@@ -33,6 +33,11 @@ export interface ImportModalMeta {
   artstyle_id: string | null;
   sketchstyle_id: string | null;
   original_language: string;
+  /** Project scope — imported books were previously created unscoped (project_id NULL)
+   *  → invisible in the project-scoped list. Now threaded from NewInternationalBookModal. */
+  project_id: string | null;
+  /** International (master) edition flag — the project-scope import path always sets `true`. */
+  is_international: boolean;
 }
 
 /** Result contract returned by `importScript` to the modal caller. */

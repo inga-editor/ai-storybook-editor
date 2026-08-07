@@ -179,6 +179,8 @@ export const MODAL_META: ImportModalMeta = {
   artstyle_id: null,
   sketchstyle_id: null,
   original_language: 'vi_VN',
+  project_id: 'proj-1',
+  is_international: true,
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

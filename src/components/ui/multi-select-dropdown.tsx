@@ -1,11 +1,16 @@
 // multi-select-dropdown.tsx - Multi-select dropdown with tag display and checkbox list.
-// Lists all options without search. Used for theme/genre selection in config panels.
+// Lists all options; with `searchable` a search box filters the list by label.
+// Used for theme/genre selection in config panels + the NewLocalizationModal
+// Country/Languages fields (design 09 §3.1 calls it `MultiSelectCombobox` — we extend
+// this existing component with `searchable`/`searchPlaceholder` instead of adding a new
+// file, per the DRY reuse rule; the name divergence is intentional).
 // Supports optional is_primary: ★ badge, primary-first sort, click tag to set primary.
 
 import * as React from 'react';
-import { ChevronDown, X, Check, Star } from 'lucide-react';
+import { ChevronDown, X, Check, Star, Search } from 'lucide-react';
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { cn } from '@/utils/utils';
 import { createLogger } from '@/utils/logger';
 
@@ -27,6 +32,11 @@ export interface MultiSelectDropdownProps {
   primaryValue?: string;
   /** Called when user clicks a non-primary tag body to set it as primary */
   onPrimaryChange?: (value: string) => void;
+  /** ⚡ Show a search box in the panel that filters options by label (default off — no
+   *  behavior change for existing callers). */
+  searchable?: boolean;
+  /** ⚡ Placeholder for the search box (only when `searchable`). */
+  searchPlaceholder?: string;
 }
 
 export function MultiSelectDropdown({
@@ -38,8 +48,28 @@ export function MultiSelectDropdown({
   disabled = false,
   primaryValue,
   onPrimaryChange,
+  searchable = false,
+  searchPlaceholder = 'Search...',
 }: MultiSelectDropdownProps) {
   const [open, setOpen] = React.useState(false);
+  const [query, setQuery] = React.useState('');
+
+  // Reset the query when the panel closes (event handler, not effect — React 19 safe).
+  const handleOpenChange = React.useCallback(
+    (next: boolean) => {
+      if (disabled) return;
+      if (!next) setQuery('');
+      setOpen(next);
+    },
+    [disabled],
+  );
+
+  const visibleOptions = React.useMemo(() => {
+    if (!searchable) return options;
+    const q = query.trim().toLowerCase();
+    if (!q) return options;
+    return options.filter((o) => o.label.toLowerCase().includes(q));
+  }, [options, searchable, query]);
 
   const selectedLabels = React.useMemo(() => {
     const mapped = selectedValues
@@ -91,7 +121,7 @@ export function MultiSelectDropdown({
   );
 
   return (
-    <Popover open={open} onOpenChange={disabled ? undefined : setOpen}>
+    <Popover open={open} onOpenChange={handleOpenChange}>
       <PopoverTrigger asChild>
         <Button
           variant="outline"
@@ -162,11 +192,25 @@ export function MultiSelectDropdown({
         sideOffset={4}
         className="w-[--radix-popover-trigger-width] p-0"
       >
-        <div className="max-h-[220px] overflow-y-auto py-1">
+        {searchable && (
+          <div className="relative border-b p-2">
+            <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder={searchPlaceholder}
+              className="h-8 pl-8"
+              aria-label={searchPlaceholder}
+            />
+          </div>
+        )}
+        <div className={cn('overflow-y-auto py-1', searchable ? 'max-h-[280px]' : 'max-h-[220px]')}>
           {options.length === 0 ? (
             <p className="py-6 text-center text-sm text-muted-foreground">No options</p>
+          ) : visibleOptions.length === 0 ? (
+            <p className="py-6 text-center text-sm text-muted-foreground">No results</p>
           ) : (
-            options.map((option) => {
+            visibleOptions.map((option) => {
               const isSelected = selectedValues.includes(option.value);
               const isPrimary = option.value === primaryValue;
               return (

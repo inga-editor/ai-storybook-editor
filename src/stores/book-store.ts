@@ -29,6 +29,12 @@ import { createLogger } from "@/utils/logger";
 
 const log = createLogger("Store", "BookStore");
 
+/** Sentinel `error` value set by createBook when a strict international insert hits the
+ *  partial-unique-index collision (Postgres 23505) and is NOT allowed to fall back to a
+ *  non-international edition. NewInternationalBookModal reads it via getState() to render
+ *  the "already has an international book" inline message. */
+export const INTERNATIONAL_CONFLICT_ERROR = "INTERNATIONAL_CONFLICT";
+
 export interface CreateBookParams {
   title: string;
   format_id: string;
@@ -42,6 +48,11 @@ export interface CreateBookParams {
   // limitation bucket as imports, invisible in the project-scoped /books list.
   project_id?: string | null;
   is_international?: boolean; // first book in a project = the international edition
+  /** STRICT international create (NewInternationalBookModal). When true, a 23505
+   *  collision does NOT silently retry as a non-international edition — it sets
+   *  error = INTERNATIONAL_CONFLICT_ERROR and returns null. Unset/false keeps the
+   *  legacy auto-fallback behavior (backward-compatible for all other callers). */
+  strictInternational?: boolean;
 }
 
 interface BookStore {
@@ -140,7 +151,7 @@ export const useBookStore = create<BookStore>()(
         },
 
         createBook: async (params) => {
-          log.info("createBook", "start", { title: params.title });
+          log.info("createBook", "start", { titleLength: params.title?.length ?? 0 });
           set({ isLoading: true, error: null });
 
           const {
@@ -169,6 +180,12 @@ export const useBookStore = create<BookStore>()(
             original_language: params.original_language,
             project_id: params.project_id ?? null,
             is_international: params.is_international ?? false,
+            // Seed the original language as fully-translated (status 2) so a new book is
+            // not born with an empty support_languages map. Applies to ALL callers
+            // (parity with the backfill migration for legacy rows).
+            support_languages: {
+              [params.original_language]: { translation_status: 2 },
+            },
           };
 
           const insertBook = (isInternational: boolean) =>
@@ -193,6 +210,18 @@ export const useBookStore = create<BookStore>()(
             basePayload.is_international &&
             basePayload.project_id
           ) {
+            if (params.strictInternational) {
+              // STRICT: the caller (NewInternationalBookModal) requires an
+              // international edition — do NOT downgrade to non-international. Surface
+              // a machine-detectable error so the modal can show its inline message.
+              log.warn(
+                "createBook",
+                "international collision (strict), no fallback",
+                { projectId: basePayload.project_id }
+              );
+              set({ isLoading: false, error: INTERNATIONAL_CONFLICT_ERROR });
+              return null;
+            }
             log.warn("createBook", "international collision, retrying non-intl", {
               projectId: basePayload.project_id,
             });
@@ -212,20 +241,55 @@ export const useBookStore = create<BookStore>()(
             now.getHours()
           ).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}`;
 
-          const { error: snapshotError } = await supabase
+          const { data: snapshotData, error: snapshotError } = await supabase
             .from("snapshots")
             .insert({
               book_id: bookData.id,
               version,
               save_type: 1,
-            });
+            })
+            .select("id")
+            .single();
 
-          if (snapshotError) {
+          if (snapshotError || !snapshotData) {
+            // Parity with createImportedBook / cloneBookLocalization: a book without
+            // any snapshot is an orphan state no other path allows — roll back.
+            log.error("createBook", "snapshot insert failed, rolling back book", {
+              bookId: bookData.id,
+              error: snapshotError,
+            });
+            const { error: rollbackError } = await supabase
+              .from("books")
+              .delete()
+              .eq("id", bookData.id);
+            if (rollbackError) {
+              log.warn("createBook", "rollback delete failed (orphan book)", {
+                bookId: bookData.id,
+                error: rollbackError,
+              });
+            }
+            set({ isLoading: false, error: "Không thể tạo truyện mới" });
+            return null;
+          }
+
+          // Set current_version — accept eventual consistency on failure
+          // (mirrors saveSnapshot / createImportedBook / cloneBookLocalization).
+          const { error: versionError } = await supabase
+            .from("books")
+            .update({ current_version: snapshotData.id })
+            .eq("id", bookData.id);
+          if (versionError) {
             log.warn(
               "createBook",
-              "snapshot insert failed, book still created",
-              { bookId: bookData.id, error: snapshotError }
+              "failed to set current_version (eventual-consistent)",
+              { bookId: bookData.id, snapshotId: snapshotData.id, error: versionError }
             );
+          }
+
+          // bookData was selected at insert time, before current_version was written —
+          // keep the in-memory copy consistent with the DB row (skip if update failed).
+          if (!versionError) {
+            bookData.current_version = snapshotData.id;
           }
 
           log.info("createBook", "done", { bookId: bookData.id });

@@ -50,6 +50,12 @@ export async function createImportedBook(
       step: BOOK_STEP_SKETCH, // sketch phase
       type: 1,
       original_language: meta.original_language,
+      project_id: meta.project_id ?? null,
+      is_international: meta.is_international,
+      // Seed the original language as fully-translated (status 2) so a freshly
+      // imported book is not born with an empty support_languages map — parity with
+      // book-store.createBook + the backfill migration for legacy rows.
+      support_languages: { [meta.original_language]: { translation_status: 2 } },
     })
     .select('*')
     .single();

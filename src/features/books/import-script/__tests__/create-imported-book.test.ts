@@ -85,8 +85,17 @@ describe('createImportedBook', () => {
     expect(id).toBe('book-1');
     expect(mock.calls).toMatchObject({ booksInsert: 1, snapshotsInsert: 1, booksUpdate: 1, booksDelete: 0 });
 
-    // book → sketch phase (step 1), not illustration (was 2).
-    expect(mock.payloads.books).toMatchObject({ step: 1, type: 1, original_language: 'vi_VN' });
+    // book → sketch phase (step 1), not illustration (was 2). Project scope + international
+    // flag threaded from the modal; support_languages seeds the original language as
+    // fully-translated (status 2) instead of being born empty.
+    expect(mock.payloads.books).toMatchObject({
+      step: 1,
+      type: 1,
+      original_language: 'vi_VN',
+      project_id: 'proj-1',
+      is_international: true,
+      support_languages: { vi_VN: { translation_status: 2 } },
+    });
 
     // snapshot → sketch column populated; illustration/docs/dummies emptied for column parity.
     const snap = mock.payloads.snapshots!;
