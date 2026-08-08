@@ -1,5 +1,11 @@
 @import "tailwindcss";
 
+/* Explicit source root: the player sub-app build (vite.config.player.ts) sets Vite
+   `root` to src/apps/player, which narrows Tailwind v4 auto source detection to that
+   subtree — utilities used only in shared src/** components would be dropped from the
+   player bundle. Pinning the source here keeps both builds scanning the full src/. */
+@source "./";
+
 @layer base {
   :root {
     --background: 0 0% 100%;

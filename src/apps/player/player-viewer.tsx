@@ -162,7 +162,7 @@ export function PlayerViewer({ payload, options, onEvent }: PlayerViewerProps) {
   }
 
   return (
-    <div className="h-full min-h-screen">
+    <div className="h-dvh">
       <PlayableSpreadView
         spreads={spreads}
         sections={sections}
