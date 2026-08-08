@@ -3,7 +3,12 @@
 interface ImportMetaEnv {
   readonly VITE_SUPABASE_URL: string;
   readonly VITE_SUPABASE_ANON_KEY: string;
+  readonly VITE_SUPABASE_API_ANON_KEY: string;
   readonly VITE_IMAGE_API_BASE_URL: string;
+  readonly VITE_IMAGE_API_KEY: string;
+  readonly VITE_VIDEO_WORKER_URL: string;
+  /** Comma-separated allowlist of parent origins for Player embed (inbound + outbound postMessage). */
+  readonly VITE_PLAYER_ALLOWED_PARENT_ORIGINS: string;
 }
 
 interface ImportMeta {

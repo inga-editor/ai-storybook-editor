@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
-import { devtools, persist, createJSONStorage } from 'zustand/middleware';
+import { devtools, persist } from 'zustand/middleware';
+import { createSafePersistStorage } from './safe-persist-storage';
 import type { Language, PipelineStep } from '@/types/editor';
 import type { CanvasSize, BleedCanvasSize } from '@/types/canvas-types';
 import { DEFAULT_LANGUAGE } from '@/constants/editor-constants';
@@ -126,7 +127,9 @@ export const useEditorSettingsStore = create<EditorSettingsStore>()(
       {
         name: 'editor-settings',
         version: 2,
-        storage: createJSONStorage(() => localStorage),
+        // Safe storage: falls back to in-memory when localStorage is blocked
+        // (Safari ITP in the embedded Player iframe). Same JSON shape/keys.
+        storage: createSafePersistStorage(),
         partialize: (s) => ({
           languageByBook: s.languageByBook,
           stepByBook: s.stepByBook,

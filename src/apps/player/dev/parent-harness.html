@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Player Embed — Dev Parent Harness</title>
+    <!--
+      parent-harness.html — LOCAL DEV / DEMO ONLY. Not a build entry.
+
+      This static page simulates the EMBEDDING PARENT (the consumer sales app) for the
+      Player sub-app. It is NOT part of `build:player`: Vite's player config has a single
+      `index.html` entry at its root (src/apps/player), so this file under `dev/` is never
+      crawled/emitted into dist-player. Open it directly with a static server — do NOT
+      deploy it.
+
+      IMPORTANT — origin allowlist:
+        The player validates inbound messages against VITE_PLAYER_ALLOWED_PARENT_ORIGINS
+        (default: http://localhost:5173,5174,4173). Serve THIS page from one of those
+        origins or the player will silently drop `player:init`. Example:
+          # terminal 1 — player dev server (the iframe target)
+          npm run dev:player            # → http://localhost:5174
+          # terminal 2 — serve this harness from an allowlisted origin
+          npx vite preview --port 4173  # then open http://localhost:4173/src/apps/player/dev/parent-harness.html
+        (or any static server bound to 5173/4173).
+
+      SECURITY: never paste a real production token here. The token field starts EMPTY.
+      Mint a short-lived dev token via POST /api/player/mint-token (Supabase user JWT) and
+      paste it only for a local run.
+
+      Handshake flow this harness exercises:
+        1. iframe → parent : player:ready-for-init   (retried every 500ms until answered)
+        2. parent → iframe : player:init { token, options }
+        3. iframe → parent : player:ready / player:spread-change / player:complete /
+                             player:error / player:token-expired
+    -->
+    <style>
+      :root { color-scheme: light dark; }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font: 14px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+        background: #0f172a;
+        color: #e2e8f0;
+        display: grid;
+        grid-template-columns: 380px 1fr;
+        height: 100vh;
+      }
+      aside {
+        padding: 16px;
+        border-right: 1px solid #1e293b;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        overflow: auto;
+      }
+      h1 { font-size: 15px; margin: 0 0 4px; }
+      p.hint { margin: 0; color: #94a3b8; font-size: 12px; }
+      label { display: block; font-size: 12px; color: #94a3b8; margin-bottom: 4px; }
+      input, textarea {
+        width: 100%;
+        background: #1e293b;
+        border: 1px solid #334155;
+        color: #e2e8f0;
+        border-radius: 6px;
+        padding: 8px;
+        font: inherit;
+      }
+      textarea { resize: vertical; min-height: 60px; font-family: ui-monospace, monospace; }
+      .row { display: flex; gap: 8px; }
+      button {
+        background: #6366f1;
+        color: #fff;
+        border: 0;
+        border-radius: 6px;
+        padding: 8px 12px;
+        font: inherit;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      button.secondary { background: #334155; }
+      button:disabled { opacity: 0.5; cursor: not-allowed; }
+      .status { font-size: 12px; padding: 6px 8px; border-radius: 6px; background: #1e293b; }
+      .log {
+        flex: 1;
+        min-height: 120px;
+        background: #020617;
+        border: 1px solid #1e293b;
+        border-radius: 6px;
+        padding: 8px;
+        overflow: auto;
+        font-family: ui-monospace, monospace;
+        font-size: 12px;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      .log .in { color: #34d399; }
+      .log .out { color: #60a5fa; }
+      .log .warn { color: #fbbf24; }
+      .log .ts { color: #64748b; }
+      main { position: relative; }
+      iframe { width: 100%; height: 100%; border: 0; background: #000; }
+    </style>
+  </head>
+  <body>
+    <aside>
+      <div>
+        <h1>Player Embed — Dev Parent Harness</h1>
+        <p class="hint">Local demo of the parent → player postMessage bridge. Do not deploy.</p>
+      </div>
+
+      <div>
+        <label for="playerUrl">Player iframe URL</label>
+        <input id="playerUrl" type="text" value="http://localhost:5174/" />
+      </div>
+
+      <div>
+        <label for="token">Player token (paste a dev token — starts empty)</label>
+        <textarea id="token" placeholder="Paste a short-lived dev token from POST /api/player/mint-token"></textarea>
+      </div>
+
+      <div>
+        <label for="startSpreadId">options.startSpreadId (optional)</label>
+        <input id="startSpreadId" type="text" placeholder="(leave blank)" />
+      </div>
+
+      <div class="row">
+        <button id="loadBtn">Load / reload iframe</button>
+        <button id="refreshBtn" class="secondary" title="Send player:token-refresh with the current token">Send token-refresh</button>
+      </div>
+
+      <div class="status" id="status">Handshake: idle</div>
+      <div class="log" id="log"></div>
+    </aside>
+
+    <main>
+      <iframe id="player" title="Player"></iframe>
+    </main>
+
+    <script>
+      // No modules, no external deps — a plain inline script so it runs from any static host.
+      var logEl = document.getElementById('log');
+      var statusEl = document.getElementById('status');
+      var iframe = document.getElementById('player');
+      var tokenEl = document.getElementById('token');
+      var urlEl = document.getElementById('playerUrl');
+      var startEl = document.getElementById('startSpreadId');
+
+      function playerOrigin() {
+        try { return new URL(urlEl.value).origin; } catch (_) { return null; }
+      }
+
+      function log(kind, label, data) {
+        var ts = new Date().toISOString().slice(11, 23);
+        var line = document.createElement('div');
+        line.className = kind;
+        var payload = data === undefined ? '' : ' ' + JSON.stringify(data);
+        line.innerHTML =
+          '<span class="ts">' + ts + '</span> ' + label + payload;
+        logEl.appendChild(line);
+        logEl.scrollTop = logEl.scrollHeight;
+      }
+
+      // Post a message to the player iframe, always with a concrete targetOrigin (never '*').
+      function postToPlayer(message) {
+        var origin = playerOrigin();
+        if (!origin || !iframe.contentWindow) {
+          log('warn', 'cannot post — no iframe/origin');
+          return;
+        }
+        iframe.contentWindow.postMessage(message, origin);
+        log('out', '→ ' + message.type, { targetOrigin: origin });
+      }
+
+      function sendInit() {
+        var token = tokenEl.value.trim();
+        if (!token) {
+          log('warn', 'no token pasted — player:init NOT sent (paste a dev token first)');
+          statusEl.textContent = 'Handshake: ready-for-init received, but token field is empty';
+          return;
+        }
+        var options = {};
+        var start = startEl.value.trim();
+        if (start) options.startSpreadId = start;
+        postToPlayer({ v: 1, type: 'player:init', token: token, options: options });
+        statusEl.textContent = 'Handshake: init sent';
+      }
+
+      // Inbound: every outbound player event lands here. Only accept the player origin.
+      window.addEventListener('message', function (e) {
+        if (e.origin !== playerOrigin()) return; // ignore anything not from the player
+        var msg = e.data;
+        if (!msg || typeof msg !== 'object' || msg.v !== 1 || typeof msg.type !== 'string') return;
+
+        log('in', '← ' + msg.type, msg.type === 'player:error' ? { code: msg.code }
+          : msg.type === 'player:spread-change' ? { index: msg.index, total: msg.total }
+          : undefined);
+
+        switch (msg.type) {
+          case 'player:ready-for-init':
+            statusEl.textContent = 'Handshake: ready-for-init received';
+            sendInit(); // answer the handshake
+            break;
+          case 'player:ready':
+            statusEl.textContent = 'Player ready';
+            break;
+          case 'player:token-expired':
+            statusEl.textContent = 'Token expired — paste a fresh token and click "Send token-refresh"';
+            break;
+          case 'player:complete':
+            statusEl.textContent = 'Book complete';
+            break;
+          default:
+            break;
+        }
+      });
+
+      document.getElementById('loadBtn').addEventListener('click', function () {
+        logEl.textContent = '';
+        statusEl.textContent = 'Handshake: waiting for player:ready-for-init…';
+        // Re-point the iframe; the player will start pinging ready-for-init on load.
+        iframe.src = urlEl.value;
+        log('out', 'iframe loaded', { src: urlEl.value });
+      });
+
+      document.getElementById('refreshBtn').addEventListener('click', function () {
+        var token = tokenEl.value.trim();
+        if (!token) { log('warn', 'no token — token-refresh not sent'); return; }
+        postToPlayer({ v: 1, type: 'player:token-refresh', token: token });
+      });
+    </script>
+  </body>
+</html>

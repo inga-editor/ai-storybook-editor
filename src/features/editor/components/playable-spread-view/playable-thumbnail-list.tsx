@@ -3,15 +3,15 @@
 
 import React, { useRef, useEffect, useMemo } from "react";
 import { cn } from "@/utils/utils";
-import {
-  EditableTextbox,
-  EditableImage,
-  EditableShape,
-  EditableVideo,
-  EditableAudio,
-  EditableAutoPic,
-  EditableAutoAudio,
-} from "../shared-components";
+// Deep imports (not the shared-components barrel) so the player chain does not
+// pull the editor's authoring modals + their stores into the bundle (phase 02).
+import { EditableTextbox } from "../shared-components/editable-textbox";
+import { EditableImage } from "../shared-components/editable-image";
+import { EditableShape } from "../shared-components/editable-shape";
+import { EditableVideo } from "../shared-components/editable-video";
+import { EditableAudio } from "../shared-components/editable-audio";
+import { EditableAutoPic } from "../shared-components/editable-auto-pic";
+import { EditableAutoAudio } from "../shared-components/editable-auto-audio";
 import { getTextboxContentForLanguage } from "../../utils/textbox-helpers";
 import { useNarrationLanguage, usePlayEdition } from "@/stores/animation-playback-store";
 import { resolveAutoPicDisplaySource } from "./resolve-auto-pic-display-source";

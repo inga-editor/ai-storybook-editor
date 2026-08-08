@@ -10,6 +10,7 @@ import {
   findOnClickStepForTarget,
 } from '@/features/editor/components/playable-spread-view/player-utils';
 import { createLogger } from '@/utils/logger';
+import { createSafePersistStorage } from './safe-persist-storage';
 
 const log = createLogger('Store', 'AnimationPlaybackStore');
 
@@ -726,6 +727,9 @@ export const usePlaybackStore = create<PlaybackState & PlaybackActions>()(
         };
       }, {
         name: 'playback-preferences',
+        // Safe storage: falls back to in-memory when localStorage is blocked
+        // (Safari ITP in the embedded Player iframe). Same JSON shape/keys.
+        storage: createSafePersistStorage(),
         partialize: (state) => ({
           volume: state.volume,
           isMuted: state.isMuted,

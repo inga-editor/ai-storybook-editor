@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:player": "vite --config vite.config.player.ts --port 5174",
     "build": "tsc -b && vite build",
+    "build:player": "tsc -b && vite build --config vite.config.player.ts",
     "lint": "eslint .",
     "preview": "vite preview",
     "test": "vitest run",

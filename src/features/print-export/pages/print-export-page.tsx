@@ -21,50 +21,16 @@ import {
 import { useEditorSettingsActions } from "@/stores/editor-settings-store";
 import { useBookStore } from "@/stores/book-store";
 import { createLogger } from "@/utils/logger";
-import type { Book } from "@/types/editor";
+import { mapBookPreviewToBook } from "@/features/player-core/hydration/map-book-preview-to-book";
 import type { IllustrationData } from "@/types/illustration-types";
-import type { BookPreviewData } from "@/types/share-preview-types";
 
 const log = createLogger("PrintExport", "PrintExportPage");
 
 type PrintExportStatus = "loading" | "ready" | "error";
 
-// Build the editor Book object the canvas internals may read (typography,
-// template_layout, dimension). Audio-related settings are nulled — print is a
-// silent static raster.
-function buildHydratedBook(book: BookPreviewData): Book {
-  return {
-    id: book.id,
-    title: book.title,
-    description: null,
-    owner_id: "",
-    step: 0,
-    type: 1,
-    original_language: book.original_language,
-    current_version: null,
-    current_content: null,
-    cover: book.cover,
-    book_type: book.book_type,
-    dimension: book.dimension,
-    target_audience: null,
-    format_id: null,
-    era_id: null,
-    location_id: null,
-    artstyle_id: null,
-    sketchstyle_id: null,
-    typography: book.typography as unknown as Book["typography"],
-    narrator: null,
-    shape: book.shape as unknown as Book["shape"],
-    branch: book.branch as unknown as Book["branch"],
-    music: null,
-    sound: null,
-    effects: book.effects as unknown as Book["effects"],
-    remix: null,
-    template_layout: book.template_layout as unknown as Book["template_layout"],
-    created_at: "",
-    updated_at: "",
-  };
-}
+// Print builds the editor Book via the shared mapper with `includeAudio:false`
+// — print is a silent static raster, so narrator/music/sound are nulled. Reusing
+// the shared mapper keeps this mapping in sync with the player/share consumers.
 
 export function PrintExportPage() {
   const { id } = useParams();
@@ -126,7 +92,7 @@ export function PrintExportPage() {
     const { book, renderConfig } = data;
     // ADR-023: sets canvasSize = full DPS + bleed (DIMENSION_CANVAS_SIZE = page×2).
     hydrateBleedCanvas(book.dimension ?? null, renderConfig.bleed_mm);
-    useBookStore.getState().setCurrentBook(buildHydratedBook(book));
+    useBookStore.getState().setCurrentBook(mapBookPreviewToBook(book, { includeAudio: false }));
     log.info("hydrate", "canvas + book hydrated", {
       bookId: book.id,
       dimension: book.dimension,
