@@ -9,6 +9,8 @@ interface ImportMetaEnv {
   readonly VITE_VIDEO_WORKER_URL: string;
   /** Comma-separated allowlist of parent origins for Player embed (inbound + outbound postMessage). */
   readonly VITE_PLAYER_ALLOWED_PARENT_ORIGINS: string;
+  /** Deployed Player sub-app base URL — iframe src for the editor's embed preview modal. */
+  readonly VITE_PLAYER_BASE_URL: string;
 }
 
 interface ImportMeta {

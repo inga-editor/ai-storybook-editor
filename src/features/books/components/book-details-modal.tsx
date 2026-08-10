@@ -11,7 +11,7 @@
 // cover <img alt={title}>.
 
 import * as React from 'react';
-import { ArrowRight, BookOpen, Clock } from 'lucide-react';
+import { ArrowRight, BookOpen, Clock, Play } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -36,6 +36,7 @@ import { deriveBookStatus } from '@/features/books/utils/book-content-status';
 import { countryLabel, languageLabel } from '@/features/books/utils/book-labels';
 import { StepBadge } from './step-badge';
 import { EditionBadge, StatusBadge } from './book-badges';
+import { PlayerEmbedPreviewModal } from './player-embed-preview-modal';
 
 const log = createLogger('Books', 'BookDetailsModal');
 
@@ -69,6 +70,9 @@ export function BookDetailsModal({ book, onClose, onEdit }: BookDetailsModalProp
   const { fetchBook } = useBookActions();
 
   const [full, setFull] = React.useState<Book | null>(null);
+  // Preview opens a SECOND dialog layered over this one; this modal stays
+  // mounted behind it, so closing the preview returns here.
+  const [showPreview, setShowPreview] = React.useState(false);
   const [formatNames, setFormatNames] = React.useState<Map<string, Record<string, string>>>(new Map());
   const [artStyleNames, setArtStyleNames] = React.useState<Map<string, string>>(new Map());
 
@@ -157,6 +161,7 @@ export function BookDetailsModal({ book, onClose, onEdit }: BookDetailsModalProp
   const updatedLabel = formatRelativeTime(book.updated_at);
 
   return (
+    <>
     <Dialog open onOpenChange={handleOpenChange}>
       <DialogContent className="sm:max-w-[640px]">
         <DialogHeader>
@@ -226,6 +231,16 @@ export function BookDetailsModal({ book, onClose, onEdit }: BookDetailsModalProp
           <Button variant="outline" onClick={onClose}>
             Close
           </Button>
+          <Button
+            variant="outline"
+            onClick={() => {
+              log.debug('preview', 'open embed preview', { bookId: book.id });
+              setShowPreview(true);
+            }}
+          >
+            <Play className="mr-2 h-4 w-4" />
+            Preview
+          </Button>
           <Button onClick={() => onEdit(book)}>
             Open Editor
             <ArrowRight className="ml-2 h-4 w-4" />
@@ -233,5 +248,14 @@ export function BookDetailsModal({ book, onClose, onEdit }: BookDetailsModalProp
         </DialogFooter>
       </DialogContent>
     </Dialog>
+
+    {showPreview && (
+      <PlayerEmbedPreviewModal
+        bookId={book.id}
+        bookTitle={book.title}
+        onClose={() => setShowPreview(false)}
+      />
+    )}
+    </>
   );
 }
