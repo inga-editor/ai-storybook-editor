@@ -11,6 +11,18 @@
           "value": "frame-ancestors 'self' https://ai-storybook-editor.vercel.app http://localhost:5173 http://localhost:5174 http://localhost:4173"
         }
       ]
+    },
+    {
+      "source": "/(.*)",
+      "has": [
+        { "type": "host", "value": "ai-storybook-remix-editor(-.*)?\\.vercel\\.app" }
+      ],
+      "headers": [
+        {
+          "key": "Content-Security-Policy",
+          "value": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://remix-swap-service.nft2scan.com; worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'none'; object-src 'none'"
+        }
+      ]
     }
   ]
 }
