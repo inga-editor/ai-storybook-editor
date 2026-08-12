@@ -1,27 +1,28 @@
 // crud-slice.test.ts — Unit tests for `updateRemixSpreadImage` (granular image-layer patch
-// + optimistic local merge + ONE Supabase UPDATE of the `illustration` column + rollback).
+// + optimistic local merge + ONE `updateColumns` of the `illustration` column + rollback).
 //
 // The slice factory is driven with controlled `set`/`get` over an in-memory `{ remixes,
-// refetchRemix }` state; `@/apis/supabase` is mocked so the update chain is observable.
+// refetchRemix }` state; the `RemixDataGateway` seam is installed with an in-memory fake so
+// the persisted column payload is observable and errors are injectable.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { StateCreator } from 'zustand';
 
-// ── Supabase mock (hoisted before the slice import) ─────────────────────────────
-type UpdatePayload = { illustration: { spreads: { images: { media_url?: string }[] }[] } };
-
-const { eqMock, updateMock, fromMock } = vi.hoisted(() => {
-  const eqMock = vi.fn(async () => ({ error: null as { message: string } | null }));
-  const updateMock = vi.fn((_payload: UpdatePayload) => ({ eq: eqMock }));
-  const fromMock = vi.fn((_table: string) => ({ update: updateMock }));
-  return { eqMock, updateMock, fromMock };
-});
-
-vi.mock('@/apis/supabase', () => ({ supabase: { from: fromMock } }));
-
 import { createCrudSlice } from './crud-slice';
+import {
+  createFakeRemixGateway,
+  type FakeRemixGateway,
+} from '../gateway/fake-remix-gateway';
+import {
+  RemixGatewayError,
+  setRemixDataGateway,
+} from '../gateway/remix-data-gateway';
 import type { Remix } from '@/types/remix';
 import type { RemixStore } from '../types';
+
+type UpdatePayload = { illustration: { spreads: { images: { media_url?: string }[] }[] } };
+
+let gw: FakeRemixGateway;
 
 // ── Fixtures ────────────────────────────────────────────────────────────────────
 
@@ -64,11 +65,11 @@ function setup(remixes: Remix[]) {
 
 const firstImage = (s: RemixStore) => s.remixes[0].illustration.spreads[0].images[0];
 
+const updateCalls = () => gw.calls.filter((c) => c.op === 'updateColumns');
+
 beforeEach(() => {
-  fromMock.mockClear();
-  updateMock.mockClear();
-  eqMock.mockClear();
-  eqMock.mockResolvedValue({ error: null });
+  gw = createFakeRemixGateway();
+  setRemixDataGateway(gw);
 });
 
 describe('updateRemixSpreadImage', () => {
@@ -86,15 +87,16 @@ describe('updateRemixSpreadImage', () => {
     // Sibling layer untouched.
     expect(current().remixes[0].illustration.spreads[0].images[1].media_url).toBe('c.png');
 
-    // ONE UPDATE of the illustration column with the merged blob, scoped by remix id.
-    expect(fromMock).toHaveBeenCalledWith('remixes');
-    const payload = updateMock.mock.calls[0][0];
+    // ONE updateColumns of the illustration column with the merged blob, scoped by remix id.
+    expect(updateCalls()).toHaveLength(1);
+    const call = updateCalls()[0];
+    expect(call.remixId).toBe('remix-1');
+    const payload = call.columns as UpdatePayload;
     expect(payload.illustration.spreads[0].images[0].media_url).toBe('b.png');
-    expect(eqMock).toHaveBeenCalledWith('id', 'remix-1');
   });
 
   it('rolls back via refetchRemix + throws on persist failure', async () => {
-    eqMock.mockResolvedValueOnce({ error: { message: 'boom' } });
+    gw.failNext(new RemixGatewayError('boom', { code: 'SERVER' }));
     const { slice, refetchRemix } = setup([makeRemix()]);
 
     await expect(
@@ -108,7 +110,7 @@ describe('updateRemixSpreadImage', () => {
     await expect(
       slice.updateRemixSpreadImage('nope', 'spread-1', 'img-1', { media_url: 'b.png' }),
     ).rejects.toThrow('REMIX_NOT_FOUND');
-    expect(fromMock).not.toHaveBeenCalled();
+    expect(updateCalls()).toHaveLength(0);
   });
 
   it('throws SPREAD_NOT_FOUND without touching Supabase', async () => {
@@ -116,7 +118,7 @@ describe('updateRemixSpreadImage', () => {
     await expect(
       slice.updateRemixSpreadImage('remix-1', 'nope', 'img-1', { media_url: 'b.png' }),
     ).rejects.toThrow('SPREAD_NOT_FOUND');
-    expect(fromMock).not.toHaveBeenCalled();
+    expect(updateCalls()).toHaveLength(0);
   });
 
   it('throws IMAGE_NOT_FOUND without touching Supabase', async () => {
@@ -124,6 +126,6 @@ describe('updateRemixSpreadImage', () => {
     await expect(
       slice.updateRemixSpreadImage('remix-1', 'spread-1', 'nope', { media_url: 'b.png' }),
     ).rejects.toThrow('IMAGE_NOT_FOUND');
-    expect(fromMock).not.toHaveBeenCalled();
+    expect(updateCalls()).toHaveLength(0);
   });
 });

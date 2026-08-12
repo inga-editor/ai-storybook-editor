@@ -9,7 +9,7 @@
 // sprites column client-side (`selectors.ts::useRemixVariants`), so no
 // characters/props write is needed after reconcile.
 
-import { supabase } from '@/apis/supabase';
+import { getRemixDataGateway } from '../gateway/remix-data-gateway';
 import { createLogger } from '@/utils/logger';
 import { useBookStore } from '../../book-store';
 import type { RelayoutDeps } from '../crop-sheet-layout';
@@ -91,15 +91,13 @@ export const createSpriteSlice: RemixSliceCreator<RemixSpriteSlice> = (
           r.id === remixId ? { ...r, sprites: result.sprites } : r,
         ),
       }));
-      const { error } = await supabase
-        .from('remixes')
-        .update({ sprites: result.sprites })
-        .eq('id', remixId);
-      if (error) {
+      try {
+        await getRemixDataGateway().updateColumns(remixId, { sprites: result.sprites });
+      } catch (error) {
         log.error('reconcileSpriteFinalsAfterMutation', 'persist failed — rollback', {
           remixId,
           caller: callerLabel,
-          error: error.message,
+          error: error instanceof Error ? error.message : String(error),
         });
         set((s) => ({
           remixes: s.remixes.map((r) =>
@@ -211,15 +209,12 @@ export const createSpriteSlice: RemixSliceCreator<RemixSpriteSlice> = (
         ),
       }));
 
-      const { error } = await supabase
-        .from('remixes')
-        .update({ sprites: nextSprites })
-        .eq('id', remixId);
-
-      if (error) {
+      try {
+        await getRemixDataGateway().updateColumns(remixId, { sprites: nextSprites });
+      } catch (error) {
         log.error('takeSpriteFinalBack', 'persist failed — rollback', {
           remixId,
-          error: error.message,
+          error: error instanceof Error ? error.message : String(error),
         });
         set((s) => ({
           remixes: s.remixes.map((r) => (r.id === remixId ? prevRemix : r)),

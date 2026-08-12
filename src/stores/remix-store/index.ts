@@ -9,25 +9,19 @@
 
 import { create } from 'zustand';
 import { devtools, subscribeWithSelector } from 'zustand/middleware';
-import { createLogger } from '@/utils/logger';
 import {
   CLIENT_AUDIO_CHUNK_CAP,
   type CLIENT_AUDIO_CHUNK_CAP as CapType,
 } from '@/types/remix';
-import {
-  REMIX_SWAP_TYPES,
-  useBackgroundJobsStore,
-} from '../background-jobs-store';
 import { useSnapshotStore } from '../snapshot-store';
 import { useAuthStore } from '../auth-store';
+import { ensureRemixJobConsumer } from './register-remix-job-consumer';
 import { createCrudSlice } from './slices/crud-slice';
 import { createJobsSlice } from './slices/jobs-slice';
 import { createSwapSlice } from './slices/swap-slice';
 import { createSpriteSlice } from './slices/sprite-slice';
 import { createSyncSlice } from './slices/sync-slice';
 import type { RemixStore } from './types';
-
-const log = createLogger('Store', 'RemixStore');
 
 // Re-export so callers don't need a separate import for the cap constant.
 export { CLIENT_AUDIO_CHUNK_CAP };
@@ -63,36 +57,11 @@ useSnapshotStore.subscribe(
 
 // ── BackgroundJobsStore consumer (ADR-037) ───────────────────────────────────
 // RemixStore is now a CONSUMER of the unified store: instead of owning its own
-// `bg-jobs-` channel, it registers a `subscribeJobs` listener for the 3 remix
-// swap types and derives the `jobs[]` projection from those events. The shared
-// store owns the single channel + reheal + poll + top-up. Re-register when the
-// active user changes; the shared store clears all listeners on logout teardown.
-
-let remixJobConsumerUnsub: (() => void) | null = null;
-let lastConsumerUserId: string | null = null;
-
-function ensureRemixJobConsumer(userId: string | null | undefined): void {
-  if (userId === lastConsumerUserId) return;
-  lastConsumerUserId = userId ?? null;
-
-  if (remixJobConsumerUnsub) {
-    remixJobConsumerUnsub();
-    remixJobConsumerUnsub = null;
-  }
-
-  if (!userId) {
-    log.info('ensureRemixJobConsumer', 'no user — cleared jobs');
-    useRemixStore.setState({ jobs: [] });
-    return;
-  }
-
-  log.info('ensureRemixJobConsumer', 'subscribe remix swap jobs', { userId });
-  remixJobConsumerUnsub = useBackgroundJobsStore
-    .getState()
-    .subscribeJobs({ types: [...REMIX_SWAP_TYPES] }, (event) =>
-      useRemixStore.getState().onRemixJobEvent(event),
-    );
-}
+// `bg-jobs-` channel, it registers a `subscribeJobs` listener for the remix swap
+// types and derives the `jobs[]` projection from those events. The registration
+// itself lives in `register-remix-job-consumer.ts` (opaque `identity`, ADR-052).
+// Editor drives it from auth-store user id below (behavior unchanged); the shared
+// store clears all listeners on logout teardown.
 
 // Listen for auth user changes (auth-store doesn't use subscribeWithSelector
 // so we read full state and check userId-changed manually).

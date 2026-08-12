@@ -11,10 +11,19 @@ import { create } from 'zustand';
 import { devtools, subscribeWithSelector } from 'zustand/middleware';
 import { createLogger } from '@/utils/logger';
 import { cancelJobRemote } from '@/apis/jobs-api';
-import { classifyTransition, mapRowToBackgroundJob, matches } from './ingest';
-import { openBackgroundJobsChannel, type ChannelHandle } from './channel';
-import { topUpSync } from './top-up';
+import { classifyTransition, matches } from './ingest';
 import {
+  createRealtimeJobProgressSource,
+  type RealtimeSourceHooks,
+} from './realtime-job-progress-source';
+import {
+  getJobProgressSource,
+  hasJobProgressSource,
+  setJobProgressSource,
+  type Unsubscribe,
+} from './job-progress-source';
+import {
+  ACTIVE_STATUSES,
   TERMINAL_STATUSES,
   TOP_UP_WINDOW_MS,
   type BackgroundJob,
@@ -30,7 +39,9 @@ export interface BackgroundJobsState {
   isChannelLive: boolean;
 
   // Lifecycle (app-root singleton — init at auth resolve, teardown at logout).
-  init: (userId: string) => void;
+  // `identity` is opaque (editor: supabase user id; sub-app: fixed token, e.g.
+  // 'remix-editor') so the store no longer hard-depends on a supabase user.
+  init: (identity: string) => void;
   teardown: () => void;
 
   // Ingest (1 path: realtime + poll + top-up + seed).
@@ -54,8 +65,36 @@ interface ListenerEntry {
   listener: JobListener;
 }
 const listeners = new Set<ListenerEntry>();
-let channelHandle: ChannelHandle | null = null;
-let activeUserId: string | null = null;
+
+// Active JobProgressSource watch handle (realtime channel closer OR polling stop).
+let progressHandle: Unsubscribe | null = null;
+let activeIdentity: string | null = null;
+// Signature of the current active-job id set — `watch()` is only re-issued when
+// this changes, so a progress tick that doesn't alter membership never churns.
+let lastActiveKey = '';
+// Track whether WE auto-installed the default realtime source (vs an external
+// sub-app source): only our own default gets replaced on identity change.
+let sourceIsDefault = false;
+let defaultSourceIdentity: string | null = null;
+
+/** Active id set (sorted) + its join key. */
+function computeActiveIds(jobsById: Record<string, BackgroundJob>): { ids: string[]; key: string } {
+  const ids = Object.keys(jobsById)
+    .filter((id) => ACTIVE_STATUSES.has(jobsById[id].status))
+    .sort();
+  return { ids, key: ids.join(',') };
+}
+
+/** Re-issue `watch()` against the current active set. Idempotent for realtime
+ *  (same handle, no channel reopen); re-targets ids for a polling source. Skipped
+ *  when no source is installed (e.g. unit tests ingesting without `init`). */
+function rewatch(get: () => BackgroundJobsState): void {
+  if (!hasJobProgressSource()) return;
+  const { ids, key } = computeActiveIds(get().jobsById);
+  if (progressHandle && key === lastActiveKey) return; // active-set unchanged — no re-watch
+  lastActiveKey = key;
+  progressHandle = getJobProgressSource().watch(ids, (job) => get().ingest([job]));
+}
 
 export const useBackgroundJobsStore = create<BackgroundJobsState>()(
   devtools(
@@ -63,44 +102,59 @@ export const useBackgroundJobsStore = create<BackgroundJobsState>()(
       jobsById: {},
       isChannelLive: false,
 
-      init: (userId) => {
-        if (activeUserId === userId && channelHandle) {
-          log.debug('init', 'already live for user — no-op', { userId });
+      init: (identity) => {
+        if (activeIdentity === identity && progressHandle) {
+          log.debug('init', 'already live for identity — no-op', { identity });
           return;
         }
-        if (channelHandle) {
-          log.info('init', 'user changed — tear down previous channel', { prev: activeUserId, next: userId });
-          channelHandle.teardown();
-          channelHandle = null;
+        // Identity changed (or first init): drop the previous watch handle. For
+        // the default realtime source this closes the old channel.
+        if (progressHandle) {
+          log.info('init', 'identity changed — tear down previous watch', { prev: activeIdentity, next: identity });
+          progressHandle();
+          progressHandle = null;
         }
-        activeUserId = userId;
+        lastActiveKey = '';
+
+        // Install the default realtime source UNLESS one is already installed
+        // externally (sub-app polling source, set before init). Replace our OWN
+        // default when the identity changed (new user ⇒ new channel).
+        const needDefault =
+          !hasJobProgressSource() || (sourceIsDefault && defaultSourceIdentity !== identity);
+        if (needDefault) {
+          const hooks: RealtimeSourceHooks = {
+            onDelete: (id) => get().removeJob(id),
+            onLive: () => set({ isChannelLive: true }),
+            onDown: () => set({ isChannelLive: false }),
+          };
+          setJobProgressSource(createRealtimeJobProgressSource(identity, hooks));
+          sourceIsDefault = true;
+          defaultSourceIdentity = identity;
+        }
+
+        activeIdentity = identity;
         set({ jobsById: {}, isChannelLive: false });
 
-        log.info('init', 'open channel', { userId });
-        channelHandle = openBackgroundJobsChannel({
-          userId,
-          onRow: (row) => get().ingest([mapRowToBackgroundJob(row)]),
-          onDelete: (id) => get().removeJob(id),
-          onLive: () => set({ isChannelLive: true }),
-          onDown: () => set({ isChannelLive: false }),
-          onPoll: () => {
-            void topUpSync(userId, (rows) => get().ingest(rows));
-          },
-        });
-
-        // Catch jobs that started before this mount.
-        void topUpSync(userId, (rows) => get().ingest(rows));
+        // Single open per session — `rewatch` opens the channel via the source;
+        // subsequent active-set changes reuse it (idempotent, no churn).
+        log.info('init', 'open channel', { identity });
+        rewatch(get);
       },
 
       teardown: () => {
-        log.info('teardown', 'close store', { userId: activeUserId });
-        if (channelHandle) {
-          channelHandle.teardown();
-          channelHandle = null;
+        log.info('teardown', 'close store', { identity: activeIdentity });
+        if (progressHandle) {
+          progressHandle();
+          progressHandle = null;
         }
         listeners.clear();
-        activeUserId = null;
+        activeIdentity = null;
+        lastActiveKey = '';
         set({ jobsById: {}, isChannelLive: false });
+        // Intentionally does NOT clear the installed source registry: an
+        // externally-installed sub-app source must survive logout/teardown; a
+        // re-init reuses it. Our own default source's channel is already closed
+        // above via progressHandle().
       },
 
       ingest: (rows) => {
@@ -131,6 +185,10 @@ export const useBackgroundJobsStore = create<BackgroundJobsState>()(
 
         set({ jobsById: nextById });
 
+        // Active-set may have changed (new active id / terminal transition / GC
+        // drop) — re-issue watch (idempotent for realtime; re-targets polling).
+        rewatch(get);
+
         // Fan-out AFTER state commit so a listener reading getState() sees fresh.
         for (const event of events) {
           for (const entry of listeners) {
@@ -160,6 +218,8 @@ export const useBackgroundJobsStore = create<BackgroundJobsState>()(
         const next = { ...get().jobsById };
         delete next[id];
         set({ jobsById: next });
+        // Removing an active job shrinks the active set — re-issue watch.
+        rewatch(get);
         // Fan out a 'removed' event so materialized consumers (remix jobs[])
         // drop their copy — covers DELETE events + 30s auto-dismiss.
         for (const entry of listeners) {
@@ -223,3 +283,17 @@ export {
 } from './types';
 export { mapRowToBackgroundJob } from './ingest';
 export * from './selectors';
+
+// I/O seam (ADR-052): sub-app bootstrap installs a polling source before init;
+// editor auto-installs the realtime source via `init`.
+export {
+  setJobProgressSource,
+  getJobProgressSource,
+  hasJobProgressSource,
+  type JobProgressSource,
+  type Unsubscribe,
+} from './job-progress-source';
+export {
+  createRealtimeJobProgressSource,
+  type RealtimeSourceHooks,
+} from './realtime-job-progress-source';

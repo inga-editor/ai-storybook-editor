@@ -5,18 +5,10 @@
 //
 // The engine helpers take a decoupled `RelayoutDeps` (set/get over an
 // in-memory `{ remixes }` + a faithful stage-keyed `patchRemixCropSheets`
-// replaceAll impl) and persist via `@/apis/supabase`, which is mocked to a
-// resolved no-error update.
+// replaceAll impl) and persist via the `RemixDataGateway` seam, installed here
+// with an in-memory fake (records `updateColumns` calls; errors injectable).
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-
-// Mock Supabase BEFORE importing the module under test (hoisted by vitest).
-const updateEq = vi.fn(async () => ({ error: null as { message: string } | null }));
-vi.mock('@/apis/supabase', () => ({
-  supabase: {
-    from: () => ({ update: () => ({ eq: updateEq }) }),
-  },
-}));
+import { describe, it, expect, beforeEach } from 'vitest';
 
 import {
   addStageBatch,
@@ -26,6 +18,14 @@ import {
   currentCropsOfBatch,
   type RelayoutDeps,
 } from './crop-sheet-layout';
+import {
+  createFakeRemixGateway,
+  type FakeRemixGateway,
+} from './gateway/fake-remix-gateway';
+import {
+  RemixGatewayError,
+  setRemixDataGateway,
+} from './gateway/remix-data-gateway';
 import { deriveBatchSwapTask } from './selectors';
 import type { CropSheetUpdate } from './types';
 import type { CropEntry, Remix, RemixMix, RemixJob } from '@/types/remix';
@@ -155,9 +155,12 @@ function makeDeps(remix: Remix): RelayoutDeps & { state: { remixes: Remix[] } } 
   };
 }
 
+let gw: FakeRemixGateway;
+const updateCount = () => gw.calls.filter((c) => c.op === 'updateColumns').length;
+
 beforeEach(() => {
-  updateEq.mockClear();
-  updateEq.mockResolvedValue({ error: null });
+  gw = createFakeRemixGateway();
+  setRemixDataGateway(gw);
 });
 
 // ── currentCropsOfBatch (helper) ────────────────────────────────────────────
@@ -221,7 +224,7 @@ describe('addStageBatch (rev6 subset)', () => {
       (c) => `${c.spread_id}/${c.id}`,
     );
     expect(addedKeys).toEqual(['s1/i1']);
-    expect(updateEq).toHaveBeenCalledTimes(1);
+    expect(updateCount()).toBe(1);
   });
 
   it("stage 'rmbgs': subset packs from the batch's OWN crops at native px — no illustration re-pull", async () => {
@@ -261,7 +264,7 @@ describe('addStageBatch (rev6 subset)', () => {
     ).rejects.toThrow(/non-empty/i);
     // No optimistic push, no persist.
     expect(deps.state.remixes[0].mixes).toHaveLength(1);
-    expect(updateEq).not.toHaveBeenCalled();
+    expect(updateCount()).toBe(0);
   });
 
   it('throws when selection has zero matches against the active batch (stale keys)', async () => {
@@ -273,11 +276,11 @@ describe('addStageBatch (rev6 subset)', () => {
       addStageBatch(deps, 'remix-1', 'mixes', 'b1', stale),
     ).rejects.toThrow(/stale|match/i);
     expect(deps.state.remixes[0].mixes).toHaveLength(1);
-    expect(updateEq).not.toHaveBeenCalled();
+    expect(updateCount()).toBe(0);
   });
 
   it('returns null and rolls back when persist fails', async () => {
-    updateEq.mockResolvedValueOnce({ error: { message: 'db down' } });
+    gw.failNext(new RemixGatewayError('db down', { code: 'SERVER' }));
     const remix = makeRemix([makeBatch('b1', 0, 'Batch 1')]);
     const deps = makeDeps(remix);
 
@@ -304,7 +307,7 @@ describe('addStageBatch (rev6 subset)', () => {
       new Set<string>(['s1/i1']),
     );
     expect(newId).toBeNull();
-    expect(updateEq).not.toHaveBeenCalled();
+    expect(updateCount()).toBe(0);
   });
 });
 
@@ -331,7 +334,7 @@ describe('importStageBatch', () => {
     // media_url = the PREVIOUS stage's OUTPUT piece (the swapped cut).
     expect(sheet.original_crops[0].media_url).toBe('https://cdn/swap-i1.png');
     expect(sheet.swap_results).toEqual([]);
-    expect(updateEq).toHaveBeenCalledTimes(1);
+    expect(updateCount()).toBe(1);
   });
 
   it('throws when no fresh final matches the selection (stale)', async () => {
@@ -340,7 +343,7 @@ describe('importStageBatch', () => {
     await expect(
       importStageBatch(deps, 'remix-1', 'rmbgs', new Set<string>(['s1/i1'])),
     ).rejects.toThrow(/stale/i);
-    expect(updateEq).not.toHaveBeenCalled();
+    expect(updateCount()).toBe(0);
   });
 });
 
@@ -363,7 +366,7 @@ describe('removeStageBatch', () => {
     const ok = await removeStageBatch(deps, 'remix-1', 'mixes', 'b1');
     expect(ok).toBe(false);
     expect(deps.state.remixes[0].mixes.map((m) => m.id)).toEqual(['b1']);
-    expect(updateEq).not.toHaveBeenCalled();
+    expect(updateCount()).toBe(0);
   });
 
   it("allows removing the LAST 'rmbgs' batch (allowZeroBatch stage)", async () => {
@@ -373,7 +376,7 @@ describe('removeStageBatch', () => {
     const ok = await removeStageBatch(deps, 'remix-1', 'rmbgs', 'rb1');
     expect(ok).toBe(true);
     expect(deps.state.remixes[0].rmbgs).toEqual([]);
-    expect(updateEq).toHaveBeenCalledTimes(1);
+    expect(updateCount()).toBe(1);
   });
 });
 
@@ -392,7 +395,7 @@ describe('relayoutStageBatchSheets', () => {
     expect(sheets).toHaveLength(2);
     // DESTRUCTIVE: every rebuilt sheet has swap_results cleared.
     for (const s of sheets) expect(s.swap_results).toEqual([]);
-    expect(updateEq).toHaveBeenCalledTimes(1);
+    expect(updateCount()).toBe(1);
   });
 
   it('no-ops (returns false, no persist) when the count would not change at the clamp', async () => {
@@ -402,7 +405,7 @@ describe('relayoutStageBatchSheets', () => {
 
     const ok = await relayoutStageBatchSheets(deps, 'remix-1', 'mixes', 'b1', -1);
     expect(ok).toBe(false);
-    expect(updateEq).not.toHaveBeenCalled();
+    expect(updateCount()).toBe(0);
   });
 
   it('returns false for an unknown batch', async () => {

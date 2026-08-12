@@ -5,7 +5,7 @@
 // finalize) lives here too: injectFinalCrops resolves is_final winner crops,
 // mutates the illustration blob, and persists it in ONE Supabase UPDATE.
 
-import { supabase } from '@/apis/supabase';
+import { getRemixDataGateway } from '../gateway/remix-data-gateway';
 import { createLogger } from '@/utils/logger';
 import {
   CLIENT_AUDIO_CHUNK_CAP,
@@ -165,19 +165,19 @@ export const createJobsSlice: RemixSliceCreator<RemixJobsSlice> = (
       ),
     }));
 
-    const { error } = await supabase
-      .from('remixes')
-      .update({ illustration: nextIllustration })
-      .eq('id', remixId);
-
-    if (error) {
+    try {
+      await getRemixDataGateway().updateColumns(remixId, {
+        illustration: nextIllustration,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
       log.error('injectFinalCrops', 'persist failed; rolling back', {
         remixId,
-        error: error.message,
+        error: message,
       });
       // Rollback to authoritative server row, then surface the error.
       await get().refetchRemix(remixId);
-      throw new Error(error.message);
+      throw new Error(message);
     }
 
     log.info('injectFinalCrops', 'inject complete', {

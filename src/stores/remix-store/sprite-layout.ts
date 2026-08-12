@@ -17,7 +17,7 @@
 // every cell together when the longest edge exceeds the cap, preserving the
 // TRUE relative proportions between variants.
 
-import { supabase } from '@/apis/supabase';
+import { getRemixDataGateway } from './gateway/remix-data-gateway';
 import { createLogger } from '@/utils/logger';
 import { getImageNaturalDimensionsFromUrl } from '@/utils/aspect-ratio-utils';
 import { newUuid } from '@/utils/uuid';
@@ -498,12 +498,13 @@ async function persistSprites(
     log.warn(action, 'remix gone before persist — skip', { remixId });
     return false;
   }
-  const { error } = await supabase
-    .from('remixes')
-    .update({ sprites: remixAfter.sprites })
-    .eq('id', remixId);
-  if (error) {
-    log.error(action, 'persist failed — rollback', { remixId, error: error.message });
+  try {
+    await getRemixDataGateway().updateColumns(remixId, { sprites: remixAfter.sprites });
+  } catch (error) {
+    log.error(action, 'persist failed — rollback', {
+      remixId,
+      error: error instanceof Error ? error.message : String(error),
+    });
     set((s) => ({
       remixes: s.remixes.map((r) => (r.id === remixId ? prevRemix : r)),
     }));

@@ -4,7 +4,8 @@
 // ENQUEUE action (`startStageJob`) lives in jobs-slice.ts (co-located with the
 // other background-job enqueue actions per Validation S1) — NOT here.
 
-import { supabase } from '@/apis/supabase';
+import { getRemixDataGateway } from '../gateway/remix-data-gateway';
+import type { WritableRemixColumn } from '../gateway/remix-data-gateway';
 import { createLogger } from '@/utils/logger';
 import { STAGE_JOB_CONFIG, type StageKind } from '@/types/remix';
 import { useBookStore } from '../../book-store';
@@ -68,15 +69,23 @@ export const createSwapSlice: RemixSliceCreator<RemixSwapSlice> = (
       ),
     }));
 
-    const { error } = await supabase
-      .from('remixes')
-      .update({ [stage]: result.mixes })
-      .eq('id', remixId);
-    if (error) {
+    try {
+      // `stage` is `StageKind` (⊆ WritableRemixColumn) — narrow the dynamic key
+      // so a stray column can never reach the gateway allowlist.
+      await getRemixDataGateway().updateColumns(
+        remixId,
+        { [stage]: result.mixes } as Partial<Record<WritableRemixColumn, unknown>>,
+      );
+    } catch (error) {
       log.error(
         'reconcileFinalsAfterMutation',
         'persist failed — rollback to engine-committed rows',
-        { remixId, stage, caller: callerLabel, error: error.message },
+        {
+          remixId,
+          stage,
+          caller: callerLabel,
+          error: error instanceof Error ? error.message : String(error),
+        },
       );
       set((s) => ({
         remixes: s.remixes.map((r) =>
@@ -227,16 +236,16 @@ export const createSwapSlice: RemixSliceCreator<RemixSwapSlice> = (
     }));
     log.debug('takeFinalBack', 'optimistic set applied', { remixId, stage });
 
-    const { error } = await supabase
-      .from('remixes')
-      .update({ [stage]: nextRows })
-      .eq('id', remixId);
-
-    if (error) {
+    try {
+      await getRemixDataGateway().updateColumns(
+        remixId,
+        { [stage]: nextRows } as Partial<Record<WritableRemixColumn, unknown>>,
+      );
+    } catch (error) {
       log.error('takeFinalBack', 'persist failed — rollback', {
         remixId,
         stage,
-        error: error.message,
+        error: error instanceof Error ? error.message : String(error),
       });
       set((s) => ({
         remixes: s.remixes.map((r) => (r.id === remixId ? prevRemix : r)),

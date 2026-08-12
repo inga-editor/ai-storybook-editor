@@ -6,8 +6,10 @@
   "scripts": {
     "dev": "vite",
     "dev:player": "vite --config vite.config.player.ts --port 5174",
+    "dev:remix-editor": "vite --config vite.config.remix-editor.ts --port 5175",
     "build": "tsc -b && vite build",
     "build:player": "tsc -b && vite build --config vite.config.player.ts",
+    "build:remix-editor": "tsc -b && vite build --config vite.config.remix-editor.ts",
     "lint": "eslint .",
     "preview": "vite preview",
     "test": "vitest run",

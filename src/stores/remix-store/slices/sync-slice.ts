@@ -3,7 +3,7 @@
 // (onRemixJobEvent — ADR-037 consumer), and targeted single-remix refetch on
 // active→terminal job transitions.
 
-import { supabase } from '@/apis/supabase';
+import { getRemixDataGateway } from '../gateway/remix-data-gateway';
 import { createLogger } from '@/utils/logger';
 import { newUuid } from '@/utils/uuid';
 import type { Remix, RemixMix } from '@/types/remix';
@@ -46,22 +46,29 @@ export const createSyncSlice: RemixSliceCreator<RemixSyncSlice> = (
   set,
   get,
 ) => ({
+  // First-successful-sync flag (see RemixSyncSlice.hasSyncedOnce). Starts false;
+  // an error return in `syncFromServer` leaves it false so the sub-app preselect
+  // keeps waiting for a real load.
+  hasSyncedOnce: false,
+
   syncFromServer: async (snapshotId) => {
     log.info('syncFromServer', 'start', { snapshotId });
-    const { data, error } = await supabase
-      .from('remixes')
-      .select('*')
-      .eq('snapshot_id', snapshotId)
-      .order('created_at', { ascending: true });
-
-    if (error) {
-      log.error('syncFromServer', 'failed', { snapshotId, error: error.message });
+    let rows;
+    try {
+      rows = await getRemixDataGateway().listBySnapshot(snapshotId);
+    } catch (error) {
+      log.error('syncFromServer', 'failed', {
+        snapshotId,
+        error: error instanceof Error ? error.message : String(error),
+      });
       return;
     }
 
-    const remixes = (data ?? []).map(mapRowToRemix);
+    const remixes = rows.map(mapRowToRemix);
     log.info('syncFromServer', 'done', { snapshotId, count: remixes.length });
-    set({ remixes, activeRemixId: null });
+    // `hasSyncedOnce` flips true in the SAME commit that populates `remixes`, so
+    // any reader gated on it sees a fully-loaded list (no populated-vs-flag race).
+    set({ remixes, activeRemixId: null, hasSyncedOnce: true });
 
     // R3 / migration — one-shot fixup for remixes whose mixes blob predates
     // the `is_final` flag (Validation Session 1: case "created" semantic on
@@ -83,14 +90,12 @@ export const createSyncSlice: RemixSliceCreator<RemixSyncSlice> = (
           r.id === remix.id ? { ...r, mixes: result.mixes } : r,
         ),
       }));
-      const { error } = await supabase
-        .from('remixes')
-        .update({ mixes: result.mixes })
-        .eq('id', remix.id);
-      if (error) {
+      try {
+        await getRemixDataGateway().updateColumns(remix.id, { mixes: result.mixes });
+      } catch (error) {
         log.error('syncFromServer', 'is_final migration persist failed', {
           remixId: remix.id,
-          error: error.message,
+          error: error instanceof Error ? error.message : String(error),
         });
         // Roll the migrated remix back to the loaded-from-server shape — the
         // UI will fall back to `resolveFinalCrops` defensive winner pick.
@@ -109,6 +114,7 @@ export const createSyncSlice: RemixSliceCreator<RemixSyncSlice> = (
       remixes: [],
       activeRemixId: null,
       jobs: [],
+      hasSyncedOnce: false,
     });
   },
 
@@ -163,16 +169,13 @@ export const createSyncSlice: RemixSliceCreator<RemixSyncSlice> = (
 
   refetchRemix: async (remixId) => {
     log.info('refetchRemix', 'fetch', { remixId });
-    const { data, error } = await supabase
-      .from('remixes')
-      .select('*')
-      .eq('id', remixId)
-      .maybeSingle();
-
-    if (error) {
+    let data;
+    try {
+      data = await getRemixDataGateway().getById(remixId);
+    } catch (error) {
       log.error('refetchRemix', 'failed', {
         remixId,
-        error: error.message,
+        error: error instanceof Error ? error.message : String(error),
       });
       return;
     }
@@ -254,19 +257,16 @@ export const createSyncSlice: RemixSliceCreator<RemixSyncSlice> = (
       return false;
     }
 
-    const { error } = await supabase
-      .from('remixes')
-      .update({
+    try {
+      await getRemixDataGateway().updateColumns(remixId, {
         mixes: remixAfter.mixes,
         characters: remixAfter.characters,
         props: remixAfter.props,
-      })
-      .eq('id', remixId);
-
-    if (error) {
+      });
+    } catch (error) {
       log.error('migrateLegacyRemixToBatch', 'persist failed — rollback', {
         remixId,
-        error: error.message,
+        error: error instanceof Error ? error.message : String(error),
       });
       set((s) => ({
         remixes: s.remixes.map((r) => (r.id === remixId ? prevRemix : r)),

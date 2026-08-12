@@ -3,8 +3,41 @@ import { supabase } from './supabase';
 
 const log = createLogger('API', 'ImageApiClient');
 
-const imageApiBaseUrl = import.meta.env.VITE_IMAGE_API_BASE_URL as string;
-const imageApiKey = import.meta.env.VITE_IMAGE_API_KEY as string;
+// ── Runtime-configurable seams (ADR-052 sub-app port) ────────────────────────
+// Editor keeps the exact original defaults; the remix-editor sub-app overrides
+// these at bootstrap to target the swap-service (different base URL, editor-
+// session JWT, NO X-API-Key). Kept as module `let`s so a single install at
+// startup reroutes every call without threading config through call sites.
+
+/** X-API-Key is build-time public — MUST NOT be sent to the editor-facing
+ *  swap-service (auth spec §3.2). The sub-app disables it via
+ *  `setImageApiSendApiKey(false)`. */
+const IMAGE_API_KEY = import.meta.env.VITE_IMAGE_API_KEY as string;
+
+let imageApiBaseUrl = import.meta.env.VITE_IMAGE_API_BASE_URL as string;
+let sendApiKey = true;
+/** Auth header provider. Returns the FULL `Authorization` value (e.g.
+ *  `Bearer <jwt>`) or `undefined` to send NO header. Default = Supabase session. */
+let authTokenSource: () => Promise<string | undefined> = getAuthHeader;
+
+/** Override the image-api base URL (sub-app → swap-service). */
+export function setImageApiBaseUrl(url: string): void {
+  log.info('setImageApiBaseUrl', 'base url overridden', { url });
+  imageApiBaseUrl = url;
+}
+
+/** Override the auth header provider. `source()` returning `undefined` sends NO
+ *  `Authorization` header (never an empty string). */
+export function setImageApiAuthTokenSource(source: () => Promise<string | undefined>): void {
+  log.info('setImageApiAuthTokenSource', 'auth token source overridden');
+  authTokenSource = source;
+}
+
+/** Toggle the `X-API-Key` header. `false` omits it entirely (sub-app → swap-service). */
+export function setImageApiSendApiKey(enabled: boolean): void {
+  log.info('setImageApiSendApiKey', 'x-api-key toggled', { enabled });
+  sendApiKey = enabled;
+}
 
 /**
  * Read (GET) endpoints get a bounded timeout so a slow/hung upstream degrades to
@@ -203,11 +236,15 @@ export async function callImageApiDelete<R extends { success: boolean; error?: s
   }
 }
 
-/** Build the shared image-api headers: always X-API-Key, Bearer when a session
- *  exists, Content-Type only when a JSON body is sent. */
+/** Build the shared image-api headers: X-API-Key (unless disabled via seam),
+ *  Authorization from the configured token source (omitted when it returns
+ *  undefined — never an empty string), Content-Type only for a JSON body. */
 async function buildHeaders(withJsonBody: boolean): Promise<Record<string, string>> {
-  const authHeader = await getAuthHeader();
-  const headers: Record<string, string> = { 'X-API-Key': imageApiKey };
+  const authHeader = await authTokenSource();
+  const headers: Record<string, string> = {};
+  if (sendApiKey) {
+    headers['X-API-Key'] = IMAGE_API_KEY;
+  }
   if (withJsonBody) {
     headers['Content-Type'] = 'application/json';
   }

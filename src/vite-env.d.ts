@@ -11,6 +11,11 @@ interface ImportMetaEnv {
   readonly VITE_PLAYER_ALLOWED_PARENT_ORIGINS: string;
   /** Deployed Player sub-app base URL — iframe src for the editor's embed preview modal. */
   readonly VITE_PLAYER_BASE_URL: string;
+  /** Remix Editor sub-app: base URL of the Remix Swap Service gateway (editor-session JWT +
+   *  session exchange endpoint — ADR-053, same host as every data call). */
+  readonly VITE_REMIX_SWAP_SERVICE_BASE_URL: string;
+  /** Remix Editor sub-app: deeplink back to the Admin App (needs_admin_app screen). */
+  readonly VITE_ADMIN_APP_URL: string;
 }
 
 interface ImportMeta {

@@ -16,7 +16,8 @@
 //   - 'rmbgs'/'upscales': NATIVE piece px (original_crops[].geometry.{w,h} —
 //                         the import-time estimate), packed with `absolutePx`.
 
-import { supabase } from '@/apis/supabase';
+import { getRemixDataGateway } from './gateway/remix-data-gateway';
+import type { WritableRemixColumn } from './gateway/remix-data-gateway';
 import { createLogger } from '@/utils/logger';
 import type {
   CropEntry,
@@ -236,15 +237,17 @@ async function persistStageColumn(
     log.warn(action, 'remix gone before persist — skip', { remixId, stage });
     return false;
   }
-  const { error } = await supabase
-    .from('remixes')
-    .update({ [stage]: remixAfter[stage] })
-    .eq('id', remixId);
-  if (error) {
+  try {
+    // `stage` is `StageKind` (⊆ WritableRemixColumn) — narrow the dynamic key.
+    await getRemixDataGateway().updateColumns(
+      remixId,
+      { [stage]: remixAfter[stage] } as Partial<Record<WritableRemixColumn, unknown>>,
+    );
+  } catch (error) {
     log.error(action, 'persist failed — rollback', {
       remixId,
       stage,
-      error: error.message,
+      error: error instanceof Error ? error.message : String(error),
     });
     // ROLLBACK LIMITATION (v1 single-writer assumption): restore the whole
     // remix snapshot. Concurrent realtime writes during the persist window are

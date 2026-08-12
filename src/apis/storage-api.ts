@@ -73,8 +73,29 @@ async function uploadToStorage(
   return { publicUrl: urlData.publicUrl, path: data.path };
 }
 
-export async function uploadImageToStorage(file: File, pathPrefix = 'uploads'): Promise<UploadResult> {
+// ── Image upload seam (ADR-052 sub-app port) ─────────────────────────────────
+// Only the generic image upload is swappable: the editor uploads straight to
+// Supabase Storage (default below); the remix-editor sub-app has no supabase
+// client and instead POSTs to `POST /api/editor/assets`. Video/audio/auto-pic
+// uploads stay Supabase-direct (not reachable from the sub-app's eraser flow).
+
+export type ImageUploader = (file: File, pathPrefix?: string) => Promise<UploadResult>;
+
+/** Default (editor) uploader — the original Supabase Storage path, unchanged. */
+async function defaultSupabaseImageUploader(file: File, pathPrefix = 'uploads'): Promise<UploadResult> {
   return uploadToStorage(file, IMAGE_TYPES, IMAGE_MAX_SIZE, pathPrefix, 'uploadImageToStorage');
+}
+
+let imageUploader: ImageUploader = defaultSupabaseImageUploader;
+
+/** Override the image uploader (sub-app → swap-service asset endpoint). */
+export function setImageUploader(uploader: ImageUploader): void {
+  log.info('setImageUploader', 'image uploader overridden');
+  imageUploader = uploader;
+}
+
+export async function uploadImageToStorage(file: File, pathPrefix = 'uploads'): Promise<UploadResult> {
+  return imageUploader(file, pathPrefix);
 }
 
 export async function uploadVideoToStorage(file: File, pathPrefix = 'videos'): Promise<UploadResult> {

@@ -32,6 +32,13 @@ import { useRemixStore } from './index';
 
 export const useRemixes = (): Remix[] => useRemixStore((s) => s.remixes);
 
+/** True once the store has completed its first SUCCESSFUL `syncFromServer`.
+ *  Gates the Remix Editor sub-app's one-shot `?remix=` preselect (see
+ *  `apps/remix-editor/shell/use-preselect-remix`). Boolean primitive —
+ *  ref-stable by value. */
+export const useHasSyncedOnce = (): boolean =>
+  useRemixStore((s) => s.hasSyncedOnce);
+
 export const useActiveRemixId = (): string | null =>
   useRemixStore((s) => s.activeRemixId);
 

@@ -504,6 +504,46 @@ export async function enqueueDetectDefects(
   );
   if (!result.success) {
     const failure = result as ImageApiFailure;
+    // ⚠️ 409-dedup normalization (verified vs swap-service 2026-08-11).
+    // The Remix Swap Service diverges from image-api for TWO detect jobs only:
+    // detect-mix (job 12) + detect-rmbg (job 13) return HTTP 409 JOB_ALREADY_ACTIVE
+    // (instead of 200 {deduped:true}) when a detect job is already active for the
+    // remix. sprite-detect (job 11), mix-swap, sprite-swap + audio-swap all stay
+    // 200 {deduped:true} and never reach this branch. Normalize the 409 → the SAME
+    // deduped shape the 200 path yields so `startDetectJob` treats both identically
+    // (a re-click is a quiet no-op, never a red error). Gated to mix/rmbg planes so
+    // the sprite plane is never mis-normalized. The 409 body carries
+    // error.details = { job_id, status, type, remix_id, batch_id }.
+    const isDetectDedupPlane = plane === 'mix' || plane === 'rmbg';
+    if (
+      isDetectDedupPlane &&
+      failure.httpStatus === 409 &&
+      failure.errorCode === 'JOB_ALREADY_ACTIVE'
+    ) {
+      const d = (failure.errorDetails ?? {}) as {
+        job_id?: string;
+        status?: string;
+        type?: string;
+        remix_id?: string;
+        batch_id?: string;
+      };
+      const fallbackType: DetectJobType =
+        plane === 'rmbg' ? 'remix_detect_rmbg_defects' : 'remix_detect_mix_defects';
+      log.info('enqueueDetectDefects', 'dedup (409 normalized)', {
+        plane,
+        remixId,
+        jobId: d.job_id,
+        status: d.status,
+      });
+      return {
+        job_id: d.job_id ?? '',
+        status: d.status === 'running' ? 'running' : 'queued',
+        type: (d.type as DetectJobType) ?? fallbackType,
+        remix_id: d.remix_id ?? remixId,
+        active_swap_key: d.batch_id ?? body.scopeId,
+        deduped: true,
+      } satisfies EnqueueDetectDedupedData;
+    }
     log.error('enqueueDetectDefects', 'failed', {
       plane,
       remixId,

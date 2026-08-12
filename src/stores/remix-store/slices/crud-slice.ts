@@ -2,7 +2,7 @@
 // rows via supabase-js (RLS-protected): create / update config / rename /
 // delete + active selection + illustration/crop-sheet patching.
 
-import { supabase } from '@/apis/supabase';
+import { getRemixDataGateway } from '../gateway/remix-data-gateway';
 import { createLogger } from '@/utils/logger';
 import type { Human } from '@/types/human';
 import type { BookRemix } from '@/types/editor';
@@ -115,14 +115,13 @@ export const createCrudSlice: RemixSliceCreator<RemixCrudSlice> = (
     computeCropSheets(finalPayload, dimension);
 
     log.info('createRemix', 'insert', { snapshotId, name: finalPayload.name });
-    const { data, error } = await supabase
-      .from('remixes')
-      .insert(finalPayload)
-      .select('*')
-      .single();
-
-    if (error || !data) {
-      log.error('createRemix', 'failed', { error: error?.message });
+    let data;
+    try {
+      data = await getRemixDataGateway().create(finalPayload);
+    } catch (error) {
+      log.error('createRemix', 'failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
       return null;
     }
 
@@ -167,13 +166,13 @@ export const createCrudSlice: RemixSliceCreator<RemixCrudSlice> = (
       ),
     }));
 
-    const { error } = await supabase
-      .from('remixes')
-      .update({ name: trimmed })
-      .eq('id', id);
-
-    if (error) {
-      log.error('renameRemix', 'rollback', { id, error: error.message });
+    try {
+      await getRemixDataGateway().updateColumns(id, { name: trimmed });
+    } catch (error) {
+      log.error('renameRemix', 'rollback', {
+        id,
+        error: error instanceof Error ? error.message : String(error),
+      });
       set((s) => ({
         remixes: s.remixes.map((r) => (r.id === id ? prev : r)),
       }));
@@ -211,9 +210,13 @@ export const createCrudSlice: RemixSliceCreator<RemixCrudSlice> = (
         : s.activeRemixId,
     }));
 
-    const { error } = await supabase.from('remixes').delete().eq('id', id);
-    if (error) {
-      log.error('deleteRemix', 'rollback', { id, error: error.message });
+    try {
+      await getRemixDataGateway().remove(id);
+    } catch (error) {
+      log.error('deleteRemix', 'rollback', {
+        id,
+        error: error instanceof Error ? error.message : String(error),
+      });
       // Swap state is derived from `jobs[]` (no separate task map) — the
       // active-job cancel above + realtime job rows are the only swap state,
       // so nothing extra to restore here on rollback.
@@ -240,13 +243,13 @@ export const createCrudSlice: RemixSliceCreator<RemixCrudSlice> = (
       ),
     }));
 
-    const { error } = await supabase
-      .from('remixes')
-      .update({ distribution: dist })
-      .eq('id', id);
-
-    if (error) {
-      log.error('updateRemixDistribution', 'rollback', { id, error: error.message });
+    try {
+      await getRemixDataGateway().updateColumns(id, { distribution: dist });
+    } catch (error) {
+      log.error('updateRemixDistribution', 'rollback', {
+        id,
+        error: error instanceof Error ? error.message : String(error),
+      });
       set((s) => ({
         remixes: s.remixes.map((r) => (r.id === id ? prev : r)),
       }));
@@ -327,20 +330,20 @@ export const createCrudSlice: RemixSliceCreator<RemixCrudSlice> = (
       ),
     }));
 
-    const { error } = await supabase
-      .from('remixes')
-      .update({ illustration: nextIllustration })
-      .eq('id', remixId);
-
-    if (error) {
+    try {
+      await getRemixDataGateway().updateColumns(remixId, {
+        illustration: nextIllustration,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
       log.error('updateRemixSpreadImage', 'persist failed; rolling back', {
         remixId,
         spreadId,
         imageId,
-        error: error.message,
+        error: message,
       });
       await get().refetchRemix(remixId);
-      throw new Error(error.message);
+      throw new Error(message);
     }
 
     log.info('updateRemixSpreadImage', 'patch persisted', { remixId, spreadId, imageId });

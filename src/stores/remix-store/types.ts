@@ -293,6 +293,12 @@ export interface RemixSwapSlice {
 
 /** Server sync: snapshot remix load, realtime event apply, targeted refetch. */
 export interface RemixSyncSlice {
+  /** True once `syncFromServer` has completed at least one SUCCESSFUL load
+   *  (set in the same commit that populates `remixes`). Drives the Remix Editor
+   *  sub-app's one-shot `?remix=` preselect — it must wait for the first server
+   *  sync before deciding a deeplinked remix id is missing. Reset by `clearAll`. */
+  hasSyncedOnce: boolean;
+
   syncFromServer: (snapshotId: string) => Promise<void>;
   clearAll: () => void;
 
