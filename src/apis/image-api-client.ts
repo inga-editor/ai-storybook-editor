@@ -1,5 +1,5 @@
 import { createLogger } from '@/utils/logger';
-import { supabase } from './supabase';
+import { getAuthHeader } from './supabase-auth-header';
 
 const log = createLogger('API', 'ImageApiClient');
 
@@ -73,24 +73,6 @@ export interface ImageApiFailure {
   /** Structured `detail.error.details` from the FastAPI envelope (e.g. sketch-spread
    *  `{ failures: [{code, message}] }`). Generic — consumers cast to their own shape. */
   errorDetails?: Record<string, unknown>;
-}
-
-/** Fetch Bearer header from active Supabase session; undefined when unauthenticated
- *  (share-preview / pre-login). Image/retouch endpoints ignore unknown Bearer;
- *  jobs/* endpoints require it for RLS user-id resolution. */
-async function getAuthHeader(): Promise<string | undefined> {
-  try {
-    const { data, error } = await supabase.auth.getSession();
-    if (error) {
-      log.warn('getAuthHeader', 'session lookup failed', { error: error.message });
-      return undefined;
-    }
-    const token = data.session?.access_token;
-    return token ? `Bearer ${token}` : undefined;
-  } catch (err) {
-    log.warn('getAuthHeader', 'unexpected error', { error: err instanceof Error ? err.message : String(err) });
-    return undefined;
-  }
 }
 
 /**

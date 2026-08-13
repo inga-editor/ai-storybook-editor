@@ -1,5 +1,7 @@
 import { supabase } from '@/apis/supabase';
 import { createLogger } from '@/utils/logger';
+import { STORAGE_BUCKET, isStorageServiceEnabled } from '@/constants/storage-constants';
+import { deleteObjects } from '@/apis/storage-service-client';
 import type { AudioResource, AudioTableName } from '../types';
 import { parseStoragePathFromUrl } from './audio-storage-path-parser';
 
@@ -7,7 +9,6 @@ const log = createLogger('AudioLibrary', 'DeleteAudioRowAndCleanup');
 
 export interface DeleteAudioRowAndCleanupOptions {
   tableName: AudioTableName;
-  storageBucket: string;
   pathPrefixes: string[];
   item: AudioResource;
 }
@@ -24,7 +25,6 @@ export interface DeleteAudioRowAndCleanupResult {
  */
 export async function deleteAudioRowAndCleanup({
   tableName,
-  storageBucket,
   pathPrefixes,
   item,
 }: DeleteAudioRowAndCleanupOptions): Promise<DeleteAudioRowAndCleanupResult> {
@@ -69,7 +69,13 @@ export async function deleteAudioRowAndCleanup({
     return { ok: true };
   }
 
-  const { error: rmErr } = await supabase.storage.from(storageBucket).remove([path]);
+  if (isStorageServiceEnabled()) {
+    await deleteObjects([path], STORAGE_BUCKET);
+    log.debug('deleteAudioRowAndCleanup', 'storage cleanup done', { path, backend: 'service' });
+    return { ok: true };
+  }
+
+  const { error: rmErr } = await supabase.storage.from(STORAGE_BUCKET).remove([path]);
   if (rmErr) {
     log.warn('deleteAudioRowAndCleanup', 'storage cleanup failed', {
       path,

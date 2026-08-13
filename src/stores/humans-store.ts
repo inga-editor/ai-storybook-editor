@@ -8,7 +8,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { toast } from 'sonner';
 import { supabase } from '@/apis/supabase';
 import {
-  removeHumanStorageFolder,
+  removeHumanStorageObjectsByUrls,
 } from '@/apis/human-api';
 import {
   extractHumanTraits,
@@ -249,12 +249,21 @@ export const useHumansStore = create<HumansStore>()(
       deleteHuman: async (id) => {
         log.info('deleteHuman', 'start', { id });
 
-        const cleaned = await removeHumanStorageFolder(id).catch((err) => {
-          log.warn('deleteHuman', 'storage cleanup threw', { id, error: String(err) });
-          return false;
-        });
-        if (!cleaned) {
-          log.warn('deleteHuman', 'storage cleanup partial; proceeding with DB delete', { id });
+        // Storage service has no LIST endpoint (ADR-054) — collect every storage
+        // URL from the human row and delete by URL. Best-effort, never blocks DB delete.
+        const human = get().humans.find((h) => h.id === id);
+        if (human) {
+          const urls: Array<string | null | undefined> = [];
+          for (const vp of human.visualProfiles ?? []) {
+            urls.push(...(vp.rawImages ?? []), vp.nobgImage, vp.convertedImage);
+            for (const t of vp.traits ?? []) urls.push(t.image_url);
+          }
+          for (const voice of human.voiceProfiles ?? []) urls.push(voice.recordUrl);
+          await removeHumanStorageObjectsByUrls(urls).catch((err) => {
+            log.warn('deleteHuman', 'storage cleanup threw; proceeding with DB delete', { id, error: String(err) });
+          });
+        } else {
+          log.warn('deleteHuman', 'human not in cache; skipping storage cleanup', { id });
         }
 
         const { error } = await supabase.from('humans').delete().eq('id', id);

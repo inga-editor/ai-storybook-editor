@@ -18,7 +18,7 @@ import {
 import {
   countBooksUsingStyle,
   deleteStyle,
-  removeStyleStorageFolder,
+  removeStyleImages,
 } from '@/apis/style-api';
 import type { ArtStyle } from '@/types/art-style';
 import { createLogger } from '@/utils/logger';
@@ -84,8 +84,8 @@ export function DeleteStyleDialog({
       return;
     }
 
-    // Best-effort Storage cleanup (owner-only RLS → may silently no-op; don't crash).
-    void removeStyleStorageFolder(style.id).catch(() => undefined);
+    // Best-effort Storage cleanup by the row's reference URLs (no LIST endpoint — ADR-054).
+    void removeStyleImages(style.imageReferences.map((r) => r.mediaUrl)).catch(() => undefined);
 
     log.info('handleConfirm', 'done', { id: style.id });
     onDeleted(style.id);

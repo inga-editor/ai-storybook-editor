@@ -2,6 +2,9 @@
 
 import type { StylesFilterState } from '@/types/art-style';
 
+// Re-export the single shared bucket constant so existing style imports keep working.
+export { STORAGE_BUCKET } from '@/constants/storage-constants';
+
 /** Max reference images per style — upload cap in the create/edit modal. */
 export const REF_CAP = 12;
 
@@ -25,9 +28,6 @@ export const DEFAULT_STYLES_FILTERS: StylesFilterState = {
   tags: [],
   type: 'all',
 };
-
-/** Public Supabase Storage bucket shared across the asset library. */
-export const STORAGE_BUCKET = 'storybook-assets';
 
 /** Storage path prefix for art-style reference images. */
 export const STYLE_STORAGE_PREFIX = 'art-styles';

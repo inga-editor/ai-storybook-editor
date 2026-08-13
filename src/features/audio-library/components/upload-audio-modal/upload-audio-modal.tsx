@@ -20,6 +20,8 @@ import { Switch } from '@/components/ui/switch';
 import { cn } from '@/utils/utils';
 import { supabase } from '@/apis/supabase';
 import { uploadAudioToStorage } from '@/apis/storage-api';
+import { STORAGE_BUCKET, isStorageServiceEnabled } from '@/constants/storage-constants';
+import { deleteObjects } from '@/apis/storage-service-client';
 import { useAuthStore } from '@/stores/auth-store';
 import { createLogger } from '@/utils/logger';
 import { mapAudioRow } from '../../utils/audio-mapper';
@@ -34,8 +36,6 @@ import {
 } from './upload-audio-modal-types';
 
 const log = createLogger('AudioLibrary', 'UploadAudioModal');
-
-const STORAGE_BUCKET = 'storybook-assets';
 
 export interface UploadAudioModalProps {
   tableName: AudioTableName;
@@ -217,7 +217,11 @@ export function UploadAudioModal({
           pgMessage: dbErr?.message?.slice(0, 120),
         });
         try {
-          await supabase.storage.from(STORAGE_BUCKET).remove([uploadedPath]);
+          if (isStorageServiceEnabled()) {
+            await deleteObjects([uploadedPath], STORAGE_BUCKET);
+          } else {
+            await supabase.storage.from(STORAGE_BUCKET).remove([uploadedPath]);
+          }
           log.info('handleUpload', 'orphan storage removed', { path: uploadedPath });
         } catch (cleanupErr) {
           log.warn('handleUpload', 'orphan cleanup failed', {

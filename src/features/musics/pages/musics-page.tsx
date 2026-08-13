@@ -26,8 +26,14 @@ import { createLogger } from '@/utils/logger';
 
 const log = createLogger('Musics', 'MusicsPage');
 
-const MUSICS_PATH_PREFIXES = ['musics-uploaded', 'musics'];
-const STORAGE_BUCKET = 'storybook-assets';
+// Both key roots: new storage-service `uploads/audios/…` (ADR-054) AND legacy
+// Supabase prefixes — delete cleanup must parse either while both coexist in DB.
+const MUSICS_PATH_PREFIXES = [
+  'uploads/audios/musics-uploaded',
+  'uploads/audios/musics',
+  'musics-uploaded',
+  'musics',
+];
 const MUSIC_AUDIO_MIME = ['audio/mpeg', 'audio/wav', 'audio/ogg'] as const;
 
 type MusicsActiveModal = 'upload' | 'generate' | null;
@@ -192,7 +198,6 @@ export function MusicsPage() {
       {deletingItem ? (
         <DeleteAudioDialog
           tableName="musics"
-          storageBucket={STORAGE_BUCKET}
           pathPrefixes={MUSICS_PATH_PREFIXES}
           resourceLabel="music"
           item={deletingItem}

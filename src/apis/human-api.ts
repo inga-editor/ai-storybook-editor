@@ -3,11 +3,17 @@
 
 import { supabase } from '@/apis/supabase';
 import { createLogger } from '@/utils/logger';
+import { STORAGE_BUCKET, isStorageServiceEnabled } from '@/constants/storage-constants';
+import { uploadObject, deleteObjects } from '@/apis/storage-service-client';
+import { pathFromStorageUrl, assertKeyGrammar } from '@/utils/storage-url';
 
 const log = createLogger('API', 'HumanApi');
 
-const BUCKET = 'storybook-assets';
 const HUMAN_PATH_PREFIX = (id: string) => `humans/${id}`;
+// Storage-service branch prepends an `uploads/{type}/` root so FE writes stay off
+// the S2S/BE tree; legacy Supabase branch keeps the bare `humans/...` prefix.
+const HUMAN_IMAGE_SERVICE_KEY = (id: string, name: string) => `uploads/images/humans/${id}/${name}`;
+const HUMAN_AUDIO_SERVICE_KEY = (id: string, name: string) => `uploads/audios/humans/${id}/${name}`;
 
 const IMAGE_MAX_SIZE = 5 * 1024 * 1024;
 const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
@@ -79,12 +85,26 @@ export async function uploadHumanImage(
   }
 
   const ext = extFromMime(file.type);
-  const path = `${HUMAN_PATH_PREFIX(humanId)}/${genUuid()}.${ext}`;
+  const fileName = `${genUuid()}.${ext}`;
 
-  log.info('uploadHumanImage', 'uploading', { humanId, path, size: file.size });
+  if (isStorageServiceEnabled()) {
+    const key = HUMAN_IMAGE_SERVICE_KEY(humanId, fileName);
+    assertKeyGrammar(key);
+    log.info('uploadHumanImage', 'uploading', { humanId, path: key, size: file.size, backend: 'service' });
+    const result = await uploadObject({ file, key, bucket: STORAGE_BUCKET, contentType: file.type });
+    if (!result.success) {
+      log.error('uploadHumanImage', 'failed', { humanId, path: key, backend: 'service', errorCode: result.errorCode });
+      throw new Error(result.error);
+    }
+    log.info('uploadHumanImage', 'done', { humanId, publicUrl: result.data.url, backend: 'service' });
+    return { publicUrl: result.data.url, path: result.data.key };
+  }
+
+  const path = `${HUMAN_PATH_PREFIX(humanId)}/${fileName}`;
+  log.info('uploadHumanImage', 'uploading', { humanId, path, size: file.size, backend: 'supabase' });
 
   const { data, error } = await supabase.storage
-    .from(BUCKET)
+    .from(STORAGE_BUCKET)
     .upload(path, file, { contentType: file.type, upsert: false });
 
   if (error) {
@@ -92,7 +112,7 @@ export async function uploadHumanImage(
     throw error;
   }
 
-  const { data: urlData } = supabase.storage.from(BUCKET).getPublicUrl(data.path);
+  const { data: urlData } = supabase.storage.from(STORAGE_BUCKET).getPublicUrl(data.path);
   log.info('uploadHumanImage', 'done', { humanId, publicUrl: urlData.publicUrl });
   return { publicUrl: urlData.publicUrl, path: data.path };
 }
@@ -113,12 +133,26 @@ export async function uploadHumanAudio(
   }
 
   const ext = extFromMime(effectiveMime);
-  const path = `${HUMAN_PATH_PREFIX(humanId)}/${genUuid()}.${ext}`;
+  const fileName = `${genUuid()}.${ext}`;
 
-  log.info('uploadHumanAudio', 'uploading', { humanId, path, size: blob.size, mime: effectiveMime });
+  if (isStorageServiceEnabled()) {
+    const key = HUMAN_AUDIO_SERVICE_KEY(humanId, fileName);
+    assertKeyGrammar(key);
+    log.info('uploadHumanAudio', 'uploading', { humanId, path: key, size: blob.size, mime: effectiveMime, backend: 'service' });
+    const result = await uploadObject({ file: blob, key, bucket: STORAGE_BUCKET, contentType: effectiveMime });
+    if (!result.success) {
+      log.error('uploadHumanAudio', 'failed', { humanId, path: key, backend: 'service', errorCode: result.errorCode });
+      throw new Error(result.error);
+    }
+    log.info('uploadHumanAudio', 'done', { humanId, publicUrl: result.data.url, backend: 'service' });
+    return { publicUrl: result.data.url, path: result.data.key };
+  }
+
+  const path = `${HUMAN_PATH_PREFIX(humanId)}/${fileName}`;
+  log.info('uploadHumanAudio', 'uploading', { humanId, path, size: blob.size, mime: effectiveMime, backend: 'supabase' });
 
   const { data, error } = await supabase.storage
-    .from(BUCKET)
+    .from(STORAGE_BUCKET)
     .upload(path, blob, { contentType: effectiveMime, upsert: false });
 
   if (error) {
@@ -126,54 +160,47 @@ export async function uploadHumanAudio(
     throw error;
   }
 
-  const { data: urlData } = supabase.storage.from(BUCKET).getPublicUrl(data.path);
+  const { data: urlData } = supabase.storage.from(STORAGE_BUCKET).getPublicUrl(data.path);
   log.info('uploadHumanAudio', 'done', { humanId, publicUrl: urlData.publicUrl });
   return { publicUrl: urlData.publicUrl, path: data.path };
 }
 
-/**
- * Best-effort: list + remove all objects under humans/{id}/.
- * Returns true if folder cleared (or already empty); false on partial/total failure.
- * Always swallows errors and logs — caller proceeds with DB delete.
- */
-export async function removeHumanStorageFolder(humanId: string): Promise<boolean> {
-  log.info('removeHumanStorageFolder', 'start', { humanId });
-  const prefix = HUMAN_PATH_PREFIX(humanId);
+// NOTE: `removeHumanStorageFolder` (list+remove by prefix) was removed in the
+// ADR-054 cutover — the storage service has NO list endpoint. Deletion now works
+// off the URLs stored on the human row (see `removeHumanStorageObjectsByUrls`).
+// Trade-off: orphaned objects from a prior failed compensation are no longer
+// swept here; that is an ops-side periodic sweep concern (storage is cheap).
 
-  const { data: files, error: listError } = await supabase.storage
-    .from(BUCKET)
-    .list(prefix, { limit: 1000 });
-
-  if (listError) {
-    log.warn('removeHumanStorageFolder', 'list failed', { humanId, error: listError.message });
-    return false;
-  }
-
-  if (!files || files.length === 0) {
-    log.info('removeHumanStorageFolder', 'empty folder', { humanId });
-    return true;
-  }
-
-  const paths = files.map((f) => `${prefix}/${f.name}`);
-  const { error: removeError } = await supabase.storage.from(BUCKET).remove(paths);
-
-  if (removeError) {
-    log.warn('removeHumanStorageFolder', 'remove failed', { humanId, count: paths.length, error: removeError.message });
-    return false;
-  }
-
-  log.info('removeHumanStorageFolder', 'done', { humanId, count: paths.length });
-  return true;
-}
-
-/** Bulk remove specific objects (compensation cleanup). Swallows errors. */
+/** Bulk remove specific objects by KEY (compensation cleanup). Best-effort,
+ *  swallows errors. Routes to storage service or Supabase per env presence. */
 export async function removeHumanStorageObjects(paths: string[]): Promise<void> {
   if (paths.length === 0) return;
   log.info('removeHumanStorageObjects', 'start', { count: paths.length });
-  const { error } = await supabase.storage.from(BUCKET).remove(paths);
+  if (isStorageServiceEnabled()) {
+    await deleteObjects(paths, STORAGE_BUCKET);
+    log.info('removeHumanStorageObjects', 'done', { count: paths.length, backend: 'service' });
+    return;
+  }
+  const { error } = await supabase.storage.from(STORAGE_BUCKET).remove(paths);
   if (error) {
     log.warn('removeHumanStorageObjects', 'failed', { count: paths.length, error: error.message });
     return;
   }
-  log.info('removeHumanStorageObjects', 'done', { count: paths.length });
+  log.info('removeHumanStorageObjects', 'done', { count: paths.length, backend: 'supabase' });
+}
+
+/** Remove all storage objects referenced by a human row's URLs (visual + voice
+ *  profiles). Parses each URL → key (dual-shape), skips unparseable ones. */
+export async function removeHumanStorageObjectsByUrls(urls: Array<string | null | undefined>): Promise<void> {
+  const keys: string[] = [];
+  let skipped = 0;
+  for (const url of urls) {
+    const key = pathFromStorageUrl(url);
+    if (key) keys.push(key);
+    else if (url) skipped += 1;
+  }
+  if (skipped > 0) {
+    log.warn('removeHumanStorageObjectsByUrls', 'some urls unparseable; skipped', { skipped });
+  }
+  await removeHumanStorageObjects(keys);
 }

@@ -18,7 +18,6 @@ const log = createLogger('AudioLibrary', 'DeleteAudioDialog');
 
 export interface DeleteAudioDialogProps {
   tableName: AudioTableName;
-  storageBucket: string;
   pathPrefixes: string[];
   resourceLabel: string;
   item: AudioResource;
@@ -30,7 +29,6 @@ type Step = 'confirm' | 'deleting';
 
 export function DeleteAudioDialog({
   tableName,
-  storageBucket,
   pathPrefixes,
   resourceLabel,
   item,
@@ -47,7 +45,6 @@ export function DeleteAudioDialog({
 
     const res = await deleteAudioRowAndCleanup({
       tableName,
-      storageBucket,
       pathPrefixes,
       item,
     });

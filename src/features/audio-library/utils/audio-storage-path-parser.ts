@@ -1,46 +1,26 @@
 import { createLogger } from '@/utils/logger';
+import { pathFromStorageUrl } from '@/utils/storage-url';
 
 const log = createLogger('AudioLibrary', 'StoragePathParser');
 
-// Match `/storage/v1/object/public/storybook-assets/<path>` URLs and capture the path.
-const STORAGE_PUBLIC_PATTERN =
-  /\/storage\/v1\/object\/public\/storybook-assets\/(.+)$/;
-
 /**
- * Parse the object path of a `storybook-assets` Supabase Storage public URL.
- * Returns the decoded path on match if it starts with one of the allowed
- * `prefixes`, else null. Caller skips Storage cleanup when null is returned.
+ * Parse the object key of a storage public URL (BOTH shapes — legacy Supabase and
+ * new `/files/` — via the shared `pathFromStorageUrl`), then keep it only if it
+ * starts with one of the allowed `prefixes`. Returns null when unparseable or the
+ * prefix does not match; caller skips Storage cleanup on null.
  */
 export function parseStoragePathFromUrl(
   url: string | null | undefined,
   prefixes: string[],
 ): string | null {
-  if (!url) {
-    log.debug('parseStoragePathFromUrl', 'empty url', {});
-    return null;
-  }
-  try {
-    const parsed = new URL(url);
-    const match = parsed.pathname.match(STORAGE_PUBLIC_PATTERN);
-    if (!match) {
-      log.debug('parseStoragePathFromUrl', 'pattern mismatch', {
-        pathname: parsed.pathname.slice(0, 80),
-      });
-      return null;
-    }
-    const path = decodeURIComponent(match[1]);
-    if (prefixes.length > 0 && !prefixes.some((p) => path.startsWith(p + '/') || path === p)) {
-      log.debug('parseStoragePathFromUrl', 'prefix mismatch', {
-        path: path.slice(0, 60),
-        prefixes,
-      });
-      return null;
-    }
-    return path;
-  } catch (err) {
-    log.warn('parseStoragePathFromUrl', 'invalid URL', {
-      err: err instanceof Error ? err.message : String(err),
+  const path = pathFromStorageUrl(url);
+  if (!path) return null;
+  if (prefixes.length > 0 && !prefixes.some((p) => path.startsWith(p + '/') || path === p)) {
+    log.debug('parseStoragePathFromUrl', 'prefix mismatch', {
+      path: path.slice(0, 60),
+      prefixes,
     });
     return null;
   }
+  return path;
 }

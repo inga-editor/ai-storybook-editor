@@ -4,15 +4,21 @@
 
 import { supabase } from '@/apis/supabase';
 import { extFromMime } from '@/apis/human-api';
+import { STORAGE_BUCKET, isStorageServiceEnabled } from '@/constants/storage-constants';
+import { uploadObject, deleteObjects } from '@/apis/storage-service-client';
+import { pathFromStorageUrl, assertKeyGrammar } from '@/utils/storage-url';
 import {
   MAX_STYLE_IMG_BYTES,
-  STORAGE_BUCKET,
   STYLE_STORAGE_PREFIX,
 } from '@/features/styles/constants/constants';
 import type { ArtStyleRow, StyleImageReference } from '@/types/art-style';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('API', 'StyleApi');
+
+// Storage-service branch prepends `uploads/images/` root; legacy keeps `art-styles/...`.
+const STYLE_IMAGE_SERVICE_KEY = (styleId: string, name: string) =>
+  `uploads/images/${STYLE_STORAGE_PREFIX}/${styleId}/${name}`;
 
 // Tight allowlist (parity with human-api): reject SVG/avif/etc. into the public
 // bucket — stored-XSS surface + odd extensions. Form input keeps accept="image/*";
@@ -33,15 +39,6 @@ function stripExt(filename: string): string {
   const base = filename.split(/[\\/]/).pop() ?? filename;
   const dot = base.lastIndexOf('.');
   return dot > 0 ? base.slice(0, dot) : base;
-}
-
-/** Derive the storage object path from a public URL (best-effort). */
-function pathFromPublicUrl(mediaUrl: string): string | null {
-  const marker = `/object/public/${STORAGE_BUCKET}/`;
-  const idx = mediaUrl.indexOf(marker);
-  if (idx === -1) return null;
-  const tail = mediaUrl.slice(idx + marker.length).split('?')[0];
-  return tail ? decodeURIComponent(tail) : null;
 }
 
 /**
@@ -66,9 +63,23 @@ export async function uploadStyleImage(
   }
 
   const ext = extFromMime(file.type);
-  const path = `${STYLE_PATH_PREFIX(styleId)}/${genUuid()}.${ext}`;
+  const fileName = `${genUuid()}.${ext}`;
 
-  log.info('uploadStyleImage', 'uploading', { styleId, path, size: file.size });
+  if (isStorageServiceEnabled()) {
+    const key = STYLE_IMAGE_SERVICE_KEY(styleId, fileName);
+    assertKeyGrammar(key);
+    log.info('uploadStyleImage', 'uploading', { styleId, path: key, size: file.size, backend: 'service' });
+    const result = await uploadObject({ file, key, bucket: STORAGE_BUCKET, contentType: file.type });
+    if (!result.success) {
+      log.error('uploadStyleImage', 'failed', { styleId, path: key, backend: 'service', errorCode: result.errorCode });
+      throw new Error(result.error);
+    }
+    log.info('uploadStyleImage', 'done', { styleId, path: result.data.key, backend: 'service' });
+    return { title: stripExt(file.name), mediaUrl: result.data.url };
+  }
+
+  const path = `${STYLE_PATH_PREFIX(styleId)}/${fileName}`;
+  log.info('uploadStyleImage', 'uploading', { styleId, path, size: file.size, backend: 'supabase' });
 
   const { data, error } = await supabase.storage
     .from(STORAGE_BUCKET)
@@ -86,52 +97,53 @@ export async function uploadStyleImage(
 
 /** Best-effort remove of a single reference image by its public URL. Swallows errors. */
 export async function removeStyleImage(mediaUrl: string): Promise<void> {
-  const path = pathFromPublicUrl(mediaUrl);
+  const path = pathFromStorageUrl(mediaUrl);
   if (!path) {
     log.warn('removeStyleImage', 'could not derive path from url');
     return;
   }
   log.info('removeStyleImage', 'start', { path });
+  if (isStorageServiceEnabled()) {
+    await deleteObjects([path], STORAGE_BUCKET);
+    log.info('removeStyleImage', 'done', { path, backend: 'service' });
+    return;
+  }
   const { error } = await supabase.storage.from(STORAGE_BUCKET).remove([path]);
   if (error) {
     log.warn('removeStyleImage', 'remove failed', { path, error: error.message });
     return;
   }
-  log.info('removeStyleImage', 'done', { path });
+  log.info('removeStyleImage', 'done', { path, backend: 'supabase' });
 }
 
 /**
- * Best-effort: list + remove all objects under art-styles/{styleId}/.
- * Returns true if cleared (or already empty); false on partial/total failure.
- * Always swallows errors and logs — caller proceeds with DB delete.
+ * Best-effort remove of all reference images of a style, by their public URLs.
+ * Replaces the old list+remove-by-prefix helper (storage service has no LIST).
+ * Returns true when all removals succeeded (or nothing to remove).
  */
-export async function removeStyleStorageFolder(styleId: string): Promise<boolean> {
-  log.info('removeStyleStorageFolder', 'start', { styleId });
-  const prefix = STYLE_PATH_PREFIX(styleId);
+export async function removeStyleImages(mediaUrls: Array<string | null | undefined>): Promise<boolean> {
+  const paths: string[] = [];
+  let skipped = 0;
+  for (const url of mediaUrls) {
+    const path = pathFromStorageUrl(url);
+    if (path) paths.push(path);
+    else if (url) skipped += 1;
+  }
+  if (skipped > 0) log.warn('removeStyleImages', 'some urls unparseable; skipped', { skipped });
+  if (paths.length === 0) return true;
+  log.info('removeStyleImages', 'start', { count: paths.length });
 
-  const { data: files, error: listError } = await supabase.storage
-    .from(STORAGE_BUCKET)
-    .list(prefix, { limit: 1000 });
-
-  if (listError) {
-    log.warn('removeStyleStorageFolder', 'list failed', { styleId, error: listError.message });
+  if (isStorageServiceEnabled()) {
+    const ok = await deleteObjects(paths, STORAGE_BUCKET);
+    log.info('removeStyleImages', 'done', { count: paths.length, ok, backend: 'service' });
+    return ok;
+  }
+  const { error } = await supabase.storage.from(STORAGE_BUCKET).remove(paths);
+  if (error) {
+    log.warn('removeStyleImages', 'remove failed', { count: paths.length, error: error.message });
     return false;
   }
-
-  if (!files || files.length === 0) {
-    log.info('removeStyleStorageFolder', 'empty folder', { styleId });
-    return true;
-  }
-
-  const paths = files.map((f) => `${prefix}/${f.name}`);
-  const { error: removeError } = await supabase.storage.from(STORAGE_BUCKET).remove(paths);
-
-  if (removeError) {
-    log.warn('removeStyleStorageFolder', 'remove failed', { styleId, count: paths.length, error: removeError.message });
-    return false;
-  }
-
-  log.info('removeStyleStorageFolder', 'done', { styleId, count: paths.length });
+  log.info('removeStyleImages', 'done', { count: paths.length, backend: 'supabase' });
   return true;
 }
 
