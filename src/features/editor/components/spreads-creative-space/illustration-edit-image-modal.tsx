@@ -49,8 +49,10 @@ export function IllustrationEditImageModal({
   const handleUpdate = useCallback(
     (next: Illustration[]) => {
       log.debug("handleUpdate", "persist illustrations", { spreadId, imageId, count: next.length });
-      // Local optimistic mutate (dirties raw_images — a SCENE_OWNED_KEY).
-      updateRawImage(spreadId, imageId, { illustrations: next });
+      // Local optimistic mutate (dirties raw_images — a SCENE_OWNED_KEY). Drop the hi-res
+      // pointer: resolveEffectiveImageUrl prioritises final_hires_media_url over the user's
+      // selected version, so keeping it would freeze the canvas on the pre-edit image.
+      updateRawImage(spreadId, imageId, { illustrations: next, final_hires_media_url: undefined });
       // Held-session commit-on-close (fire-and-forget; no-op when not holding the spread lock):
       // persists the edit without waiting for release.
       onCommitSave?.();

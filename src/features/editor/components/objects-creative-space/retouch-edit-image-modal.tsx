@@ -54,8 +54,10 @@ export function RetouchEditImageModal({
   const handleUpdate = useCallback(
     (next: Illustration[]) => {
       log.debug("handleUpdate", "persist illustrations", { spreadId, imageId, count: next.length });
-      // Local optimistic mutate (dirties the spread's `images` — a RETOUCH_OWNED_KEY).
-      updateRetouchImage(spreadId, imageId, { illustrations: next });
+      // Local optimistic mutate (dirties the spread's `images` — a RETOUCH_OWNED_KEY). Drop the
+      // hi-res pointer: resolveEffectiveImageUrl prioritises final_hires_media_url over the
+      // user's selected version, so keeping it would freeze the canvas on the pre-edit image.
+      updateRetouchImage(spreadId, imageId, { illustrations: next, final_hires_media_url: undefined });
       // Held-session commit-on-close (fire-and-forget; no-op when not holding the spread lock):
       // covers BOTH a commit and a version-switch, so the change is persisted without waiting for
       // release. The engine warn-logs on a failed save (see useSaveSession.commitOnModalClose).

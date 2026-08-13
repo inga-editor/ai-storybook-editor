@@ -287,6 +287,11 @@ export function RemixDisplayCanvasArea({ spreads, remixId, pageNumbering }: Prop
           handleImageUpdate(editModal.spreadId, editModal.imageId, {
             illustrations: next,
             media_url: selectedMediaUrl(next),
+            // WYSIWYG: resolveEffectiveImageUrl prioritises final_hires_media_url (set by
+            // Inject/casting) over illustrations[is_selected] — keep the stale hi-res pointer
+            // and the canvas would keep showing the pre-edit swap result. The user's explicit
+            // version choice must win, so drop it on every modal-driven update.
+            final_hires_media_url: undefined,
           })
         }
       />
