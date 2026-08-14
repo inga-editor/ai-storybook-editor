@@ -250,18 +250,15 @@ export const useHumansStore = create<HumansStore>()(
         log.info('deleteHuman', 'start', { id });
 
         // Storage service has no LIST endpoint (ADR-054) — collect every storage
-        // URL from the human row and delete by URL. Best-effort, never blocks DB delete.
+        // URL from the human row (before it leaves the cache) and delete by URL.
         const human = get().humans.find((h) => h.id === id);
+        const urls: Array<string | null | undefined> = [];
         if (human) {
-          const urls: Array<string | null | undefined> = [];
           for (const vp of human.visualProfiles ?? []) {
             urls.push(...(vp.rawImages ?? []), vp.nobgImage, vp.convertedImage);
             for (const t of vp.traits ?? []) urls.push(t.image_url);
           }
           for (const voice of human.voiceProfiles ?? []) urls.push(voice.recordUrl);
-          await removeHumanStorageObjectsByUrls(urls).catch((err) => {
-            log.warn('deleteHuman', 'storage cleanup threw; proceeding with DB delete', { id, error: String(err) });
-          });
         } else {
           log.warn('deleteHuman', 'human not in cache; skipping storage cleanup', { id });
         }
@@ -271,6 +268,13 @@ export const useHumansStore = create<HumansStore>()(
           log.error('deleteHuman', 'DB delete failed', { id, error: error.message });
           return false;
         }
+
+        // Blob cleanup ONLY after the DB delete succeeded — a failed delete must not
+        // leave a surviving row pointing at removed blobs (worst case here is an
+        // orphaned blob, never a dangling reference). Fire-and-forget, best-effort.
+        void removeHumanStorageObjectsByUrls(urls).catch((err) => {
+          log.warn('deleteHuman', 'storage cleanup threw; blobs orphaned', { id, error: String(err) });
+        });
 
         set((state) => {
           state.humans = state.humans.filter((h) => h.id !== id);
@@ -391,6 +395,7 @@ export const useHumansStore = create<HumansStore>()(
         if (prevIdx < 0) return null;
         const prev = get().humans[prevIdx];
         if (index < 0 || index >= prev.visualProfiles.length) return null;
+        const removed = prev.visualProfiles[index];
         const next = prev.visualProfiles.filter((_, i) => i !== index);
 
         set((state) => {
@@ -414,6 +419,18 @@ export const useHumansStore = create<HumansStore>()(
           });
           return null;
         }
+
+        // DB row no longer references the removed profile — safe to drop its blobs.
+        // Fire-and-forget: storage cleanup must never block or fail the remove UX.
+        const removedUrls: Array<string | null | undefined> = [
+          ...(removed.rawImages ?? []),
+          removed.nobgImage,
+          removed.convertedImage,
+        ];
+        for (const t of removed.traits ?? []) removedUrls.push(t.image_url);
+        void removeHumanStorageObjectsByUrls(removedUrls).catch((err) => {
+          log.warn('removeVisualProfile', 'storage cleanup threw; blobs orphaned', { id, error: String(err) });
+        });
 
         const mapped = mapHumanRow(data as HumanRow);
         // Drift: rebuild clientIds aligned with surviving profiles (filter prev[index] removed).
@@ -655,6 +672,7 @@ export const useHumansStore = create<HumansStore>()(
         if (prevIdx < 0) return null;
         const prev = get().humans[prevIdx];
         if (index < 0 || index >= prev.voiceProfiles.length) return null;
+        const removed = prev.voiceProfiles[index];
         const next = prev.voiceProfiles.filter((_, i) => i !== index);
 
         set((state) => {
@@ -678,6 +696,11 @@ export const useHumansStore = create<HumansStore>()(
           });
           return null;
         }
+
+        // DB row no longer references the removed profile — safe to drop its blob.
+        void removeHumanStorageObjectsByUrls([removed.recordUrl]).catch((err) => {
+          log.warn('removeVoiceProfile', 'storage cleanup threw; blob orphaned', { id, error: String(err) });
+        });
 
         const mapped = mapHumanRow(data as HumanRow);
         const survivingClientIds = prev.voiceProfiles.filter((_, i) => i !== index).map((p) => p.clientId);
