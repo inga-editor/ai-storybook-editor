@@ -1,5 +1,5 @@
 // resource-lock-api.ts — Thin client for the `resource/*` collaborator gateway
-// (FastAPI, ai-storybook-image-api). 4 POST calls: lock / heartbeat / unlock /
+// (FastAPI, ai-storybook-python-api). 4 POST calls: lock / heartbeat / unlock /
 // save. All go through `callImageApi` so they inherit the shared auth
 // (Authorization: Bearer <supabase JWT> — the gateway derives the acting user
 // from JWT.sub; body carries NO user_id) and the `{ detail: { error: { code } } }`

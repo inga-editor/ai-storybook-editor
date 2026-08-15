@@ -6,7 +6,7 @@ import { warnIfSaveResourceFailed } from '@/utils/save-resource-path';
 // ─────────────────────────────────────────────────────────────────────────────
 // combine-audio-chunks API client
 // Spec: ai-storybook-design/api/text-generation/03-combine-audio-chunks.md
-// Stack: FastAPI — ai-storybook-image-api/src/routers/text/combine_audio_chunks.py
+// Stack: FastAPI — ai-storybook-python-api/src/routers/text/combine_audio_chunks.py
 // Pattern mirrors src/apis/narrate-script-api.ts (X-API-Key, AbortController + 90s timeout,
 // error code map). Stateless server: FE resolves chunks[].results[is_selected] then calls.
 // ─────────────────────────────────────────────────────────────────────────────

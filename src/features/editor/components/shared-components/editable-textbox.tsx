@@ -12,7 +12,7 @@ const log = createLogger("Editor", "EditableTextbox");
 
 // Codepoint ranges that should emit one token per character (no inter-word
 // whitespace). Mirrors `_CJK_RANGES` in
-// `ai-storybook-image-api/src/services/alignment_aggregator.py` — must stay in
+// `ai-storybook-python-api/src/services/alignment_aggregator.py` — must stay in
 // sync so word-span count matches `wordTimings.length` from /api/text/narrate-script.
 // Korean (Hangul) is intentionally excluded: modern orthography uses spaces
 // between eojeol, so the default whitespace split produces natural word units.

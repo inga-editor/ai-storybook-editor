@@ -6,7 +6,7 @@ import { warnIfSaveResourceFailed } from '@/utils/save-resource-path';
 // ─────────────────────────────────────────────────────────────────────────────
 // narrate-script API client
 // Spec: ai-storybook-design/api/text-generation/02-narrate-script.md
-// Stack: FastAPI — ai-storybook-image-api/src/routers/text/narrate_script.py
+// Stack: FastAPI — ai-storybook-python-api/src/routers/text/narrate_script.py
 // Pattern mirrors src/apis/voice-api.ts (X-API-Key, env flags, error mapping).
 // ─────────────────────────────────────────────────────────────────────────────
 

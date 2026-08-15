@@ -1,6 +1,6 @@
 /**
  * MUSIC_FINETUNES — synced manually with BE canonical source:
- *   ai-storybook-image-api/src/services/music_finetunes.py (PUBLIC_FINETUNES)
+ *   ai-storybook-python-api/src/services/music_finetunes.py (PUBLIC_FINETUNES)
  * On drift: update both files in same PR. Future:
  *   GET /api/text/list-music-finetunes (post-MVP) sẽ thay hardcode này.
  */

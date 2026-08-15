@@ -113,7 +113,7 @@ export const SPRITE_MIN = 1;
 export const spriteBatchLabel = (order: number): string => `Batch ${order + 1}`;
 
 /** Composer parity — colours mirror `DEFAULT_FRAME_*` in
- *  `ai-storybook-image-api/src/models/requests/build_crop_sheet.py`. The
+ *  `ai-storybook-python-api/src/models/requests/build_crop_sheet.py`. The
  *  client-side preview (`ComposedCropSheet`) reproduces the PNG the Python
  *  composer bakes: `gutterColor` fills the canvas (so transparent crop areas
  *  read as that colour, not a checkerboard), `cellStrokeColor` strokes each

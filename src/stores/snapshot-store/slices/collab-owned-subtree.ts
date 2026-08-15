@@ -6,7 +6,7 @@
 // retouch edit on the SAME spread never clobber each other.
 //
 // SSOT ALIGNMENT (non-negotiable): these two sets MUST stay byte-identical to the
-// backend constants in `ai-storybook-image-api/src/services/resource/addressing.py`
+// backend constants in `ai-storybook-python-api/src/services/resource/addressing.py`
 // (SCENE_OWNED_KEYS / RETOUCH_OWNED_KEYS). The server ENFORCES the partition (it
 // drops any non-owned key), so a FE/BE drift only ever wastes payload or omits a
 // key from the dirty-diff — never a security hole — but a MISSING key here means an

@@ -3,7 +3,7 @@
 //
 // Contract = share/01 shape with `shareConfig` → `viewConfig` + a `contractVersion` field,
 // so we REUSE `BookPreviewData` / `SnapshotPreviewData` (do not redefine them).
-// SSOT: ai-storybook-image-api/src/routers/player/get_book_preview.py (code wins over spec).
+// SSOT: ai-storybook-python-api/src/routers/player/get_book_preview.py (code wins over spec).
 
 import type { BookPreviewData, SnapshotPreviewData } from '@/types/share-preview-types';
 import type { PlayerErrorCode } from '../embed/player-messages';

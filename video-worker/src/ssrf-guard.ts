@@ -1,6 +1,6 @@
 // video-worker/src/ssrf-guard.ts
 // SSRF guard for bgm.url — the only external-URL surface this worker fetches.
-// Ports the logic of ai-storybook-image-api/src/services/ssrf_guard.py::validate_public_url
+// Ports the logic of ai-storybook-python-api/src/services/ssrf_guard.py::validate_public_url
 // to Node (no npm deps — uses built-in `dns.promises.lookup`).
 //
 // Blocks:
