@@ -335,8 +335,11 @@ export function ConfigDistributionSettings() {
           return;
         }
         // Open the tab synchronously (inside the click gesture) so popup
-        // blockers don't eat it, then point it at the signed URL.
-        const tab = window.open('', '_blank', 'noopener,noreferrer');
+        // blockers don't eat it, then point it at the signed URL. No 'noopener'
+        // in the features string — that makes window.open return null (spec),
+        // which would orphan the blank tab; sever the reverse link manually.
+        const tab = window.open('', '_blank');
+        if (tab) tab.opener = null;
         const result = await getExportPdfDownloadUrl(leaf.last_job_id);
         if (!result.success) {
           tab?.close();
