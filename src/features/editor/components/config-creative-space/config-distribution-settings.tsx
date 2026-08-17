@@ -18,6 +18,7 @@ import {
   type EnqueueExportOutcome,
 } from '@/hooks/use-distribution-actions';
 import { useExportJobWatcher } from '@/hooks/use-export-job-watcher';
+import { getExportPdfDownloadUrl } from '@/apis/jobs-api';
 import {
   CHANNELS,
   V1_EXPORT_CAPABILITY,
@@ -322,8 +323,37 @@ export function ConfigDistributionSettings() {
   );
 
   const handleViewVariant = React.useCallback(
-    (src: DistSource, channelKey: ChannelKey, leafKey: string, videoType?: VideoType) => {
+    async (src: DistSource, channelKey: ChannelKey, leafKey: string, videoType?: VideoType) => {
       const leaf = getLeaf(src.dist, channelKey, leafKey, videoType);
+
+      // Printer PDFs live under the private `exports/` storage prefix — the
+      // stored media_url 403s on direct open. Mint a short-lived signed URL
+      // from the job that produced the artifact (leaf.last_job_id).
+      if (channelKey === 'printer') {
+        if (!leaf.last_job_id) {
+          log.warn('handleViewVariant', 'printer leaf has no last_job_id', { leafKey });
+          return;
+        }
+        // Open the tab synchronously (inside the click gesture) so popup
+        // blockers don't eat it, then point it at the signed URL.
+        const tab = window.open('', '_blank', 'noopener,noreferrer');
+        const result = await getExportPdfDownloadUrl(leaf.last_job_id);
+        if (!result.success) {
+          tab?.close();
+          log.error('handleViewVariant', 'sign download url failed', {
+            leafKey,
+            jobId: leaf.last_job_id,
+            httpStatus: result.httpStatus,
+            errorCode: result.errorCode,
+          });
+          toast.error(`Could not open PDF: ${result.error}`);
+          return;
+        }
+        if (tab) tab.location.href = result.data.url;
+        else window.open(result.data.url, '_blank', 'noopener,noreferrer');
+        return;
+      }
+
       if (!leaf.media_url) {
         log.warn('handleViewVariant', 'no media_url', { channelKey, leafKey });
         return;
@@ -372,9 +402,9 @@ export function ConfigDistributionSettings() {
                   onToggleVariant={(leafKey, next) =>
                     handleToggleVariant(src, view.channelKey, leafKey, next, view.videoType)
                   }
-                  onViewVariant={(leafKey) =>
-                    handleViewVariant(src, view.channelKey, leafKey, view.videoType)
-                  }
+                  onViewVariant={(leafKey) => {
+                    void handleViewVariant(src, view.channelKey, leafKey, view.videoType);
+                  }}
                 />
               ))}
             </DistributionSourceSection>

@@ -125,6 +125,7 @@ export function makeDefaultLeaf(): ExportVariantLeaf {
     file_size: null,
     exported_at: null,
     job_id: null,
+    last_job_id: null,
   };
 }
 
@@ -170,6 +171,7 @@ function coalesceLeaf(leaf: Partial<ExportVariantLeaf> | null | undefined): Expo
     file_size: typeof leaf.file_size === 'number' ? leaf.file_size : d.file_size,
     exported_at: leaf.exported_at ?? d.exported_at,
     job_id: leaf.job_id ?? d.job_id,
+    last_job_id: leaf.last_job_id ?? d.last_job_id,
   };
 }
 

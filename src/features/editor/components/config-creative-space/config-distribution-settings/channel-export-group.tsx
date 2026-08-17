@@ -130,7 +130,14 @@ export function ChannelExportGroup({
             checkboxDisabled={cap.disabledLeafKeys.includes(descriptor.leafKey)}
             fileSizeText={formatFileSize(leaf.file_size)}
             status={leaf.status}
-            canView={leaf.media_url != null}
+            // Printer artifacts are private (exports/ prefix) — View goes through
+            // the signed-URL flow keyed by last_job_id. Pre-feature exports have
+            // media_url but no last_job_id → View stays disabled until re-export.
+            canView={
+              channelKey === 'printer'
+                ? leaf.last_job_id != null
+                : leaf.media_url != null
+            }
             onToggle={(next) => onToggleVariant(descriptor.leafKey, next)}
             onView={() => onViewVariant(descriptor.leafKey)}
           />

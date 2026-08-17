@@ -353,6 +353,11 @@ export interface ExportVariantLeaf {
   file_size: number | null; // bytes
   exported_at: string | null; // ISO8601
   job_id: string | null; // soft FK → background_jobs.id (set while exporting)
+  /** Job that produced the current artifact (survives job_id clearing on
+   *  finalize). Printer PDFs live under the private `exports/` storage prefix —
+   *  View mints a short-lived signed URL via GET /api/jobs/{last_job_id}/download
+   *  instead of opening media_url (which 403s). Null on pre-feature exports. */
+  last_job_id: string | null;
 }
 
 export type PlayerKey = 'web' | 'mobile' | 'ipad';

@@ -9,7 +9,7 @@
 //       ai-storybook-design/api/jobs/04-enqueue-remix-character-swap.md
 //       ai-storybook-design/api/jobs/03-cancel-job.md
 
-import { callImageApi, type ImageApiFailure } from './image-api-client';
+import { callImageApi, callImageApiGet, type ImageApiFailure } from './image-api-client';
 import { DETECT_JOB_CONFIG, type DetectPlane } from '@/types/remix';
 import { ACTOR_STAGE_ENDPOINT, type ActorStageKind } from '@/types/actors';
 import { createLogger } from '@/utils/logger';
@@ -641,6 +641,25 @@ export async function enqueueRemixExportPdf(
   return callImageApi<EnqueueJobResponse<EnqueueExportPdfData>>(
     `/api/jobs/remix/${encodeURIComponent(remixId)}/export-pdf`,
     opts,
+  );
+}
+
+export interface ExportPdfDownloadData {
+  /** Short-lived signed URL for the export PDF (TTL ~5 min — open immediately). */
+  url: string;
+  expires_in: number;
+}
+
+/** GET /api/jobs/{jobId}/download — mint a fresh signed URL for a completed
+ *  export-PDF job. The PDF lives under the private `exports/` storage prefix,
+ *  so the leaf's media_url 403s on direct open; this is the only view path.
+ *  jobId comes from the printer leaf's `last_job_id`. */
+export async function getExportPdfDownloadUrl(
+  jobId: string,
+): Promise<EnqueueJobResponse<ExportPdfDownloadData> | ImageApiFailure> {
+  log.info('getExportPdfDownloadUrl', 'request', { jobId });
+  return callImageApiGet<EnqueueJobResponse<ExportPdfDownloadData>>(
+    `/api/jobs/${encodeURIComponent(jobId)}/download`,
   );
 }
 
