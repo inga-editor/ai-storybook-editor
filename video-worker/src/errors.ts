@@ -20,7 +20,9 @@ export type RenderErrorCode =
   | "SOURCE_NOT_FOUND"     // 404 — sourceFileName not in OUT_DIR
   | "SOURCE_FETCH_FAILED"  // 502 — sourceUrl fetch fail / SSRF-block / over-cap
   | "TRANSCODE_TIMEOUT"    // 504 — ffmpeg exceeded TRANSCODE_TIMEOUT_MS
-  | "TRANSCODE_FAILED";    // 500 — ffmpeg/ffprobe other error
+  | "TRANSCODE_FAILED"     // 500 — ffmpeg/ffprobe other error
+  // storage-service upload (design 02 §3 — /render-book + /transcode):
+  | "UPLOAD_FAILED";       // 502 — storage-service PUT failed after retries
 
 export interface ClassifiedError {
   code: RenderErrorCode;
@@ -42,7 +44,18 @@ export const ERROR_STATUS: Record<RenderErrorCode, number> = {
   SOURCE_FETCH_FAILED: 502,
   TRANSCODE_TIMEOUT: 504,
   TRANSCODE_FAILED: 500,
+  UPLOAD_FAILED: 502,
 };
+
+/** True when `err` is a storage-upload failure (StorageUploadError, code
+ *  UPLOAD_FAILED). Duck-typed on the `code` field to avoid a circular import
+ *  with storage-upload.ts — never message-matched (this is a worker-owned type). */
+export function isUploadError(err: unknown): boolean {
+  return (
+    err instanceof Error &&
+    (err as { code?: unknown }).code === "UPLOAD_FAILED"
+  );
+}
 
 export function classifyRenderError(err: unknown): ClassifiedError {
   const message = err instanceof Error ? err.message : String(err);

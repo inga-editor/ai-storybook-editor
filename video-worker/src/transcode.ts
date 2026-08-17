@@ -8,6 +8,10 @@
 // command, so any branch failure fails the whole call (decode is the dominant
 // cost — per-res isolation is deferred, design §6).
 //
+// Storage posture (design 08 §2): out/{fhd,hd,sd} are scratch — the server PUTs
+// each output to the storage-service then unlinks the local copy. This module
+// stays storage-agnostic (renders to out/{res} and returns local metadata).
+//
 // Encoder profile (CPU libx264 / NVENC / QSV) is resolved at boot by
 // encoder-probe.ts. A runtime hw-encode failure (driver/GPU-OOM mid-encode) is
 // retried ONCE with the CPU profile (resilience — design §3.1).
@@ -31,7 +35,12 @@ export const TRANSCODE_TARGETS: readonly TranscodeTarget[] = ["fhd", "hd", "sd"]
 
 export interface TranscodeOutput {
   resolution: TranscodeTarget;
-  url: string;            // relative `/files/{tier}/{fileName}`
+  // Relative `/files/{tier}/{fileName}` fallback; the server rewrites it to the
+  // storage-service URL when storage is configured + bookId present (design 08 §2).
+  url: string;
+  /** Storage key `videos/books/{bookId}/{res}/{fileName}` — set by the server
+   *  after a successful PUT; absent in the legacy local fallback. */
+  storageKey?: string;
   fileName: string;
   width: number;
   height: number;

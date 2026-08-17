@@ -64,7 +64,10 @@ export interface BookRenderInput {
 export interface BookRenderResult {
   fileName: string;
   outputLocation: string;
-  publicUrl: string;           // relative: "/files/{tier}/{fileName}" (MASTER_TIER=qhd)
+  // Relative fallback URL "/files/{tier}/{fileName}" (MASTER_TIER=qhd). The server
+  // overrides this with the storage-service URL when storage is configured + bookId
+  // present (design 06 §6.1); out/qhd is scratch/cache in that posture.
+  publicUrl: string;
   width: number;
   height: number;
   fps: number;

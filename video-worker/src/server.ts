@@ -5,13 +5,19 @@
 // rather than risk OOM. Dev-only: bound to localhost, permissive CORS.
 //
 // Security split (design 02 §6):
-//   GET  /files/*       — public read-only (book artifacts must be internet-reachable)
+//   GET  /files/*       — public read-only (spread previews only; book finals move to storage-service)
 //   POST /render*       — token-protected (VIDEO_WORKER_TOKEN, env-gated)
 //   GET  /health        — public (liveness probe)
 //
+// Storage posture (design 06 §6.1, 02 §2b/§2c; ADR-054): when STORAGE_SERVICE_URL
+// is set and the request carries bookId, /render-book + /transcode finals stream
+// PUT to the storage-service (served publicly by its nginx) and OUT_DIR is
+// scratch/cache — qhd master kept as an LRU transcode cache (MAX_KEEP_MASTERS),
+// downscale outputs pruned after PUT. Unset → legacy local /files fallback (dev/demo).
+//
 // Prune policy:
 //   /render 1-spread     → prune spread-* only, keep 10 most-recent
-//   /render-book         → NEVER prune (book files are durable artifacts)
+//   /render-book (qhd)   → keep newest MAX_KEEP_MASTERS masters (transcode cache)
 
 import os from "node:os";
 import { randomUUID } from "node:crypto";
@@ -25,7 +31,14 @@ import {
   TRANSCODE_SRC_MAX_BYTES,
   tierOutDir,
   MASTER_TIER,
+  MAX_KEEP_MASTERS,
 } from "./paths.js";
+import {
+  isStorageConfigured,
+  putBookArtifact,
+  uploadTranscodeOutputs,
+  StorageUploadError,
+} from "./storage-upload.js";
 import {
   renderSpread,
   warmup,
@@ -49,6 +62,20 @@ function coerceLanguage(value: unknown): RenderLanguage {
   return SUPPORTED_LANGUAGES.includes(value as RenderLanguage)
     ? (value as RenderLanguage)
     : "en_US";
+}
+
+/** Parse an optional `bookId` from the body: trimmed non-empty string with no
+ *  path-separator characters (it becomes a storage key segment). Returns null
+ *  when absent (legacy fallback). Returns { error } when present but malformed. */
+function parseBookId(value: unknown): { bookId: string | null; error?: string } {
+  if (value == null || value === "") return { bookId: null };
+  if (typeof value !== "string") return { bookId: null, error: "`bookId` must be a string" };
+  const trimmed = value.trim();
+  if (!trimmed) return { bookId: null };
+  if (trimmed.includes("/") || trimmed.includes("\\") || trimmed.includes("..")) {
+    return { bookId: null, error: "`bookId` must not contain path separators" };
+  }
+  return { bookId: trimmed };
 }
 
 const PORT = WORKER_PORT;
@@ -169,6 +196,11 @@ app.post("/render-book", requireToken, async (req: Request, res: Response) => {
     res.status(400).json({ ok: false, code: "INVALID_INPUT", message: "`illustration` object required" });
     return;
   }
+  const { bookId, error: bookIdError } = parseBookId(body.bookId);
+  if (bookIdError) {
+    res.status(400).json({ ok: false, code: "INVALID_INPUT", message: bookIdError });
+    return;
+  }
   if (edition !== "classic" && edition !== "dynamic") {
     res.status(400).json({
       ok: false,
@@ -226,13 +258,42 @@ app.post("/render-book", requireToken, async (req: Request, res: Response) => {
 
   try {
     const result = await renderBook(input, fileName);
-    // Book files are NEVER pruned (durable artifacts).
     const elapsedMs = Date.now() - start;
     console.log(`[render-book] done ${fileName} frames=${result.durationInFrames} spreads=${result.spreadsRendered} ${elapsedMs}ms`);
 
+    // Storage-service cutover: PUT the qhd master when configured + bookId present;
+    // else legacy local /files fallback (byte-identical response for dev/demo).
+    // out/qhd is a scratch/cache — pruned to MAX_KEEP_MASTERS in BOTH branches.
+    let publicUrl = result.publicUrl;
+    let storageKey: string | undefined;
+    if (isStorageConfigured() && bookId) {
+      try {
+        const put = await putBookArtifact({
+          tier: MASTER_TIER,
+          bookId,
+          fileName: result.fileName,
+          filePath: result.outputLocation,
+        });
+        publicUrl = put.url;
+        storageKey = put.storageKey;
+      } catch (uploadErr) {
+        // Explicit branch — do NOT run classifyRenderError; storage PUT is durable-artifact
+        // critical. Local master stays (cache/debug), counted by pruneMasters next run.
+        if (uploadErr instanceof StorageUploadError) {
+          console.error(`[render-book] upload failed ${fileName}: ${uploadErr.message}`);
+          await pruneMasters();
+          res.status(502).json({ ok: false, code: uploadErr.code, message: uploadErr.message });
+          return;
+        }
+        throw uploadErr;
+      }
+    }
+    await pruneMasters();
+
     res.json({
       ok: true,
-      publicUrl: result.publicUrl,
+      publicUrl,
+      ...(storageKey ? { storageKey } : {}),
       fileName: result.fileName,
       width: result.width,
       height: result.height,
@@ -267,6 +328,11 @@ app.post("/transcode", requireToken, async (req: Request, res: Response) => {
   const sourceFileNameRaw = typeof body.sourceFileName === "string" ? body.sourceFileName.trim() : "";
   const sourceUrl = typeof body.sourceUrl === "string" ? body.sourceUrl.trim() : "";
   const targetsRaw = Array.isArray(body.targets) ? body.targets : null;
+  const { bookId, error: bookIdError } = parseBookId(body.bookId);
+  if (bookIdError) {
+    res.status(400).json({ ok: false, code: "INVALID_INPUT", message: bookIdError });
+    return;
+  }
 
   // ── Validate targets (non-empty, subset {fhd,hd,sd}, dedup, reject qhd) ────
   if (!targetsRaw || targetsRaw.length === 0) {
@@ -350,9 +416,28 @@ app.post("/transcode", requireToken, async (req: Request, res: Response) => {
       `perRes=[${result.outputs.map((o) => `${o.resolution}:${o.fileSizeBytes}`).join(",")}]`
     );
 
+    // Storage-service cutover (design 08 §2): PUT each output when configured +
+    // bookId; else legacy relative-url fallback. All-or-nothing — any output PUT
+    // failure after retries → 502 for the whole call. Already-PUT outputs stay on
+    // storage as harmless orphans (idempotent {base}-{res}.mp4 names re-PUT with
+    // upsert on a retried job). Local out/{res} copies unlinked after each PUT.
+    let outputs = result.outputs;
+    if (isStorageConfigured() && bookId) {
+      try {
+        outputs = await uploadTranscodeOutputs(bookId, result.outputs);
+      } catch (uploadErr) {
+        if (uploadErr instanceof StorageUploadError) {
+          console.error(`[transcode] upload failed: ${uploadErr.message}`);
+          res.status(502).json({ ok: false, code: uploadErr.code, message: uploadErr.message });
+          return;
+        }
+        throw uploadErr;
+      }
+    }
+
     res.json({
       ok: true,
-      outputs: result.outputs,
+      outputs,
       fps: result.fps,
       durationInFrames: result.durationInFrames,
       elapsedMs,
@@ -394,10 +479,36 @@ async function fetchMasterToTemp(sourceUrl: string): Promise<string> {
 async function pruneSpreadFiles(): Promise<void> {
   try {
     const entries = await fs.readdir(OUT_DIR);
-    // Only prune `spread-` prefixed files; book- files are durable (never pruned).
+    // Only prune `spread-` prefixed files; book- files live in out/qhd (see pruneMasters).
     const spreadMp4s = entries.filter((f) => f.startsWith("spread-") && f.endsWith(".mp4")).sort();
     const excess = spreadMp4s.slice(0, Math.max(0, spreadMp4s.length - MAX_KEEP_SPREAD_FILES));
     await Promise.all(excess.map((f) => fs.unlink(path.join(OUT_DIR, f)).catch(() => undefined)));
+  } catch {
+    /* best-effort cleanup */
+  }
+}
+
+/** Keep only the newest MAX_KEEP_MASTERS `book-*.mp4` masters in out/qhd (the
+ *  master is a transcode cache once the durable copy lives on storage-service).
+ *  Safe against a concurrent transcode read: prune only runs while the single
+ *  shared `rendering` slot is held (transcode holds the same slot) → no reader. */
+async function pruneMasters(): Promise<void> {
+  try {
+    const dir = tierOutDir(MASTER_TIER);
+    const entries = await fs.readdir(dir);
+    const masters = entries.filter((f) => f.startsWith("book-") && f.endsWith(".mp4"));
+    if (masters.length <= MAX_KEEP_MASTERS) return;
+    const withMtime = await Promise.all(
+      masters.map(async (f) => {
+        const p = path.join(dir, f);
+        const st = await fs.stat(p).catch(() => null);
+        return { p, mtime: st ? st.mtimeMs : 0 };
+      }),
+    );
+    withMtime.sort((a, b) => b.mtime - a.mtime); // newest first
+    const excess = withMtime.slice(MAX_KEEP_MASTERS);
+    await Promise.all(excess.map((e) => fs.unlink(e.p).catch(() => undefined)));
+    if (excess.length) console.log(`[render-book] pruned ${excess.length} old master(s), kept ${MAX_KEEP_MASTERS}`);
   } catch {
     /* best-effort cleanup */
   }

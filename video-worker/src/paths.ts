@@ -27,14 +27,28 @@ export function tierOutDir(tier: string): string {
 /** Tier holding the QHD master (render-book output + transcode source). */
 export const MASTER_TIER = "qhd";
 
+// ── Storage-service cutover (design 06 §6.1, 02 §2b/§2c; ADR-054) ─────────────
+// Book-video finals stream PUT to the self-hosted storage-service and are served
+// publicly by its nginx. OUT_DIR becomes scratch/cache (qhd master = transcode
+// cache pruned by MAX_KEEP_MASTERS; downscale outputs pruned after PUT).
+
+/** Storage-service base URL (loopback S2S target). Unset → local-fallback posture
+ *  (relative `/files/{tier}` publicUrl, no storageKey) for dev/demo. */
+export const STORAGE_SERVICE_URL = (process.env.STORAGE_SERVICE_URL ?? "").trim();
+
+/** S2S API key (`X-API-Key`) for storage-service writes. Never logged. */
+export const STORAGE_SERVICE_API_KEY = process.env.STORAGE_SERVICE_API_KEY ?? "";
+
+/** Storage bucket book videos are filed under. */
+export const STORAGE_BUCKET = process.env.STORAGE_BUCKET ?? "storybook-assets";
+
+/** LRU cap for the `out/qhd` master cache (transcode source). Newest N kept by mtime. */
+export const MAX_KEEP_MASTERS = Number(process.env.MAX_KEEP_MASTERS ?? 3);
+
 /** Worker port — server bind. Override via env (PORT). The ThorVG WASM is no longer
  *  served by the worker (render adapter resolves it as a bundled `?url` asset), so the
  *  port no longer doubles as a WASM origin. */
 export const WORKER_PORT = Number(process.env.PORT ?? 4000);
-
-/** Public base URL of the worker — job-side absolutizes publicUrl → media_url leaf.
- *  Not used in v1 response (worker returns relative `/files/` path); kept for future. */
-export const VIDEO_WORKER_PUBLIC_URL = process.env.VIDEO_WORKER_PUBLIC_URL ?? "";
 
 /** Optional shared secret protecting /render* routes (POST only).
  *  Unset → bypass (dev loopback). Set → require X-Worker-Token header match. */
