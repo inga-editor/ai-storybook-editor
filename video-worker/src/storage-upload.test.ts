@@ -34,6 +34,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 
 import {
   putBookArtifact,
+  putObjectAtKey,
   uploadTranscodeOutputs,
   StorageUploadError,
   isStorageConfigured,
@@ -150,6 +151,41 @@ function output(res: "fhd" | "hd" | "sd"): TranscodeOutput {
     durationInFrames: 1,
   };
 }
+
+describe("putObjectAtKey", () => {
+  // ADR-057 sibling key: `@` is valid grammar and must reach storage-service
+  // byte-for-byte, un-renamed (generic /transcode mode, design 08 §2b).
+  const GENERIC_KEY = "uploads/videos/xyz.mp4@mobile.mp4";
+  const GENERIC_URL = `http://storage.test/files/storybook-assets/${GENERIC_KEY}`;
+
+  function okGeneric(status = 200): Response {
+    return new Response(JSON.stringify({ success: true, data: { url: GENERIC_URL, key: GENERIC_KEY } }), { status });
+  }
+
+  it("PUTs at the EXACT key verbatim (no rename), upsert=true from attempt 1, correct content-type", async () => {
+    fetchMock.mockResolvedValueOnce(okGeneric(200));
+    const res = await putObjectAtKey({ key: GENERIC_KEY, filePath: "/out/single/xyz.mp4", contentType: "video/mp4" });
+    expect(res).toEqual({ url: GENERIC_URL, storageKey: GENERIC_KEY });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe(`http://storage.test/api/storage/objects/storybook-assets/${GENERIC_KEY.split("/").map(encodeURIComponent).join("/")}?upsert=true`);
+    expect(init.headers["Content-Type"]).toBe("video/mp4");
+  });
+
+  it("honors a webm contentType", async () => {
+    fetchMock.mockResolvedValueOnce(okGeneric(200));
+    await putObjectAtKey({ key: "uploads/videos/xyz.webm@sd.webm", filePath: "/out/single/xyz.webm", contentType: "video/webm" });
+    const [, init] = fetchMock.mock.calls[0];
+    expect(init.headers["Content-Type"]).toBe("video/webm");
+  });
+
+  it("propagates StorageUploadError on a non-retryable 4xx (parity with putBookArtifact)", async () => {
+    fetchMock.mockResolvedValueOnce(err(415, "UNSUPPORTED_MEDIA_TYPE"));
+    await expect(
+      putObjectAtKey({ key: GENERIC_KEY, filePath: "/out/single/xyz.mp4", contentType: "video/mp4" }),
+    ).rejects.toBeInstanceOf(StorageUploadError);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe("uploadTranscodeOutputs", () => {
   it("PUTs each output (upsert=true from attempt 1), rewrites url + storageKey, unlinks local", async () => {

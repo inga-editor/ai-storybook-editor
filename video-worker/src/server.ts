@@ -36,6 +36,7 @@ import {
 import {
   isStorageConfigured,
   putBookArtifact,
+  putObjectAtKey,
   uploadTranscodeOutputs,
   StorageUploadError,
 } from "./storage-upload.js";
@@ -50,6 +51,10 @@ import { renderBook, type BookRenderInput } from "./render-book.js";
 import { classifyRenderError, classifyTranscodeError, ERROR_STATUS } from "./errors.js";
 import {
   transcodeDownscale,
+  transcodeSingle,
+  detectTranscodeShape,
+  parseGenericTranscodeInput,
+  detectContainer,
   TRANSCODE_TARGETS,
   type TranscodeTarget,
 } from "./transcode.js";
@@ -323,8 +328,24 @@ app.post("/render-book", requireToken, async (req: Request, res: Response) => {
 });
 
 // ── POST /transcode — downscale QHD master → fhd/hd/sd (design 08) ────────────
+// REV (design 08 §2b, ADR-057): the SAME endpoint also serves a generic
+// single-item mode — mode detect by body shape BEFORE any book-mode
+// validation/guard runs (mixing both field groups is a hard 400).
 app.post("/transcode", requireToken, async (req: Request, res: Response) => {
   const body = req.body ?? {};
+  const shape = detectTranscodeShape(body);
+  if (shape === "mixed") {
+    res.status(400).json({
+      ok: false, code: "INVALID_INPUT",
+      message: "cannot mix `targets` (book mode) with `outputKey`/`targetWidth` (generic mode)",
+    });
+    return;
+  }
+  if (shape === "generic") {
+    await handleGenericTranscode(body, res);
+    return;
+  }
+
   const sourceFileNameRaw = typeof body.sourceFileName === "string" ? body.sourceFileName.trim() : "";
   const sourceUrl = typeof body.sourceUrl === "string" ? body.sourceUrl.trim() : "";
   const targetsRaw = Array.isArray(body.targets) ? body.targets : null;
@@ -453,8 +474,9 @@ app.post("/transcode", requireToken, async (req: Request, res: Response) => {
 });
 
 /** Fetch `sourceUrl` (SSRF-guarded, size-capped) to a temp file. Throws on any
- *  failure (caller maps to 502 SOURCE_FETCH_FAILED). */
-async function fetchMasterToTemp(sourceUrl: string): Promise<string> {
+ *  failure (caller maps to 502 SOURCE_FETCH_FAILED). `ext` names the temp file
+ *  (cosmetic/debug only — ffmpeg demuxes by content, not extension). */
+async function fetchMasterToTemp(sourceUrl: string, ext = "mp4"): Promise<string> {
   await assertSsrfSafe(sourceUrl);
   const resp = await fetch(sourceUrl);
   if (!resp.ok || !resp.body) {
@@ -464,13 +486,107 @@ async function fetchMasterToTemp(sourceUrl: string): Promise<string> {
   if (cl && cl > TRANSCODE_SRC_MAX_BYTES) {
     throw new Error(`source exceeds cap (${cl} > ${TRANSCODE_SRC_MAX_BYTES})`);
   }
-  const tmp = path.join(os.tmpdir(), `transcode-src-${randomUUID().slice(0, 8)}.mp4`);
+  const tmp = path.join(os.tmpdir(), `transcode-src-${randomUUID().slice(0, 8)}.${ext}`);
   const buf = Buffer.from(await resp.arrayBuffer());
   if (buf.byteLength > TRANSCODE_SRC_MAX_BYTES) {
     throw new Error(`source exceeds cap (${buf.byteLength} > ${TRANSCODE_SRC_MAX_BYTES})`);
   }
   await fs.writeFile(tmp, buf);
   return tmp;
+}
+
+// ── POST /transcode generic mode — single-item downscale (design 08 §2b) ─────
+// Always sourceUrl (no scratch-cache path — the item isn't a QHD master),
+// container kept from source, output PUT S2S at the EXACT caller-supplied
+// `outputKey` (ADR-057 sibling key). Shares the `rendering` in-flight slot.
+async function handleGenericTranscode(body: Record<string, unknown>, res: Response): Promise<void> {
+  const parsed = parseGenericTranscodeInput(body);
+  if (!parsed.ok) {
+    res.status(400).json({ ok: false, code: "INVALID_INPUT", message: parsed.message });
+    return;
+  }
+  const { sourceUrl, targetWidth, outputKey } = parsed.input;
+
+  const container = detectContainer(sourceUrl);
+  if (!container) {
+    res.status(400).json({ ok: false, code: "INVALID_INPUT", message: "`sourceUrl` must end in .mp4 or .webm" });
+    return;
+  }
+  if (!isStorageConfigured()) {
+    res.status(400).json({
+      ok: false, code: "INVALID_INPUT",
+      message: "generic transcode requires storage-service to be configured (STORAGE_SERVICE_URL)",
+    });
+    return;
+  }
+  if (rendering) {
+    res.status(429).json({ ok: false, code: "BUSY", message: "another render in progress" });
+    return;
+  }
+  rendering = true;
+  const start = Date.now();
+
+  let tempSrcPath: string | null = null;
+  let tempOutPath: string | null = null;
+  try {
+    try {
+      tempSrcPath = await fetchMasterToTemp(sourceUrl, container);
+    } catch (err) {
+      console.error(`[transcode] generic source fetch failed: ${String(err).slice(0, 200)}`);
+      res.status(502).json({ ok: false, code: "SOURCE_FETCH_FAILED", message: "failed to fetch sourceUrl" });
+      return;
+    }
+
+    const profile = getEncoderProfile();
+    tempOutPath = path.join(os.tmpdir(), `transcode-out-${randomUUID().slice(0, 8)}.${container}`);
+    console.log(`[transcode] generic start container=${container} targetWidth=${targetWidth} encoder=${profile.name}`);
+
+    const result = await transcodeSingle(tempSrcPath, targetWidth, container, profile, tempOutPath);
+    console.log(
+      `[transcode] generic transcoded container=${container} ${Date.now() - start}ms ` +
+      `size=${result.fileSizeBytes} dims=${result.width}x${result.height}`
+    );
+
+    let put;
+    try {
+      put = await putObjectAtKey({
+        key: outputKey,
+        filePath: tempOutPath,
+        contentType: container === "webm" ? "video/webm" : "video/mp4",
+      });
+    } catch (uploadErr) {
+      if (uploadErr instanceof StorageUploadError) {
+        console.error(`[transcode] generic upload failed: ${uploadErr.message}`);
+        res.status(502).json({ ok: false, code: uploadErr.code, message: uploadErr.message });
+        return;
+      }
+      throw uploadErr;
+    }
+
+    const elapsedMs = Date.now() - start;
+    console.log(`[transcode] generic done ${elapsedMs}ms`);
+    res.json({
+      ok: true,
+      output: {
+        url: put.url,
+        storageKey: put.storageKey,
+        width: result.width,
+        height: result.height,
+        fileSizeBytes: result.fileSizeBytes,
+        durationInFrames: result.durationInFrames,
+      },
+      fps: result.fps,
+      elapsedMs,
+    });
+  } catch (err) {
+    const c = classifyTranscodeError(err);
+    console.error(`[transcode] generic failed code=${c.code}: ${c.message.slice(0, 200)}`);
+    res.status(c.status).json({ ok: false, code: c.code, message: c.message });
+  } finally {
+    if (tempSrcPath) await fs.unlink(tempSrcPath).catch(() => undefined);
+    if (tempOutPath) await fs.unlink(tempOutPath).catch(() => undefined);
+    rendering = false;
+  }
 }
 
 // ── Prune helpers ─────────────────────────────────────────────────────────────

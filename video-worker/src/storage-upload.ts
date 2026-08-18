@@ -115,6 +115,40 @@ export async function putBookArtifact(
 ): Promise<PutBookArtifactResult> {
   const { tier, bookId, fileName, filePath, upsertFirst = false } = params;
   const storageKey = `videos/books/${bookId}/${tier}/${fileName}`;
+  return putStream(storageKey, filePath, "video/mp4", upsertFirst);
+}
+
+export interface PutObjectAtKeyParams {
+  /** EXACT storage key — caller builds it verbatim (generic `/transcode`
+   *  mode, design 08 §2b / ADR-057 sibling keys, e.g. `uploads/videos/xyz.mp4@mobile.mp4`).
+   *  This module never renames or derives it. */
+  key: string;
+  /** Absolute local path of the file to stream. */
+  filePath: string;
+  /** `video/mp4` or `video/webm` per the transcoded container. */
+  contentType: string;
+}
+
+/** PUT a file at an EXACT storage key (no bookId/tier/fileName composition) —
+ *  used by generic `/transcode` (design 08 §2b). Always `upsert=true` from
+ *  the first attempt: the worker never HEAD-checks a sibling key before
+ *  writing — idempotency (retry-safe, same bytes) is the caller's
+ *  responsibility (job 18 skip-if-exists). Throws `StorageUploadError` on
+ *  exhausted retries or a non-retryable 4xx (mirrors `putBookArtifact`). */
+export async function putObjectAtKey(params: PutObjectAtKeyParams): Promise<PutBookArtifactResult> {
+  const { key, filePath, contentType } = params;
+  return putStream(key, filePath, contentType, true);
+}
+
+/** Shared PUT-with-retry body for an EXACT storage key (design 02 §2b /
+ *  storage-service 03 §2): 3 attempts, backoff 2s/4s, retry on transport
+ *  error + 5xx + 409-without-upsert; 401/413/415/… fail fast. */
+async function putStream(
+  storageKey: string,
+  filePath: string,
+  contentType: string,
+  upsertFirst: boolean,
+): Promise<PutBookArtifactResult> {
   const url = objectUrl(STORAGE_BUCKET, storageKey);
   const size = (await fsStat(filePath)).size;
 
@@ -132,7 +166,7 @@ export async function putBookArtifact(
         method: "PUT",
         headers: {
           "X-API-Key": STORAGE_SERVICE_API_KEY,
-          "Content-Type": "video/mp4",
+          "Content-Type": contentType,
           "Content-Length": String(size),
         },
         body,
