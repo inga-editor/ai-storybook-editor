@@ -1,0 +1,22 @@
+name: Video Worker Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch or SHA to deploy"
+        default: "main"
+
+concurrency:
+  group: deploy-video-worker
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, prod-server]
+    timeout-minutes: 45      # first build is heavy (npm ci + Chrome ensure + preflight webpack)
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+      - run: ./video-worker/deploy/deploy.sh

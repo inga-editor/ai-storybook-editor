@@ -1,0 +1,36 @@
+name: Video Worker CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      # src/** (not just src/remotion/**): the Remotion composition imports across
+      # features/, utils/, types/, constants/ — a change there is a real build input
+      # of the video, so CI + the preflight gate must run. Over-triggers on unrelated
+      # FE UI changes; accepted to never miss a composition dependency.
+      - "video-worker/**"
+      - "src/**"
+      - "package-lock.json"
+      - ".github/workflows/video-worker-ci.yml"
+  pull_request:
+    paths:
+      - "video-worker/**"
+      - "src/**"
+      - "package-lock.json"
+      - ".github/workflows/video-worker-ci.yml"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm test
+        working-directory: video-worker
+      - run: npm run preflight        # bundle gate — webpack resolve of the composition
+        working-directory: video-worker

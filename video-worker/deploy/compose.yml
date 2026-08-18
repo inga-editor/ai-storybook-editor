@@ -1,0 +1,21 @@
+# Prod compose — run from FE repo root: TAG=<sha> docker compose -f video-worker/deploy/compose.yml up -d
+# network_mode: host — server.ts binds 127.0.0.1:4000 (loopback-only; python-api
+# is the sole S2S consumer). Stateless: env on host, logs to host journald.
+# shm_size: headless Chromium (Remotion render).
+services:
+  video-worker:
+    image: video-worker:${TAG:?set TAG to the image tag to run}
+    container_name: video-worker
+    network_mode: host
+    restart: unless-stopped
+    shm_size: 1g
+    env_file: /home/tbng84/Projects/AI-Story-Book/ai-storybook-editor/video-worker/.env
+    volumes:
+      # scratch / qhd-master LRU cache — bind-mount host dir for inspect/debug on
+      # the host (posture parity with STORAGE_ROOT). Host dir MUST be writable by
+      # uid 999 (app) — chown at cutover.
+      - /home/tbng84/Projects/AI-Story-Book/ai-storybook-editor/video-worker/out:/app/video-worker/out
+    logging:
+      driver: journald
+      options:
+        tag: video-worker
