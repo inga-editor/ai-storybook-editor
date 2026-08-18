@@ -9,6 +9,10 @@ services:
     network_mode: host
     restart: unless-stopped
     shm_size: 1g
+    # Cap container RAM at 8g (server has ~12g). Also makes cgroup report a real
+    # limit so Remotion stops warning about the "unlimited" sentinel and sizes its
+    # render concurrency off 8g. One render at a time (429 BUSY guard) fits well under.
+    mem_limit: 8g
     env_file: /home/tbng84/Projects/AI-Story-Book/ai-storybook-editor/video-worker/.env
     volumes:
       # scratch / qhd-master LRU cache — bind-mount host dir for inspect/debug on
