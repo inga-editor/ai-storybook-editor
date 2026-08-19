@@ -747,11 +747,11 @@ export async function enqueueRemixRenderVideo(
   );
 }
 
-// ── Export Player Media (api/jobs/18 — ADR-057 device-tier renditions) ───────
-// Body is EMPTY: the handler reads target tiers from distribution
-// player.{tier}.is_enabled at enqueue (checkbox = tier-selection gate). One job
-// converts every enabled tier; every tier leaf's media_url points at the same
-// public summary JSON. Dedup scope: per source_id (1 active job / book|remix).
+// ── Export Player Media (api/jobs/18 — ADR-057 quality renditions) ───────────
+// Body is EMPTY: the handler reads target qualities from distribution
+// player.{quality}.is_enabled at enqueue (checkbox = quality-selection gate). One
+// job converts every enabled quality; every quality leaf's media_url points at the
+// same public summary JSON. Dedup scope: per source_id (1 active job / book|remix).
 
 export interface EnqueueExportPlayerMediaEnqueuedData {
   job_id: string;
@@ -760,7 +760,7 @@ export interface EnqueueExportPlayerMediaEnqueuedData {
   source: 'book' | 'remix';
   book_id: string;
   remix_id?: string;
-  tiers: string[];
+  qualities: number[];
   total_steps: number;
   sources_found: number;
   estimated_duration_sec: number;
@@ -770,7 +770,7 @@ export interface EnqueueExportPlayerMediaEnqueuedData {
 
 export interface EnqueueExportPlayerMediaSkippedData {
   skipped: true;
-  reason: 'no_media_items' | 'no_tier_enabled' | 'snapshot_empty' | string;
+  reason: 'no_media_items' | 'no_quality_enabled' | 'snapshot_empty' | string;
   sources_found: 0;
 }
 

@@ -19,8 +19,8 @@ import type {
 // ── Config-driven render descriptors ────────────────────────────────────────
 
 export interface VariantDescriptor {
-  leafKey: string; // 'web' | 'epub' | '300dpi' | 'sd' ...
-  label: string; // 'Web' | 'epub' | '300 DPI' | '480p (SD)'
+  leafKey: string; // '1600' | 'epub' | '300dpi' | 'sd' ...
+  label: string; // '1600px' | 'epub' | '300 DPI' | '480p (SD)'
 }
 
 export interface ChannelDescriptor {
@@ -35,9 +35,9 @@ export const CHANNELS: ChannelDescriptor[] = [
     key: 'player',
     label: 'INGA Player',
     variants: [
-      { leafKey: 'web', label: 'Web' },
-      { leafKey: 'mobile', label: 'Mobile' },
-      { leafKey: 'ipad', label: 'iPad' },
+      { leafKey: '1600', label: '1600px' },
+      { leafKey: '2240', label: '2240px' },
+      { leafKey: '2752', label: '2752px' },
     ],
   },
   {
@@ -92,9 +92,9 @@ export interface ChannelCapability {
 // route) when a new channel ships — render logic stays untouched.
 export const V1_EXPORT_CAPABILITY: Record<ChannelKey, ChannelCapability> = {
   // Player export-able (ADR-057, job 18 export_player_media): one job converts
-  // every checked tier — the is_enabled checkbox is the tier-selection gate the
-  // handler reads at enqueue, so all 3 leaves toggle + export.
-  player: { exportableLeafKeys: ['web', 'mobile', 'ipad'], disabledLeafKeys: [] },
+  // every checked quality — the is_enabled checkbox is the quality-selection gate
+  // the handler reads at enqueue, so all 3 leaves toggle + export.
+  player: { exportableLeafKeys: ['1600', '2240', '2752'], disabledLeafKeys: [] },
   digital: { exportableLeafKeys: [], disabledLeafKeys: [] },
   printer: { exportableLeafKeys: ['300dpi'], disabledLeafKeys: ['600dpi'] },
   // v1: only QHD (1440p) renders via job 07 (render_book_video); SD/HD/FHD are
@@ -145,9 +145,9 @@ function makeDefaultVideoEntry(type: VideoType): VideoDistributionEntry {
 export function buildDefaultDistribution(): Distribution {
   return {
     player: {
-      web: makeDefaultLeaf(),
-      mobile: makeDefaultLeaf(),
-      ipad: makeDefaultLeaf(),
+      '1600': makeDefaultLeaf(),
+      '2240': makeDefaultLeaf(),
+      '2752': makeDefaultLeaf(),
     },
     digital: {
       epub: makeDefaultLeaf(),
@@ -206,7 +206,7 @@ export function coalesceDistribution(d: Distribution | null | undefined): Distri
   }
 
   return {
-    player: coalesceRecord(d.player, ['web', 'mobile', 'ipad']),
+    player: coalesceRecord(d.player, ['1600', '2240', '2752']),
     digital: coalesceRecord(d.digital, ['epub', 'pdf']),
     printer: coalesceRecord(d.printer, ['600dpi', '300dpi']),
     videos: VIDEO_TYPES.map((t) => byType.get(t) ?? makeDefaultVideoEntry(t)),

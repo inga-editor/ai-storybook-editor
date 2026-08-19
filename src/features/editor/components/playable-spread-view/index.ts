@@ -19,16 +19,17 @@ export { PLAYABLE_ZOOM, ANIMATION_PRESETS } from '@/constants/playable-constants
 // === Components ===
 export { PlayableSpreadView } from './playable-spread-view';
 
-// === Media tier (ADR-057 — device rendition resolve) ===
+// === Media quality (ADR-057 — rendition resolve by convert-width) ===
 export {
-  withTier,
-  applyMediaTier,
-  setActiveMediaTier,
-  getActiveMediaTier,
-  detectDeviceTier,
-  type DeviceTier,
-} from './media-tier';
-export { MediaTierHost } from './media-tier-host';
+  withQuality,
+  applyMediaQuality,
+  setActiveMediaQuality,
+  getActiveMediaQuality,
+  detectMediaQuality,
+  MEDIA_QUALITY_LADDER,
+  type MediaQuality,
+} from './media-quality';
+export { MediaQualityHost } from './media-quality-host';
 export { PlayableThumbnailList } from './playable-thumbnail-list';
 export { PlayerCanvas } from './player-canvas';
 export { PlayerControlSidebar } from './player-control-sidebar';

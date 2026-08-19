@@ -3,7 +3,7 @@
 // animated media_url); dynamic/interactive classify the animated file by ext.
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { collectSpreadMedia } from "./collect-spread-media";
-import { setActiveMediaTier } from "../media-tier";
+import { setActiveMediaQuality } from "../media-quality";
 import type { PlayableSpread } from "@/types/playable-types";
 
 vi.mock("@/utils/logger", () => ({
@@ -99,11 +99,11 @@ describe("collectSpreadMedia — regular images unaffected by edition", () => {
   });
 });
 
-describe("collectSpreadMedia — device tier (ADR-057)", () => {
-  afterEach(() => setActiveMediaTier(null));
+describe("collectSpreadMedia — media quality (ADR-057)", () => {
+  afterEach(() => setActiveMediaQuality(null));
 
-  it("appends ?tier= to visual kinds but never to audio when a tier is active", () => {
-    setActiveMediaTier("web");
+  it("appends ?quality= to visual kinds but never to audio when a quality is active", () => {
+    setActiveMediaQuality(2240);
     const spread = baseSpread({
       images: [{ id: "img-1", media_url: "https://example.test/a.png" }] as never,
       videos: [{ id: "vid-1", media_url: "https://example.test/v.mp4" }] as never,
@@ -112,15 +112,15 @@ describe("collectSpreadMedia — device tier (ADR-057)", () => {
     });
     const items = collectSpreadMedia(spread, "en_US", "en_US", "dynamic");
     expect(items).toEqual([
-      { url: "https://example.test/a.png?tier=web", kind: "image", channel: undefined },
-      { url: "https://example.test/animated.webp?tier=web", kind: "auto_pic_img", channel: undefined },
-      { url: "https://example.test/v.mp4?tier=web", kind: "video", channel: undefined },
+      { url: "https://example.test/a.png?quality=2240", kind: "image", channel: undefined },
+      { url: "https://example.test/animated.webp?quality=2240", kind: "auto_pic_img", channel: undefined },
+      { url: "https://example.test/v.mp4?quality=2240", kind: "video", channel: undefined },
       { url: "https://example.test/s.mp3", kind: "audio", channel: "sfx" },
     ]);
   });
 
-  it("appends tier to the classic effective static url", () => {
-    setActiveMediaTier("mobile");
+  it("appends quality to the classic effective static url", () => {
+    setActiveMediaQuality(1600);
     const spread = baseSpread({
       auto_pics: [
         {
@@ -133,10 +133,10 @@ describe("collectSpreadMedia — device tier (ADR-057)", () => {
       ] as never,
     });
     const items = collectSpreadMedia(spread, "en_US", "en_US", "classic");
-    expect(items).toEqual([{ url: "https://example.test/static.png?tier=mobile", kind: "auto_pic_img", channel: undefined }]);
+    expect(items).toEqual([{ url: "https://example.test/static.png?quality=1600", kind: "auto_pic_img", channel: undefined }]);
   });
 
-  it("leaves every URL untouched when no tier is active", () => {
+  it("leaves every URL untouched when no quality is active", () => {
     const spread = baseSpread({
       images: [{ id: "img-1", media_url: "https://example.test/a.png" }] as never,
     });

@@ -21,31 +21,30 @@ export type PlayerErrorCode =
   | 'NETWORK'
   | 'SERVER';
 
-import type { DeviceTier } from '@/features/editor/components/playable-spread-view/media-tier';
-
 /** Options the parent may pass with `player:init`. Fragment carries ONLY the token. */
 export interface PlayerInitOptions {
   language?: string;
   edition?: 'classic' | 'dynamic' | 'interactive';
   startSpreadId?: string;
   autoplay?: boolean;
-  /** Media rendition tier override (ADR-057). Absent → sub-app detects from viewport × DPR. */
-  deviceTier?: DeviceTier;
+  /** Media rendition quality override — convert-width in px (ADR-057). Absent →
+   *  sub-app detects from viewport × DPR. Out-of-ladder values pass through:
+   *  nginx serves the nearest larger rendition, falling back to the original. */
+  mediaQuality?: number;
 }
 
-const DEVICE_TIERS: ReadonlySet<string> = new Set(['mobile', 'web', 'ipad']);
-
 /**
- * Sanitize untrusted init options before dispatch. Currently only `deviceTier`
- * needs a value gate (it feeds URL construction) — an unknown value is dropped
- * so the viewer falls back to viewport detection instead of crashing/leaking.
+ * Sanitize untrusted init options before dispatch. Only `mediaQuality` needs a
+ * gate (it feeds URL construction) — a non-number is dropped so the viewer falls
+ * back to viewport detection instead of appending garbage. Any numeric value is
+ * accepted: unknown widths resolve safely at the nginx layer (per ADR-057 rev 3).
  */
 export function sanitizePlayerInitOptions(
   options: PlayerInitOptions | undefined,
 ): PlayerInitOptions | undefined {
   if (!options) return options;
-  if (options.deviceTier !== undefined && !DEVICE_TIERS.has(options.deviceTier)) {
-    const { deviceTier: _invalid, ...rest } = options;
+  if (options.mediaQuality !== undefined && typeof options.mediaQuality !== 'number') {
+    const { mediaQuality: _invalid, ...rest } = options;
     return rest;
   }
   return options;

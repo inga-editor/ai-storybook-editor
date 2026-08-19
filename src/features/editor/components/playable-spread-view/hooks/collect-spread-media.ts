@@ -10,7 +10,7 @@ import type { PlayableSpread, PlayEdition } from '@/types/playable-types';
 import type { SpreadTextboxContent } from '@/types/spread-types';
 import { EFFECT_TYPE } from '@/constants/playable-constants';
 import { resolveEffectiveStaticUrl } from '@/features/editor/components/playable-spread-view/resolve-auto-pic-display-source';
-import { applyMediaTier } from '@/features/editor/components/playable-spread-view/media-tier';
+import { applyMediaQuality } from '@/features/editor/components/playable-spread-view/media-quality';
 import { getTextboxContentForLanguage } from '@/features/editor/utils/textbox-helpers';
 import { createLogger } from '@/utils/logger';
 import type { AudioChannel } from '@/features/editor/components/playable-spread-view/audio/audio-mixer-types';
@@ -75,10 +75,10 @@ export function collectSpreadMedia(
     channel?: AudioChannel,
   ): void => {
     if (typeof url === 'string' && url.length > 0) {
-      // Device-tier rendition (ADR-057): visual kinds must warm the exact URL
-      // the render path will request (Editable* also applies the tier). Audio
-      // has no renditions — keep the original URL and its immutable cache.
-      items.push({ url: kind === 'audio' ? url : applyMediaTier(url), kind, channel });
+      // Quality rendition (ADR-057): visual kinds must warm the exact URL the
+      // render path will request (Editable* also applies the quality). Audio has
+      // no renditions — keep the original URL and its immutable cache.
+      items.push({ url: kind === 'audio' ? url : applyMediaQuality(url), kind, channel });
     }
   };
 

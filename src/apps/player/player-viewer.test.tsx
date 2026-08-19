@@ -32,13 +32,13 @@ vi.mock('@/features/editor/components/playable-spread-view/playable-spread-view'
   PlayableSpreadView: ({
     spreads,
     onSpreadSelect,
-    mediaTier,
+    mediaQuality,
   }: {
     spreads: { id: string }[];
     onSpreadSelect?: (id: string) => void;
-    mediaTier?: string;
+    mediaQuality?: number;
   }) => (
-    <div data-testid="spread-view" data-media-tier={mediaTier}>
+    <div data-testid="spread-view" data-media-quality={mediaQuality}>
       {spreads.map((sp) => (
         <button key={sp.id} data-testid={`sel-${sp.id}`} onClick={() => onSpreadSelect?.(sp.id)}>
           {sp.id}
@@ -111,21 +111,21 @@ describe('PlayerViewer lifecycle', () => {
   });
 });
 
-describe('PlayerViewer media tier wiring (ADR-057)', () => {
-  it('forwards options.deviceTier to PlayableSpreadView', () => {
+describe('PlayerViewer media quality wiring (ADR-057)', () => {
+  it('forwards options.mediaQuality to PlayableSpreadView', () => {
     render(
-      <PlayerViewer payload={makePayload()} options={{ deviceTier: 'ipad' }} onEvent={vi.fn()} />,
+      <PlayerViewer payload={makePayload()} options={{ mediaQuality: 2752 }} onEvent={vi.fn()} />,
     );
-    expect(screen.getByTestId('spread-view')).toHaveAttribute('data-media-tier', 'ipad');
+    expect(screen.getByTestId('spread-view')).toHaveAttribute('data-media-quality', '2752');
   });
 
-  it('falls back to detectDeviceTier when options omit deviceTier', () => {
+  it('falls back to detectMediaQuality when options omit mediaQuality', () => {
     vi.stubGlobal('innerWidth', 1920);
     vi.stubGlobal('innerHeight', 1080);
     vi.stubGlobal('devicePixelRatio', 1);
     try {
       render(<PlayerViewer payload={makePayload()} options={{}} onEvent={vi.fn()} />);
-      expect(screen.getByTestId('spread-view')).toHaveAttribute('data-media-tier', 'web');
+      expect(screen.getByTestId('spread-view')).toHaveAttribute('data-media-quality', '2240');
     } finally {
       vi.unstubAllGlobals();
     }

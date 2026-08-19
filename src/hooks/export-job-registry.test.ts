@@ -96,15 +96,15 @@ describe('buildLeafRefsFromDistribution', () => {
     expect(buildLeafRefsFromDistribution('book', 'book-1', dist).size).toBe(0);
   });
 
-  it('maps exporting player tier leaves — one job 18 → up to 3 refs (ADR-057)', () => {
+  it('maps exporting player quality leaves — one job 18 → up to 3 refs (ADR-057)', () => {
     const dist = distWith((d) => {
-      d.player.web = { ...d.player.web, status: 'exporting', job_id: 'job-18' };
-      d.player.mobile = { ...d.player.mobile, status: 'exporting', job_id: 'job-18' };
-      // ipad unchecked → handler never claimed it; stays pending, no job_id.
+      d.player['1600'] = { ...d.player['1600'], status: 'exporting', job_id: 'job-18' };
+      d.player['2240'] = { ...d.player['2240'], status: 'exporting', job_id: 'job-18' };
+      // 2752 unchecked → handler never claimed it; stays pending, no job_id.
     });
 
     const map = buildLeafRefsFromDistribution('remix', 'remix-1', dist);
-    expect(map.get('job-18')?.map((r) => r.leafKey).sort()).toEqual(['mobile', 'web']);
+    expect(map.get('job-18')?.map((r) => r.leafKey).sort()).toEqual(['1600', '2240']);
     expect(
       map.get('job-18')?.every(
         (r) => r.channelKey === 'player' && r.sourceKind === 'remix' && r.sourceId === 'remix-1',

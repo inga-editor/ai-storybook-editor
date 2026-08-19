@@ -32,8 +32,8 @@ import { BranchPathModal } from "./branch-path-modal";
 import { FirstGestureGate } from "./first-gesture-gate";
 import { PlayerAudioMixerHost } from "./audio/player-audio-mixer-host";
 import { PlayerSpreadPreloadHost } from "./preload/player-spread-preload-host";
-import { MediaTierHost } from "./media-tier-host";
-import type { DeviceTier } from "./media-tier";
+import { MediaQualityHost } from "./media-quality-host";
+import type { MediaQuality } from "./media-quality";
 import { BookBackgroundMusicPlayer } from "./audio/book-background-music-player";
 import { useMusicMediaUrl } from "./audio/use-music-media-url";
 import { useSoundMediaUrl } from "./audio/use-sound-media-url";
@@ -115,11 +115,12 @@ interface PlayableSpreadViewProps {
    */
   sourceKey?: string;
   /**
-   * Device tier for media rendition resolve (ADR-057). When set, mounts
-   * MediaTierHost so render/preload call sites append `?tier=` to visual media
-   * URLs. Omit in edit-modes and video render — original URLs are served.
+   * Media quality (convert-width) for rendition resolve (ADR-057). When set,
+   * mounts MediaQualityHost so render/preload call sites append `?quality=` to
+   * visual media URLs. Omit in edit-modes and video render — original URLs are
+   * served.
    */
-  mediaTier?: DeviceTier;
+  mediaQuality?: MediaQuality;
 }
 
 const KEYBOARD_SHORTCUTS = {
@@ -143,7 +144,7 @@ export const PlayableSpreadView: React.FC<PlayableSpreadViewProps> = ({
   isSharePreview = false,
   selectedSpreadId: propSelectedSpreadId,
   sourceKey,
-  mediaTier,
+  mediaQuality,
 }) => {
 
   // === Internal State ===
@@ -480,12 +481,12 @@ export const PlayableSpreadView: React.FC<PlayableSpreadViewProps> = ({
   // === Render ===
   return (
     <div ref={rootRef} className="relative flex flex-col h-full">
-      {/* Media tier host — mounted only when the host surface specifies a tier
-          (player sub-app / preview / share-preview). Unmount resets tier to null.
-          MUST stay BEFORE PlayerSpreadPreloadHost: the tier is set in an effect,
-          and sibling effects run in mount order — the preload collector reads
-          the singleton and must see the tier already applied. */}
-      {mediaTier && <MediaTierHost tier={mediaTier} />}
+      {/* Media quality host — mounted only when the host surface specifies a
+          quality (player sub-app / preview / share-preview). Unmount resets it to
+          null. MUST stay BEFORE PlayerSpreadPreloadHost: the quality is set in an
+          effect, and sibling effects run in mount order — the preload collector
+          reads the singleton and must see the quality already applied. */}
+      {mediaQuality != null && <MediaQualityHost quality={mediaQuality} />}
 
       {/* Player audio mixer host — always mounted (pure player component). */}
       <PlayerAudioMixerHost

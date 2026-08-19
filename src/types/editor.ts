@@ -360,7 +360,7 @@ export interface ExportVariantLeaf {
   last_job_id: string | null;
 }
 
-export type PlayerKey = 'web' | 'mobile' | 'ipad';
+export type PlayerQualityKey = '1600' | '2240' | '2752';
 export type DigitalKey = 'epub' | 'pdf';
 export type PrinterKey = '600dpi' | '300dpi';
 export type VideoResKey = 'sd' | 'hd' | 'fhd' | 'qhd';
@@ -375,7 +375,7 @@ export interface VideoDistributionEntry {
 }
 
 export interface Distribution {
-  player: Record<PlayerKey, ExportVariantLeaf>;
+  player: Record<PlayerQualityKey, ExportVariantLeaf>; // bracket access: dist.player['1600']
   digital: Record<DigitalKey, ExportVariantLeaf>;
   printer: Record<PrinterKey, ExportVariantLeaf>; // bracket access: dist.printer['300dpi']
   videos: VideoDistributionEntry[];

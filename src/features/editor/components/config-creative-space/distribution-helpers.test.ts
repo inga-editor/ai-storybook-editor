@@ -17,12 +17,12 @@ import type { Distribution, ExportVariantLeaf } from '@/types/editor';
 describe('coalesceDistribution', () => {
   it('null → full DEFAULT shape with all leaves + 2 video entries', () => {
     const d = coalesceDistribution(null);
-    expect(Object.keys(d.player)).toEqual(['web', 'mobile', 'ipad']);
+    expect(Object.keys(d.player)).toEqual(['1600', '2240', '2752']);
     expect(Object.keys(d.digital)).toEqual(['epub', 'pdf']);
     expect(Object.keys(d.printer)).toEqual(['600dpi', '300dpi']);
     expect(d.videos.map((v) => v.type)).toEqual(['classic', 'dynamic']);
     // every leaf defaulted
-    expect(d.player.web).toEqual(makeDefaultLeaf());
+    expect(d.player['1600']).toEqual(makeDefaultLeaf());
     expect(d.printer['300dpi'].status).toBe('pending');
     expect(d.printer['300dpi'].is_enabled).toBe(true);
     expect(d.printer['300dpi'].media_url).toBeNull();
@@ -138,8 +138,8 @@ describe('V1_EXPORT_CAPABILITY gating', () => {
     expect(V1_EXPORT_CAPABILITY.printer.exportableLeafKeys).toEqual(['300dpi']);
     expect(V1_EXPORT_CAPABILITY.printer.disabledLeafKeys).toEqual(['600dpi']);
   });
-  it('player: all 3 tiers export-able (job 18, ADR-057); none disabled', () => {
-    expect(V1_EXPORT_CAPABILITY.player.exportableLeafKeys).toEqual(['web', 'mobile', 'ipad']);
+  it('player: all 3 qualities export-able (job 18, ADR-057); none disabled', () => {
+    expect(V1_EXPORT_CAPABILITY.player.exportableLeafKeys).toEqual(['1600', '2240', '2752']);
     expect(V1_EXPORT_CAPABILITY.player.disabledLeafKeys).toEqual([]);
   });
   it('digital has no export-able leaves in v1', () => {

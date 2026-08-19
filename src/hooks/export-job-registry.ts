@@ -34,13 +34,13 @@ export interface LeafRef {
   sourceKind: 'book' | 'remix';
   sourceId: string;
   channelKey: 'printer' | 'video' | 'player';
-  leafKey: string; // '300dpi' | '600dpi' | 'sd' | 'hd' | 'fhd' | 'qhd' | 'web' | 'mobile' | 'ipad'
+  leafKey: string; // '300dpi' | '600dpi' | 'sd' | 'hd' | 'fhd' | 'qhd' | '1600' | '2240' | '2752'
   videoType?: 'classic' | 'dynamic';
 }
 
 const PRINTER_LEAF_KEYS = ['600dpi', '300dpi'] as const;
 const VIDEO_LEAF_KEYS = ['sd', 'hd', 'fhd', 'qhd'] as const;
-const PLAYER_LEAF_KEYS = ['web', 'mobile', 'ipad'] as const;
+const PLAYER_LEAF_KEYS = ['1600', '2240', '2752'] as const;
 
 /** Scan one source's (coalesced) distribution → LeafRefs grouped by job_id, for
  *  every printer/video/player leaf that is `exporting` and carries a job_id.

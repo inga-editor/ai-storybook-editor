@@ -127,7 +127,7 @@ describe('enqueueExportPlayerMedia — routes + 3-way union guards (job 18)', ()
     };
     const enqueued = {
       job_id: 'j18', status: 'queued' as const, type: 'export_player_media' as const,
-      source: 'book' as const, book_id: 'book-1', tiers: ['web'],
+      source: 'book' as const, book_id: 'book-1', qualities: [1600],
       total_steps: 3, sources_found: 3, estimated_duration_sec: 1,
     };
     expect(isExportPlayerMediaSkipped(skipped)).toBe(true);

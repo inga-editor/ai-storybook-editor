@@ -6,7 +6,7 @@ import { Video, Loader2 } from "lucide-react";
 import { cn } from "@/utils/utils";
 import type { SpreadVideo } from "@/types/spread-types";
 import { COLORS, DIMMED_BY_OVERLAP_OPACITY } from "@/constants/spread-constants";
-import { applyMediaTier } from "@/features/editor/components/playable-spread-view/media-tier";
+import { applyMediaQuality } from "@/features/editor/components/playable-spread-view/media-quality";
 
 interface EditableVideoProps {
   video: SpreadVideo;
@@ -62,9 +62,9 @@ export function EditableVideo({
   }, []);
 
   const showVideo = video.media_url && !hasError;
-  // Device-tier rendition (ADR-057): rewrites only when a player tier is
-  // active (MediaTierHost mounted) — edit canvases pass through unchanged.
-  const videoSrc = video.media_url ? applyMediaTier(video.media_url) : undefined;
+  // Quality rendition (ADR-057): rewrites only when a player quality is active
+  // (MediaQualityHost mounted) — edit canvases pass through unchanged.
+  const videoSrc = video.media_url ? applyMediaQuality(video.media_url) : undefined;
 
   return (
     <div

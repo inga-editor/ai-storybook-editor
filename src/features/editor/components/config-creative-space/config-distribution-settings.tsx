@@ -320,8 +320,8 @@ export function ConfigDistributionSettings() {
           : await startRemixRenderVideo(src.id, opts);
       }
       if (channelKey === 'player') {
-        // ADR-057 job 18: empty body — the handler reads target tiers from
-        // player.{tier}.is_enabled (persisted above by ensureSaved).
+        // ADR-057 job 18: empty body — the handler reads target qualities from
+        // player.{quality}.is_enabled (persisted above by ensureSaved).
         log.info('handleExportChannel', 'start export-player-media', {
           kind: src.kind,
           id: src.id,

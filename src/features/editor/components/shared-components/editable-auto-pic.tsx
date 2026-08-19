@@ -9,7 +9,7 @@ import { COLORS, DIMMED_BY_OVERLAP_OPACITY } from "@/constants/spread-constants"
 import { createLogger } from "@/utils/logger";
 import { useZoomLevel } from "@/stores/editor-settings-store";
 import type { AutoPicDisplaySource } from "@/features/editor/components/playable-spread-view/resolve-auto-pic-display-source";
-import { applyMediaTier } from "@/features/editor/components/playable-spread-view/media-tier";
+import { applyMediaQuality } from "@/features/editor/components/playable-spread-view/media-quality";
 
 const log = createLogger("Editor", "EditableAutoPic");
 
@@ -134,10 +134,10 @@ export function EditableAutoPic({
 
   const mediaKind = detectMediaKind(autoPic.media_url);
   const showMedia = !!autoPic.media_url && !hasError && mediaKind !== "unknown";
-  // Device-tier rendition (ADR-057): rewrites only when a player tier is
-  // active (MediaTierHost mounted) — edit canvases pass through unchanged.
+  // Quality rendition (ADR-057): rewrites only when a player quality is active
+  // (MediaQualityHost mounted) — edit canvases pass through unchanged.
   // `.riv` has no sibling rendition; the appended param is harmlessly ignored.
-  const tieredMediaUrl = autoPic.media_url ? applyMediaTier(autoPic.media_url) : undefined;
+  const qualityMediaUrl = autoPic.media_url ? applyMediaQuality(autoPic.media_url) : undefined;
 
   const handleClick = useCallback(
     (e: React.MouseEvent) => {
@@ -201,7 +201,7 @@ export function EditableAutoPic({
         // Edition classic — render the resolved static image only. No animated
         // runtime (lottie/riv/video) is mounted regardless of media_url.
         <img
-          src={applyMediaTier(displaySource.url)}
+          src={applyMediaQuality(displaySource.url)}
           alt={autoPic.title || ""}
           className="w-full h-full object-contain"
         />
@@ -224,7 +224,7 @@ export function EditableAutoPic({
           {mediaKind === "webp" ? (
             // Animated WebP loops natively — same element for full and thumbnail modes
             <img
-              src={tieredMediaUrl}
+              src={qualityMediaUrl}
               alt={autoPic.title || ""}
               className="w-full h-full object-contain"
               onLoad={handleLoaded}
@@ -233,7 +233,7 @@ export function EditableAutoPic({
           ) : mediaKind === "lottie" ? (
             <Suspense fallback={lazyFallback}>
               <DotLottiePlayer
-                src={tieredMediaUrl!}
+                src={qualityMediaUrl!}
                 isThumbnail={isThumbnail}
                 options={autoPic.lottie}
                 onLoad={handleLoaded}
@@ -243,7 +243,7 @@ export function EditableAutoPic({
           ) : mediaKind === "riv" ? (
             <Suspense fallback={lazyFallback}>
               <RivePlayer
-                src={tieredMediaUrl!}
+                src={qualityMediaUrl!}
                 isThumbnail={isThumbnail}
                 options={autoPic.rive}
                 onLoad={handleLoaded}
@@ -256,7 +256,7 @@ export function EditableAutoPic({
             // onLoadedData may not fire when the browser stops after metadata.
             isThumbnail ? (
               <video
-                src={tieredMediaUrl}
+                src={qualityMediaUrl}
                 className="w-full h-full object-contain"
                 preload="metadata"
                 muted
@@ -266,7 +266,7 @@ export function EditableAutoPic({
               />
             ) : (
               <video
-                src={tieredMediaUrl}
+                src={qualityMediaUrl}
                 className="w-full h-full object-contain"
                 autoPlay
                 muted

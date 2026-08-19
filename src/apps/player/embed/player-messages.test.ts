@@ -44,18 +44,20 @@ describe('sanitizePlayerInitOptions', () => {
     expect(sanitizePlayerInitOptions(undefined)).toBeUndefined();
   });
 
-  it('keeps a valid deviceTier', () => {
-    expect(sanitizePlayerInitOptions({ deviceTier: 'mobile' })).toEqual({ deviceTier: 'mobile' });
-    expect(sanitizePlayerInitOptions({ deviceTier: 'web' })).toEqual({ deviceTier: 'web' });
-    expect(sanitizePlayerInitOptions({ deviceTier: 'ipad' })).toEqual({ deviceTier: 'ipad' });
+  it('keeps a numeric mediaQuality (ladder values + out-of-ladder pass through)', () => {
+    expect(sanitizePlayerInitOptions({ mediaQuality: 1600 })).toEqual({ mediaQuality: 1600 });
+    expect(sanitizePlayerInitOptions({ mediaQuality: 2240 })).toEqual({ mediaQuality: 2240 });
+    expect(sanitizePlayerInitOptions({ mediaQuality: 2752 })).toEqual({ mediaQuality: 2752 });
+    // Out-of-ladder numbers are NOT rejected — nginx resolves them safely.
+    expect(sanitizePlayerInitOptions({ mediaQuality: 9999 })).toEqual({ mediaQuality: 9999 });
   });
 
-  it('drops an unknown deviceTier but keeps other options', () => {
-    const dirty = { language: 'vi', deviceTier: '4k' } as never;
+  it('drops a non-number mediaQuality but keeps other options', () => {
+    const dirty = { language: 'vi', mediaQuality: '2240' } as never;
     expect(sanitizePlayerInitOptions(dirty)).toEqual({ language: 'vi' });
   });
 
-  it('leaves options without deviceTier untouched', () => {
+  it('leaves options without mediaQuality untouched', () => {
     const opts = { language: 'vi', autoplay: true };
     expect(sanitizePlayerInitOptions(opts)).toBe(opts);
   });
