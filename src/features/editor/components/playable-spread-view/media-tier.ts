@@ -12,13 +12,14 @@
 //
 // Design source: ai-storybook-design/component/editor-page/shared/playable-spread-view/03-16-media-tier-resolve.md
 
-export type DeviceTier = 'mobile' | 'web' | 'ipad'; // pixel order: mobile 1760 < web 2240 < ipad 2656
+export type DeviceTier = 'mobile' | 'web' | 'ipad'; // pixel order: mobile 1600 < web 2240 < ipad 2752
 
 // Boundaries = the fleet gap between device classes (NOT midpoints between tier
-// widths): a desktop FHD viewport (1920) is 'web', an iPad Air (2360) is 'ipad'.
+// widths): a desktop FHD viewport (1920) is 'web', an iPad Pro 13" (2752) is
+// 'ipad'; the largest phones (1800–1912) intentionally step up to 'web'.
 // Strict `<` — the boundary value itself belongs to the larger tier.
-const WEB_MIN_PHYSICAL_WIDTH = 1920;
-const IPAD_MIN_PHYSICAL_WIDTH = 2360;
+const WEB_MIN_PHYSICAL_WIDTH = 1800;
+const IPAD_MIN_PHYSICAL_WIDTH = 2560;
 // DPR cap — beyond 2x the rendition gain is invisible (ADR-057 tier basis).
 const DEVICE_PIXEL_RATIO_CAP = 2;
 

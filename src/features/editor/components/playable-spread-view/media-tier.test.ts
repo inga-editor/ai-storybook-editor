@@ -50,23 +50,23 @@ describe('detectDeviceTier', () => {
     vi.stubGlobal('devicePixelRatio', dpr);
   }
 
-  it('<1920 physical → mobile (boundary 1919)', () => {
-    stubViewport(1919, 800, 1);
+  it('<1800 physical → mobile (boundary 1799)', () => {
+    stubViewport(1799, 800, 1);
     expect(detectDeviceTier()).toBe('mobile');
   });
 
-  it('1920 physical → web (boundary is strict <, FHD desktop is web)', () => {
-    stubViewport(1920, 1080, 1);
+  it('1800 physical → web (boundary is strict <, largest phones step up to web)', () => {
+    stubViewport(1800, 1080, 1);
     expect(detectDeviceTier()).toBe('web');
   });
 
-  it('<2360 physical → web (boundary 2359)', () => {
-    stubViewport(2359, 1080, 1);
+  it('<2560 physical → web (boundary 2559)', () => {
+    stubViewport(2559, 1080, 1);
     expect(detectDeviceTier()).toBe('web');
   });
 
-  it('2360 physical → ipad (boundary is strict <, iPad Air is ipad)', () => {
-    stubViewport(2360, 1640, 1);
+  it('2560 physical → ipad (boundary is strict <, QHD/iPad Pro 13" is ipad)', () => {
+    stubViewport(2560, 1640, 1);
     expect(detectDeviceTier()).toBe('ipad');
   });
 
@@ -76,7 +76,7 @@ describe('detectDeviceTier', () => {
   });
 
   it('uses the larger viewport dimension (orientation-independent)', () => {
-    stubViewport(800, 1919, 1); // portrait → still 1919
+    stubViewport(800, 1600, 1); // portrait → uses the 1600 long edge, not 800
     expect(detectDeviceTier()).toBe('mobile');
   });
 
