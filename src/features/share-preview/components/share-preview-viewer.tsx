@@ -3,7 +3,10 @@
 // (single source of truth shared with PlayerViewer) — this component only wires
 // those helpers into React effects/memos and renders PlayableSpreadView.
 import { useMemo, useEffect, useLayoutEffect } from 'react';
-import { PlayableSpreadView } from '@/features/editor/components/playable-spread-view';
+import {
+  PlayableSpreadView,
+  detectDeviceTier,
+} from '@/features/editor/components/playable-spread-view';
 import type { PlayableSpread } from '@/types/playable-types';
 import type { Section } from '@/types/illustration-types';
 import {
@@ -36,6 +39,10 @@ interface SharePreviewViewerProps {
 export function SharePreviewViewer({ book, snapshot, shareConfig }: SharePreviewViewerProps) {
   const setCanvasSize = useSetCanvasSize();
   const { initialize, teardown } = usePlaybackActions();
+
+  // Rendition tier resolved once at mount (parity PlayerViewer) — screen/DPR
+  // don't change mid-session; nginx falls back safely if the tier misses.
+  const mediaTier = useMemo(() => detectDeviceTier(), []);
 
   // Sync book dimension → canvas size store so PlayerCanvas renders at correct spread dimensions
   useEffect(() => {
@@ -119,8 +126,9 @@ export function SharePreviewViewer({ book, snapshot, shareConfig }: SharePreview
         availableLanguages={availableLanguages}
         pageNumbering={book.template_layout?.page_numbering}
         isSharePreview={true}
-        // Web-only surface — fixed 'web' rendition tier (ADR-057).
-        mediaTier="web"
+        // Share links open on any device (phones included) — detect the
+        // rendition tier from viewport × DPR (⚡260819, was fixed 'web').
+        mediaTier={mediaTier}
       />
     </div>
   );
