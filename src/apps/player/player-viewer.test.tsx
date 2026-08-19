@@ -120,7 +120,8 @@ describe('PlayerViewer media tier wiring (ADR-057)', () => {
   });
 
   it('falls back to detectDeviceTier when options omit deviceTier', () => {
-    vi.stubGlobal('screen', { width: 1920, height: 1080 } as Screen);
+    vi.stubGlobal('innerWidth', 1920);
+    vi.stubGlobal('innerHeight', 1080);
     vi.stubGlobal('devicePixelRatio', 1);
     try {
       render(<PlayerViewer payload={makePayload()} options={{}} onEvent={vi.fn()} />);

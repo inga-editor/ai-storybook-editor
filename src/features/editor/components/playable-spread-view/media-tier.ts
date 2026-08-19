@@ -12,11 +12,13 @@
 //
 // Design source: ai-storybook-design/component/editor-page/shared/playable-spread-view/03-16-media-tier-resolve.md
 
-export type DeviceTier = 'mobile' | 'web' | 'ipad'; // pixel order: mobile 1080 < web 1920 < ipad 2360
+export type DeviceTier = 'mobile' | 'web' | 'ipad'; // pixel order: mobile 1760 < web 2240 < ipad 2656
 
-// Thresholds = midpoints between tier widths (1080 / 1920 / 2360).
-const MOBILE_MAX_PHYSICAL_WIDTH = 1400;
-const WEB_MAX_PHYSICAL_WIDTH = 2100;
+// Boundaries = the fleet gap between device classes (NOT midpoints between tier
+// widths): a desktop FHD viewport (1920) is 'web', an iPad Air (2360) is 'ipad'.
+// Strict `<` — the boundary value itself belongs to the larger tier.
+const WEB_MIN_PHYSICAL_WIDTH = 1920;
+const IPAD_MIN_PHYSICAL_WIDTH = 2360;
 // DPR cap — beyond 2x the rendition gain is invisible (ADR-057 tier basis).
 const DEVICE_PIXEL_RATIO_CAP = 2;
 
@@ -41,15 +43,20 @@ export function applyMediaTier(url: string): string {
   return withTier(url, activeTier);
 }
 
-/** Detect tier from viewport × DPR (fallback when the host doesn't specify). */
+/** Detect tier from viewport × DPR (fallback when the host doesn't specify).
+ * Measures `window.innerWidth/innerHeight` (the actual layout box — correct for
+ * iframe embeds and resized windows) rather than `screen.*` (the whole display). */
 export function detectDeviceTier(): DeviceTier {
-  if (typeof screen === 'undefined') return 'web'; // SSR / test env
+  if (typeof window === 'undefined') return 'web'; // SSR / test env
   const dpr = Math.min(
     typeof devicePixelRatio === 'number' ? devicePixelRatio : 1,
     DEVICE_PIXEL_RATIO_CAP,
   );
-  const physicalW = Math.max(screen.width, screen.height) * dpr;
-  if (physicalW <= MOBILE_MAX_PHYSICAL_WIDTH) return 'mobile';
-  if (physicalW <= WEB_MAX_PHYSICAL_WIDTH) return 'web';
+  const physicalW = Math.max(window.innerWidth, window.innerHeight) * dpr;
+  // Non-finite (missing/NaN viewport) → 'web', the SSR default — never let NaN
+  // fall through the strict `<` checks into the heaviest 'ipad' tier.
+  if (!Number.isFinite(physicalW)) return 'web';
+  if (physicalW < WEB_MIN_PHYSICAL_WIDTH) return 'mobile';
+  if (physicalW < IPAD_MIN_PHYSICAL_WIDTH) return 'web';
   return 'ipad';
 }

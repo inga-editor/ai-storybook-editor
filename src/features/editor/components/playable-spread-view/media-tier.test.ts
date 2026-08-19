@@ -44,38 +44,44 @@ describe('active tier singleton', () => {
 });
 
 describe('detectDeviceTier', () => {
-  function stubScreen(width: number, height: number, dpr: number) {
-    vi.stubGlobal('screen', { width, height } as Screen);
+  function stubViewport(innerWidth: unknown, innerHeight: unknown, dpr: number) {
+    vi.stubGlobal('innerWidth', innerWidth);
+    vi.stubGlobal('innerHeight', innerHeight);
     vi.stubGlobal('devicePixelRatio', dpr);
   }
 
-  it('≤1400 physical → mobile', () => {
-    stubScreen(390, 844, 1); // 844 physical
+  it('<1920 physical → mobile (boundary 1919)', () => {
+    stubViewport(1919, 800, 1);
     expect(detectDeviceTier()).toBe('mobile');
   });
 
-  it('≤2100 physical → web', () => {
-    stubScreen(1920, 1080, 1); // 1920 physical
+  it('1920 physical → web (boundary is strict <, FHD desktop is web)', () => {
+    stubViewport(1920, 1080, 1);
     expect(detectDeviceTier()).toBe('web');
   });
 
-  it('>2100 physical → ipad', () => {
-    stubScreen(1366, 1024, 2); // 2732 physical
+  it('<2360 physical → web (boundary 2359)', () => {
+    stubViewport(2359, 1080, 1);
+    expect(detectDeviceTier()).toBe('web');
+  });
+
+  it('2360 physical → ipad (boundary is strict <, iPad Air is ipad)', () => {
+    stubViewport(2360, 1640, 1);
     expect(detectDeviceTier()).toBe('ipad');
   });
 
   it('caps DPR at 2', () => {
-    stubScreen(390, 844, 3); // 844 × 2 = 1688 → web (not 2532 → ipad)
+    stubViewport(1000, 600, 3); // 1000 × 2 = 2000 → web (not 3000 → ipad)
     expect(detectDeviceTier()).toBe('web');
   });
 
-  it('uses the larger screen dimension (orientation-independent)', () => {
-    stubScreen(844, 390, 1); // landscape phone → still 844
+  it('uses the larger viewport dimension (orientation-independent)', () => {
+    stubViewport(800, 1919, 1); // portrait → still 1919
     expect(detectDeviceTier()).toBe('mobile');
   });
 
-  it('defaults to web when screen is unavailable (SSR/test env)', () => {
-    vi.stubGlobal('screen', undefined);
+  it('defaults to web when the viewport is unavailable (SSR/NaN guard)', () => {
+    stubViewport(undefined, undefined, 1); // max(undefined,undefined)*dpr = NaN → web
     expect(detectDeviceTier()).toBe('web');
   });
 });
