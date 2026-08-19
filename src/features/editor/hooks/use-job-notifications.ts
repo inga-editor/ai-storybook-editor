@@ -18,6 +18,10 @@ import {
   type JobEvent,
 } from '@/stores/background-jobs-store';
 import { useRemixStore } from '@/stores/remix-store';
+import {
+  useJobWarningModalStore,
+  type JobResultError,
+} from '@/stores/job-warning-modal-store';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('App', 'JobNotifications');
@@ -31,8 +35,17 @@ type Tone = 'success' | 'error' | 'info' | 'warning';
 interface ToastCopy {
   tone: Tone;
   message: string;
+  /** result.errors snapshot → toast gets a "Xem chi tiết" action opening the
+   *  JobWarningDetailModal (mirror sketch-spread generate notifications). */
+  errors?: JobResultError[];
   /** Clean-complete success → schedule 30s shared removeJob so the badge clears. */
   autoDismiss?: boolean;
+}
+
+function resultErrors(job: BackgroundJob): JobResultError[] {
+  const errors = (job.result as { errors?: unknown[] } | null)?.errors;
+  if (!Array.isArray(errors)) return [];
+  return errors.filter((e): e is JobResultError => e != null && typeof e === 'object');
 }
 
 /** Resolve a remix's display name via the RemixStore; generic fallback when the
@@ -141,11 +154,17 @@ function exportCopy(job: BackgroundJob): ToastCopy {
           ? 'Player media'
           : 'Video qualities';
 
+  const errors = resultErrors(job);
+
   switch (job.status) {
     case 'completed': {
-      const result = (job.result ?? {}) as { errors?: unknown[] };
-      const errs = Array.isArray(result.errors) ? result.errors.length : 0;
-      if (errs > 0) return { tone: 'warning', message: `${kind} finished with ${errs} warnings.` };
+      if (errors.length > 0) {
+        return {
+          tone: 'warning',
+          message: `${kind} finished with ${errors.length} warnings.`,
+          errors,
+        };
+      }
       const okMsg =
         job.type === 'export_pdf'
           ? 'PDF exported.'
@@ -157,7 +176,11 @@ function exportCopy(job: BackgroundJob): ToastCopy {
       return { tone: 'success', message: okMsg };
     }
     case 'failed':
-      return { tone: 'error', message: `${kind} failed.` };
+      return {
+        tone: 'error',
+        message: `${kind} failed.`,
+        errors: errors.length > 0 ? errors : undefined,
+      };
     case 'cancelled':
       return { tone: 'info', message: `${kind} cancelled.` };
     default:
@@ -169,12 +192,15 @@ function exportCopy(job: BackgroundJob): ToastCopy {
  *  row updates + snapshot refetch; this GLOBAL toast covers the "user navigated
  *  away" case (ADR-037 — one toast hook for all jobs). */
 function spreadThumbnailCopy(job: BackgroundJob): ToastCopy {
-  const result = (job.result ?? {}) as { errors?: unknown[] };
-  const errs = Array.isArray(result.errors) ? result.errors.length : 0;
+  const errors = resultErrors(job);
   switch (job.status) {
     case 'completed':
-      if (errs > 0) {
-        return { tone: 'warning', message: `Thumbnails finished with ${errs} warnings.` };
+      if (errors.length > 0) {
+        return {
+          tone: 'warning',
+          message: `Thumbnails finished with ${errors.length} warnings.`,
+          errors,
+        };
       }
       return { tone: 'success', message: 'Thumbnails generated.', autoDismiss: true };
     case 'failed':
@@ -206,7 +232,27 @@ export function useJobNotifications(): void {
         status: e.job.status,
         tone: copy.tone,
       });
-      toast[copy.tone](copy.message);
+      if (copy.errors && copy.errors.length > 0) {
+        // Snapshot for the modal + console (survives job removal from the store).
+        const { message, errors } = copy;
+        log.warn('toast', 'job finished with warnings', {
+          jobId: e.job.id,
+          type: e.job.type,
+          errors,
+        });
+        // Does NOT auto-dismiss (mirror sketch-spread chốt validation): the
+        // toast is the ONLY entry point into the warning-detail modal.
+        toast[copy.tone](message, {
+          duration: Infinity,
+          closeButton: true,
+          action: {
+            label: 'Xem chi tiết',
+            onClick: () => useJobWarningModalStore.getState().open(message, errors),
+          },
+        });
+      } else {
+        toast[copy.tone](copy.message);
+      }
 
       // Sprite-swap terminal — refetch the authoritative remix so the updated
       // `sprites` blob (carrying is_final winners) lands even when the modal is

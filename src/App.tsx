@@ -21,6 +21,7 @@ import { useArtStylesActions } from '@/stores/art-styles-store';
 import { useBackgroundJobsStore } from '@/stores/background-jobs-store';
 import { useJobNotifications } from '@/features/editor/hooks/use-job-notifications';
 import { SketchNormalizeConsentHost } from '@/features/editor/components/sketch-normalize-consent-host';
+import { JobWarningDetailModal } from '@/features/editor/components/job-warning-detail-modal';
 
 const SharePreviewPage = lazy(() =>
   import('@/features/share-preview').then((m) => ({ default: m.SharePreviewPage }))
@@ -116,6 +117,9 @@ export default function App() {
       {/* ADR-047: consent modal for unreadable sketch resources — app-root like the Toaster so it
           survives navigation; renders nothing while no resource is degraded. */}
       <SketchNormalizeConsentHost />
+      {/* Warning-detail modal for background-job toasts ("Xem chi tiết" action)
+          — app-root like the Toaster; renders nothing while closed. */}
+      <JobWarningDetailModal />
       <BrowserRouter>
         <Routes>
         <Route path="/login" element={<LoginPage />} />
