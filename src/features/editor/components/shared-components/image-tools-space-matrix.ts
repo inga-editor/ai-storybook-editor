@@ -16,8 +16,9 @@
 // (`o`) slot, so a modal body never renders an 'unavailable' panel.
 //
 // Keys reuse the existing modal enums verbatim (no new types). Extract uses the modal's own
-// keys (`background`/`lottie`, not `get_background`/`get_lottie`) so it stays type-checked
-// against EXTRACT_TABS. Type-only imports → no runtime import cycle with the modal constants.
+// keys (`background`, not `get_background`) so it stays type-checked against EXTRACT_TABS.
+// (`lottie` was repointed to a standalone ExtractLottieModal — no longer an Extract tab.)
+// Type-only imports → no runtime import cycle with the modal constants.
 
 import type { GenerateModalMode } from './generate-image-modal/generate-image-modal-constants';
 import type { EditToolKey } from './edit-image-modal/edit-image-modal-constants';
@@ -46,7 +47,7 @@ export const SPACE_TOOL_MATRIX: Record<ToolSpace, SpaceToolConfig> = {
     // ['upload','generate'] (one line) once it no longer hard-binds the illustration store.
     generate: ['upload'],
     edit: ['inpaint', 'outpaint', 'upscale', 'remove_object', 'remove_background', 'erasor'], // NO remove_text
-    extract: ['segment', 'layering', 'crop', 'get_object', 'background', 'lottie'],            // NO get_text
+    extract: ['segment', 'layering', 'crop', 'get_object', 'background'],            // NO get_text; lottie → standalone ExtractLottieModal
   },
   remix: { // Phase 1: Edit-only image toolbar wired in RemixDisplayCanvasArea (Generate = Phase 2).
     generate: ['upload'],

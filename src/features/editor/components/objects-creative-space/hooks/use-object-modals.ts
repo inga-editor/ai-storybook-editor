@@ -37,6 +37,8 @@ export interface UseObjectModalsReturn {
     spreadId: string;
     initialTab: ExtractTabKey;
   };
+  /** Standalone ExtractLottieModal (cut image → parts → static .lottie v2 rig + auto_pic spawn). */
+  lottie: { open: boolean; image: SpreadImage | null; spreadId: string };
   editAudio: {
     open: boolean;
     item: SpreadAudio | SpreadAutoAudio | null;
@@ -59,6 +61,8 @@ export interface UseObjectModalsReturn {
   closeEdit: (open: boolean) => void;
   openExtract: (img: SpreadImage, initialTab?: ExtractTabKey) => void;
   closeExtract: (open: boolean) => void;
+  openLottie: (img: SpreadImage) => void;
+  closeLottie: () => void;
   openEditAudio: (
     item: SpreadAudio | SpreadAutoAudio,
     kind: EditAudioKind
@@ -99,6 +103,11 @@ export function useObjectModals(
   const [extractSpreadId, setExtractSpreadId] = useState<string>("");
   const [extractInitialTab, setExtractInitialTab] =
     useState<ExtractTabKey>("get_object");
+
+  // Extract-Lottie modal (standalone — cut parts → .lottie v2 + auto_pic spawn)
+  const [lottieOpen, setLottieOpen] = useState(false);
+  const [lottieImage, setLottieImage] = useState<SpreadImage | null>(null);
+  const [lottieSpreadId, setLottieSpreadId] = useState<string>("");
 
   // Edit audio modal — covers audio + auto_audio (discriminated via kind)
   const [editAudioOpen, setEditAudioOpen] = useState(false);
@@ -164,6 +173,22 @@ export function useObjectModals(
   const closeExtract = useCallback((open: boolean) => {
     setExtractOpen(open);
     if (!open) setExtractImage(null);
+  }, []);
+
+  const openLottie = useCallback(
+    (img: SpreadImage) => {
+      setLottieImage(img);
+      setLottieSpreadId(selectedSpreadId);
+      setLottieOpen(true);
+    },
+    [selectedSpreadId]
+  );
+
+  const closeLottie = useCallback(() => {
+    setLottieOpen(false);
+    setLottieImage(null);
+    // Clear the captured spread too — a stale id would survive into the next open (parity closeSlot).
+    setLottieSpreadId("");
   }, []);
 
   const openEditAudio = useCallback(
@@ -286,6 +311,7 @@ export function useObjectModals(
       spreadId: extractSpreadId,
       initialTab: extractInitialTab,
     },
+    lottie: { open: lottieOpen, image: lottieImage, spreadId: lottieSpreadId },
     editAudio: {
       open: editAudioOpen,
       item: editAudioItem,
@@ -304,6 +330,8 @@ export function useObjectModals(
     closeEdit,
     openExtract,
     closeExtract,
+    openLottie,
+    closeLottie,
     openEditAudio,
     closeEditAudio,
     openSlot,

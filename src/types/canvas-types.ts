@@ -421,6 +421,9 @@ export interface ImageToolbarContext<TSpread extends BaseSpread>
   onEditImage?: () => void;
   /** Open the consolidated ExtractImageModal (Objects / Segments / Layers / Background). */
   onExtractImage?: () => void;
+  /** Open the standalone ExtractLottieModal (cut image into parts → static .lottie v2 rig).
+   *  Objects-space only. Absent → toolbar hides the button (never-hide → renders disabled). */
+  onExtractLottie?: () => void;
   onReplaceImage: () => void;
   onClone?: () => void;
   /** Open the item slot modal (init) or route to the edit-slot modal when the item

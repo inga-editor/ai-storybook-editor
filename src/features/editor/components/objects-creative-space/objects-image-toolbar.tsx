@@ -14,7 +14,7 @@ import {
 import {
   TooltipProvider,
 } from "@/components/ui/tooltip";
-import { Sparkles, Pencil, Layers, Copy, Trash2 } from "lucide-react";
+import { Sparkles, Pencil, Layers, Copy, Trash2, Disc } from "lucide-react";
 import { toast } from "sonner";
 import {
   useToolbarPosition,
@@ -30,6 +30,8 @@ import {
   ToolbarIconButton,
 } from "@/features/editor/components/shared-components";
 import { ItemTagsSection } from "@/features/editor/components/objects-creative-space/item-tags-section";
+// Util-only import (NOT the extract barrel) — keeps the modal component out of the toolbar chunk.
+import { resolveSourceImageUrl } from "@/features/editor/components/shared-components/extract-image-modal/extract-image-modal-utils";
 import {
   ItemSlotSection,
   ItemSlotToolbarButton,
@@ -68,6 +70,7 @@ export function ObjectsImageToolbar<TSpread extends BaseSpread>({
     onGenerateImage,
     onEditImage,
     onExtractImage,
+    onExtractLottie,
     onClone,
     onConfigureSlot,
     selectedGeometry,
@@ -173,6 +176,18 @@ export function ObjectsImageToolbar<TSpread extends BaseSpread>({
       toast.info("Extract feature not available");
     }
   }, [onExtractImage]);
+
+  // Lottie extract needs a resolvable source image (media_url / selected illustration). Absent →
+  // button renders disabled with a why-tooltip (never-hide convention).
+  const lottieSource = resolveSourceImageUrl(item);
+  const handleExtractLottie = useCallback(() => {
+    if (onExtractLottie) {
+      log.info("handleExtractLottie", "open lottie modal", { itemId: item.id });
+      onExtractLottie();
+    } else {
+      toast.info("Coming soon");
+    }
+  }, [onExtractLottie, item.id]);
 
   const handleDuplicate = useCallback(() => {
     if (onClone) {
@@ -285,6 +300,12 @@ export function ObjectsImageToolbar<TSpread extends BaseSpread>({
               icon={Layers}
               label="Extract"
               onClick={handleExtract}
+            />
+            <ToolbarIconButton
+              icon={Disc}
+              label={lottieSource ? "Extract Lottie" : "No image to extract"}
+              onClick={handleExtractLottie}
+              disabled={!lottieSource}
             />
             <ToolbarIconButton
               icon={Copy}

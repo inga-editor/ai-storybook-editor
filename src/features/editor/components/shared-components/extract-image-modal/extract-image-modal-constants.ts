@@ -4,7 +4,7 @@
 // SplitImageModal. Layout/theme/z-index are REUSED from the swap modal (design §2.6);
 // this module only carries extract-specific types + option lists + numeric ranges.
 
-import { Tag, Type, Crop, Box, Layers, Image as ImageIcon, Disc } from 'lucide-react';
+import { Tag, Type, Crop, Box, Layers, Image as ImageIcon } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { ASPECT_RATIOS, type AspectRatio } from '@/constants/aspect-ratio-constants';
 import type { DetectTag } from '@/apis/retouch-api';
@@ -37,8 +37,7 @@ export type ExtractTabKey =
   | 'get_object'
   | 'get_text'
   | 'crop'
-  | 'background'
-  | 'lottie';
+  | 'background';
 
 /** How a fresh run merges into the tab's grid — segment accumulates, layering replaces. */
 export type ExtractRunMode = 'append' | 'replace';
@@ -138,7 +137,6 @@ export const EXTRACT_TABS: ExtractTabContract[] = [
   { key: 'segment', label: 'Segments', icon: Box, runMode: 'append', enabled: true },
   { key: 'layering', label: 'Layers', icon: Layers, runMode: 'replace', enabled: true },
   { key: 'background', label: 'Background', icon: ImageIcon, runMode: 'append', enabled: true, resultPreview: 'compare', commitMode: 'passthrough' },
-  { key: 'lottie', label: 'Lottie', icon: Disc, runMode: 'replace', enabled: false },
 ];
 
 /** Default tab when `initialTab` is not supplied (README §2.2). Objects is the landing tab. */

@@ -47,6 +47,11 @@ import type {
   LibrarySound,
   BackgroundRemoveCandidate,
 } from "@/features/editor/components/shared-components";
+// Standalone Extract-Lottie modal — imported from its own folder (not the shared barrel) so it
+// only loads when Objects mounts it. Spawns an auto_pic via addRetouchAutoPic on Extract.
+import { ExtractLottieModal } from "@/features/editor/components/shared-components/extract-lottie-modal";
+import type { NewAutoPicFromLottie } from "@/features/editor/components/shared-components/extract-lottie-modal";
+import { nextTopZInTier } from "@/features/editor/utils/duplicate-item-helpers";
 import {
   upsertCropPreset,
   deleteCropPreset,
@@ -497,7 +502,7 @@ export function ObjectsMainView({
   const { splitTextbox } = useSplitTextbox(actions, onItemSelect, langCode, canvasWidth, canvasHeight);
 
   const modals = useObjectModals(selectedSpreadId, actions);
-  const { openGenerate, openEdit, openExtract, openEditAudio, openSlot, closeSlot, closeParametric } =
+  const { openGenerate, openEdit, openExtract, openLottie, closeLottie, openEditAudio, openSlot, closeSlot, closeParametric } =
     modals;
 
 
@@ -532,6 +537,55 @@ export function ObjectsMainView({
       });
     },
     [modals.extract.image, modals.extract.spreadId, retouchSpreads, actions, spreadEditable]
+  );
+
+  // Extract-Lottie → spawn a static auto_pic (static_image = original; media_url ABSENT — the
+  // finished .lottie is uploaded later via the auto-pic toolbar). Mutates the held spread node →
+  // dirty → persisted by the existing objects held-session save.
+  const handleCreateAutoPicFromLottie = useCallback(
+    (payload: NewAutoPicFromLottie): boolean => {
+      const sourceImage = modals.lottie.image;
+      if (!sourceImage) return false;
+      if (!spreadEditable) {
+        log.debug("handleCreateAutoPicFromLottie", "blocked — spread not held", {
+          sourceId: payload.sourceImageId,
+        });
+        toastLockRequired();
+        return false;
+      }
+      const spread = retouchSpreads.find((s) => s.id === modals.lottie.spreadId);
+      if (!spread) return false;
+      const autoPic: SpreadAutoPic = {
+        id: crypto.randomUUID(),
+        title: payload.suggestedTitle,
+        geometry: { ...sourceImage.geometry },
+        "z-index": nextTopZInTier(spread, "pictorial"),
+        player_visible: true,
+        editor_visible: true,
+        // Scene lineage (L2): inherit ONLY — `?? sourceImage.id` is FORBIDDEN (flat root ref).
+        ...(sourceImage.original_image_id !== undefined
+          ? { original_image_id: sourceImage.original_image_id }
+          : {}),
+        tags: sourceImage.tags ?? [],
+        static_image: {
+          illustrations: [
+            {
+              media_url: payload.staticImageUrl,
+              is_selected: true,
+              type: "uploaded",
+              created_time: new Date().toISOString(),
+            },
+          ],
+        },
+      };
+      actions.addRetouchAutoPic(modals.lottie.spreadId, autoPic);
+      log.info("handleCreateAutoPicFromLottie", "auto_pic spawned", {
+        autoPicId: autoPic.id,
+        spreadId: modals.lottie.spreadId,
+      });
+      return true;
+    },
+    [modals.lottie.image, modals.lottie.spreadId, retouchSpreads, actions, spreadEditable]
   );
 
   // ── Crop presets (books.crop_presets[]) — controlled persistence via updateBook ──
@@ -1098,13 +1152,14 @@ export function ObjectsMainView({
           onGenerateImage: () => openGenerate(context.item),
           onEditImage: () => openEdit(context.item),
           onExtractImage: () => openExtract(context.item),
+          onExtractLottie: () => openLottie(context.item),
           onClone: () => gatedDuplicateItem("image", context.item.id),
           // openSlot routes: no slot ⇒ init modal; already-slotted ⇒ "Coming soon" toast.
           onConfigureSlot: () => openSlot(context.item),
         }}
       />
     ),
-    [openGenerate, openEdit, openExtract, gatedDuplicateItem, openSlot]
+    [openGenerate, openEdit, openExtract, openLottie, gatedDuplicateItem, openSlot]
   );
 
   const { cloneRawImage, cloneRawTextbox } = useCloneRaw(retouchSpreads, selectedSpreadId, actions);
@@ -1407,6 +1462,17 @@ export function ObjectsMainView({
           cropPresets={book?.crop_presets ?? undefined}
           onUpsertCropPreset={handleUpsertCropPreset}
           onDeleteCropPreset={handleDeleteCropPreset}
+        />
+      )}
+
+      {modals.lottie.image && (
+        <ExtractLottieModal
+          open={modals.lottie.open}
+          image={modals.lottie.image}
+          spreadId={modals.lottie.spreadId}
+          attribution={{ snapshotId: snapshotId || undefined }}
+          onClose={closeLottie}
+          onCreateAutoPic={handleCreateAutoPicFromLottie}
         />
       )}
 

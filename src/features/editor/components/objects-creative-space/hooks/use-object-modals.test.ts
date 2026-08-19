@@ -129,3 +129,22 @@ describe('useObjectModals.openSlot routing', () => {
     expect(result.current.slot.spreadId).toBe('');
   });
 });
+
+describe('useObjectModals.lottie', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('openLottie captures the image + spread; closeLottie resets all', () => {
+    const { result } = renderModals();
+    const img = makeImage();
+
+    act(() => result.current.openLottie(img));
+    expect(result.current.lottie.open).toBe(true);
+    expect(result.current.lottie.image).toBe(img);
+    expect(result.current.lottie.spreadId).toBe(SPREAD_ID);
+
+    act(() => result.current.closeLottie());
+    expect(result.current.lottie.open).toBe(false);
+    expect(result.current.lottie.image).toBeNull();
+    expect(result.current.lottie.spreadId).toBe('');
+  });
+});
