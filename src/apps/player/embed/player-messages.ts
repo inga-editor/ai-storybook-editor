@@ -21,12 +21,34 @@ export type PlayerErrorCode =
   | 'NETWORK'
   | 'SERVER';
 
+import type { DeviceTier } from '@/features/editor/components/playable-spread-view/media-tier';
+
 /** Options the parent may pass with `player:init`. Fragment carries ONLY the token. */
 export interface PlayerInitOptions {
   language?: string;
   edition?: 'classic' | 'dynamic' | 'interactive';
   startSpreadId?: string;
   autoplay?: boolean;
+  /** Media rendition tier override (ADR-057). Absent → sub-app detects from viewport × DPR. */
+  deviceTier?: DeviceTier;
+}
+
+const DEVICE_TIERS: ReadonlySet<string> = new Set(['mobile', 'web', 'ipad']);
+
+/**
+ * Sanitize untrusted init options before dispatch. Currently only `deviceTier`
+ * needs a value gate (it feeds URL construction) — an unknown value is dropped
+ * so the viewer falls back to viewport detection instead of crashing/leaking.
+ */
+export function sanitizePlayerInitOptions(
+  options: PlayerInitOptions | undefined,
+): PlayerInitOptions | undefined {
+  if (!options) return options;
+  if (options.deviceTier !== undefined && !DEVICE_TIERS.has(options.deviceTier)) {
+    const { deviceTier: _invalid, ...rest } = options;
+    return rest;
+  }
+  return options;
 }
 
 /** Messages the parent sends INTO the iframe. Untrusted until validated. */

@@ -7,6 +7,7 @@
 // the barrel) to keep the sub-app bundle from pulling in editor-only re-exports.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import { PlayableSpreadView } from '@/features/editor/components/playable-spread-view/playable-spread-view';
+import { detectDeviceTier, type DeviceTier } from '@/features/editor/components/playable-spread-view/media-tier';
 import { resolveBookSequence } from '@/features/editor/components/playable-spread-view/resolve-book-sequence';
 import type { PlayableSpread } from '@/types/playable-types';
 import type { Section } from '@/types/illustration-types';
@@ -62,6 +63,14 @@ export function PlayerViewer({ payload, options, onEvent }: PlayerViewerProps) {
   const availableLanguages = useMemo(
     () => resolveAvailableLanguages(normalizedLanguages),
     [normalizedLanguages],
+  );
+
+  // Media rendition tier (ADR-057): parent override wins (sanitized by the embed
+  // bridge), otherwise detect once from viewport × DPR. Re-resolves when a new
+  // player:init carries a different deviceTier.
+  const mediaTier = useMemo<DeviceTier>(
+    () => opts.deviceTier ?? detectDeviceTier(),
+    [opts.deviceTier],
   );
 
   const spreads = useMemo<PlayableSpread[]>(() => toPlayableSpreads(snapshot), [snapshot]);
@@ -172,6 +181,7 @@ export function PlayerViewer({ payload, options, onEvent }: PlayerViewerProps) {
         pageNumbering={book.template_layout?.page_numbering}
         isSharePreview
         onSpreadSelect={handleSpreadSelect}
+        mediaTier={mediaTier}
       />
     </div>
   );

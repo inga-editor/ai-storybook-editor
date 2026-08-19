@@ -747,6 +747,83 @@ export async function enqueueRemixRenderVideo(
   );
 }
 
+// ── Export Player Media (api/jobs/18 — ADR-057 device-tier renditions) ───────
+// Body is EMPTY: the handler reads target tiers from distribution
+// player.{tier}.is_enabled at enqueue (checkbox = tier-selection gate). One job
+// converts every enabled tier; every tier leaf's media_url points at the same
+// public summary JSON. Dedup scope: per source_id (1 active job / book|remix).
+
+export interface EnqueueExportPlayerMediaEnqueuedData {
+  job_id: string;
+  status: 'queued';
+  type: 'export_player_media';
+  source: 'book' | 'remix';
+  book_id: string;
+  remix_id?: string;
+  tiers: string[];
+  total_steps: number;
+  sources_found: number;
+  estimated_duration_sec: number;
+  skipped?: false;
+  deduped?: false;
+}
+
+export interface EnqueueExportPlayerMediaSkippedData {
+  skipped: true;
+  reason: 'no_media_items' | 'no_tier_enabled' | 'snapshot_empty' | string;
+  sources_found: 0;
+}
+
+export interface EnqueueExportPlayerMediaDedupedData {
+  job_id: string;
+  status: 'queued' | 'running';
+  type: 'export_player_media';
+  source: 'book' | 'remix';
+  book_id: string;
+  remix_id?: string;
+  deduped: true;
+}
+
+export type EnqueueExportPlayerMediaData =
+  | EnqueueExportPlayerMediaEnqueuedData
+  | EnqueueExportPlayerMediaSkippedData
+  | EnqueueExportPlayerMediaDedupedData;
+
+/** Narrowing guards — 3-way union (enqueued | skipped | deduped). */
+export function isExportPlayerMediaSkipped(
+  d: EnqueueExportPlayerMediaData,
+): d is EnqueueExportPlayerMediaSkippedData {
+  return (d as EnqueueExportPlayerMediaSkippedData).skipped === true;
+}
+
+export function isExportPlayerMediaDeduped(
+  d: EnqueueExportPlayerMediaData,
+): d is EnqueueExportPlayerMediaDedupedData {
+  return (d as EnqueueExportPlayerMediaDedupedData).deduped === true;
+}
+
+/** POST /api/jobs/{bookId}/export-player-media (book source). Empty body. */
+export async function enqueueBookExportPlayerMedia(
+  bookId: string,
+): Promise<EnqueueJobResponse<EnqueueExportPlayerMediaData> | ImageApiFailure> {
+  log.info('enqueueBookExportPlayerMedia', 'request', { bookId });
+  return callImageApi<EnqueueJobResponse<EnqueueExportPlayerMediaData>>(
+    `/api/jobs/${encodeURIComponent(bookId)}/export-player-media`,
+    {},
+  );
+}
+
+/** POST /api/jobs/remix/{remixId}/export-player-media (remix source). Empty body. */
+export async function enqueueRemixExportPlayerMedia(
+  remixId: string,
+): Promise<EnqueueJobResponse<EnqueueExportPlayerMediaData> | ImageApiFailure> {
+  log.info('enqueueRemixExportPlayerMedia', 'request', { remixId });
+  return callImageApi<EnqueueJobResponse<EnqueueExportPlayerMediaData>>(
+    `/api/jobs/remix/${encodeURIComponent(remixId)}/export-player-media`,
+    {},
+  );
+}
+
 // ── Spread thumbnails (api/jobs/17 — batch render spread pool thumbnails) ─────
 // Config Spread Pool "Generate" button. Body `{snapshot_id, canvas}` — canvas is
 // FE-resolved from `book.dimension` (single-source TS, NOT re-derived server-side).

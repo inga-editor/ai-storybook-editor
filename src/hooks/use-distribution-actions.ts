@@ -11,11 +11,15 @@ import * as React from 'react';
 import { toast } from 'sonner';
 import {
   enqueueBookExportPdf,
+  enqueueBookExportPlayerMedia,
   enqueueBookRenderVideo,
   enqueueRemixExportPdf,
+  enqueueRemixExportPlayerMedia,
   enqueueRemixRenderVideo,
   isExportPdfDeduped,
   isExportPdfSkipped,
+  isExportPlayerMediaDeduped,
+  isExportPlayerMediaSkipped,
   isRenderVideoDeduped,
   isRenderVideoSkipped,
   type StartExportPdfOpts,
@@ -47,6 +51,8 @@ export interface DistributionActions {
     remixId: string,
     opts: StartRenderVideoOpts,
   ) => Promise<EnqueueExportOutcome>;
+  startBookExportPlayerMedia: (bookId: string) => Promise<EnqueueExportOutcome>;
+  startRemixExportPlayerMedia: (remixId: string) => Promise<EnqueueExportOutcome>;
 }
 
 export function useDistributionActions(): DistributionActions {
@@ -178,6 +184,68 @@ export function useDistributionActions(): DistributionActions {
     [refetchRemix],
   );
 
+  const startBookExportPlayerMedia = React.useCallback(
+    async (bookId: string): Promise<EnqueueExportOutcome> => {
+      log.info('startBookExportPlayerMedia', 'enqueue', { bookId });
+      const result = await enqueueBookExportPlayerMedia(bookId);
+      if (!result.success) {
+        log.error('startBookExportPlayerMedia', 'failed', {
+          bookId,
+          httpStatus: result.httpStatus,
+          errorCode: result.errorCode,
+        });
+        toast.error(`Export failed: ${result.error}`);
+        return { kind: 'failed', message: result.error };
+      }
+      const data = result.data;
+      if (isExportPlayerMediaSkipped(data)) {
+        log.warn('startBookExportPlayerMedia', 'skipped', { bookId, reason: data.reason });
+        toast.info('Nothing to export.');
+        return { kind: 'skipped', reason: data.reason };
+      }
+      void refetchBookDistribution(bookId);
+      if (isExportPlayerMediaDeduped(data)) {
+        log.info('startBookExportPlayerMedia', 'deduped', { bookId, jobId: data.job_id });
+        return { kind: 'deduped', jobId: data.job_id };
+      }
+      log.info('startBookExportPlayerMedia', 'enqueued', { bookId, jobId: data.job_id });
+      toast.success('Export started.');
+      return { kind: 'enqueued', jobId: data.job_id };
+    },
+    [refetchBookDistribution],
+  );
+
+  const startRemixExportPlayerMedia = React.useCallback(
+    async (remixId: string): Promise<EnqueueExportOutcome> => {
+      log.info('startRemixExportPlayerMedia', 'enqueue', { remixId });
+      const result = await enqueueRemixExportPlayerMedia(remixId);
+      if (!result.success) {
+        log.error('startRemixExportPlayerMedia', 'failed', {
+          remixId,
+          httpStatus: result.httpStatus,
+          errorCode: result.errorCode,
+        });
+        toast.error(`Export failed: ${result.error}`);
+        return { kind: 'failed', message: result.error };
+      }
+      const data = result.data;
+      if (isExportPlayerMediaSkipped(data)) {
+        log.warn('startRemixExportPlayerMedia', 'skipped', { remixId, reason: data.reason });
+        toast.info('Nothing to export.');
+        return { kind: 'skipped', reason: data.reason };
+      }
+      void refetchRemix(remixId);
+      if (isExportPlayerMediaDeduped(data)) {
+        log.info('startRemixExportPlayerMedia', 'deduped', { remixId, jobId: data.job_id });
+        return { kind: 'deduped', jobId: data.job_id };
+      }
+      log.info('startRemixExportPlayerMedia', 'enqueued', { remixId, jobId: data.job_id });
+      toast.success('Export started.');
+      return { kind: 'enqueued', jobId: data.job_id };
+    },
+    [refetchRemix],
+  );
+
   const updateRemixDistributionWrapped = React.useCallback(
     async (remixId: string, dist: Distribution): Promise<boolean> => {
       const ok = await updateRemixDistribution(remixId, dist);
@@ -193,5 +261,7 @@ export function useDistributionActions(): DistributionActions {
     startRemixExportPdf,
     startBookRenderVideo,
     startRemixRenderVideo,
+    startBookExportPlayerMedia,
+    startRemixExportPlayerMedia,
   };
 }

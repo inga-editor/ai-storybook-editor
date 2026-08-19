@@ -381,6 +381,8 @@ export function PreviewCreativeSpace() {
             onSpreadSelect={setUserSelectedSpreadId}
             pageNumbering={templateLayout?.page_numbering}
             sourceKey={payload?.sessionId}
+            // Desktop surface — fixed 'web' rendition tier (ADR-057).
+            mediaTier="web"
           />
         </div>
       </div>

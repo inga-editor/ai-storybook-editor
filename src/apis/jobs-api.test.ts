@@ -11,7 +11,15 @@ vi.mock('@/utils/logger', () => ({
   createLogger: () => ({ info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
 
-import { enqueueDetectDefects, enqueueRemixStageJob, EnqueueJobError } from './jobs-api';
+import {
+  enqueueDetectDefects,
+  enqueueRemixStageJob,
+  EnqueueJobError,
+  enqueueBookExportPlayerMedia,
+  enqueueRemixExportPlayerMedia,
+  isExportPlayerMediaSkipped,
+  isExportPlayerMediaDeduped,
+} from './jobs-api';
 
 beforeEach(() => {
   mockCall.mockReset();
@@ -95,5 +103,37 @@ describe('enqueueRemixStageJob — mix-swap 200 dedup passthrough (unchanged)', 
     mockCall.mockResolvedValue({ success: true, data });
     const out = await enqueueRemixStageJob('remix-1', 'mix-swap', { batch_id: 'batch-9' });
     expect(out).toEqual(data);
+  });
+});
+
+describe('enqueueExportPlayerMedia — routes + 3-way union guards (job 18)', () => {
+  it('book route: POST /api/jobs/{bookId}/export-player-media with empty body', async () => {
+    mockCall.mockResolvedValue({ success: true, data: { job_id: 'j18', status: 'queued' } });
+    await enqueueBookExportPlayerMedia('book-1');
+    expect(mockCall).toHaveBeenCalledWith('/api/jobs/book-1/export-player-media', {});
+  });
+
+  it('remix route: POST /api/jobs/remix/{remixId}/export-player-media with empty body', async () => {
+    mockCall.mockResolvedValue({ success: true, data: { job_id: 'j18', status: 'queued' } });
+    await enqueueRemixExportPlayerMedia('remix-1');
+    expect(mockCall).toHaveBeenCalledWith('/api/jobs/remix/remix-1/export-player-media', {});
+  });
+
+  it('narrowing guards distinguish skipped / deduped / enqueued', () => {
+    const skipped = { skipped: true as const, reason: 'no_media_items', sources_found: 0 as const };
+    const deduped = {
+      job_id: 'j18', status: 'running' as const, type: 'export_player_media' as const,
+      source: 'book' as const, book_id: 'book-1', deduped: true as const,
+    };
+    const enqueued = {
+      job_id: 'j18', status: 'queued' as const, type: 'export_player_media' as const,
+      source: 'book' as const, book_id: 'book-1', tiers: ['web'],
+      total_steps: 3, sources_found: 3, estimated_duration_sec: 1,
+    };
+    expect(isExportPlayerMediaSkipped(skipped)).toBe(true);
+    expect(isExportPlayerMediaSkipped(deduped)).toBe(false);
+    expect(isExportPlayerMediaDeduped(deduped)).toBe(true);
+    expect(isExportPlayerMediaDeduped(enqueued)).toBe(false);
+    expect(isExportPlayerMediaSkipped(enqueued)).toBe(false);
   });
 });

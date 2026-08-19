@@ -1,6 +1,6 @@
 // player-messages.test.ts — inbound type guard (untrusted-data gate).
 import { describe, it, expect } from 'vitest';
-import { isInboundMessage } from './player-messages';
+import { isInboundMessage, sanitizePlayerInitOptions } from './player-messages';
 
 describe('isInboundMessage', () => {
   it('accepts a valid player:init', () => {
@@ -36,5 +36,27 @@ describe('isInboundMessage', () => {
     expect(isInboundMessage(undefined)).toBe(false);
     expect(isInboundMessage('player:init')).toBe(false);
     expect(isInboundMessage(42)).toBe(false);
+  });
+});
+
+describe('sanitizePlayerInitOptions', () => {
+  it('passes undefined through', () => {
+    expect(sanitizePlayerInitOptions(undefined)).toBeUndefined();
+  });
+
+  it('keeps a valid deviceTier', () => {
+    expect(sanitizePlayerInitOptions({ deviceTier: 'mobile' })).toEqual({ deviceTier: 'mobile' });
+    expect(sanitizePlayerInitOptions({ deviceTier: 'web' })).toEqual({ deviceTier: 'web' });
+    expect(sanitizePlayerInitOptions({ deviceTier: 'ipad' })).toEqual({ deviceTier: 'ipad' });
+  });
+
+  it('drops an unknown deviceTier but keeps other options', () => {
+    const dirty = { language: 'vi', deviceTier: '4k' } as never;
+    expect(sanitizePlayerInitOptions(dirty)).toEqual({ language: 'vi' });
+  });
+
+  it('leaves options without deviceTier untouched', () => {
+    const opts = { language: 'vi', autoplay: true };
+    expect(sanitizePlayerInitOptions(opts)).toBe(opts);
   });
 });

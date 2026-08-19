@@ -18,6 +18,17 @@ export { PLAYABLE_ZOOM, ANIMATION_PRESETS } from '@/constants/playable-constants
 
 // === Components ===
 export { PlayableSpreadView } from './playable-spread-view';
+
+// === Media tier (ADR-057 — device rendition resolve) ===
+export {
+  withTier,
+  applyMediaTier,
+  setActiveMediaTier,
+  getActiveMediaTier,
+  detectDeviceTier,
+  type DeviceTier,
+} from './media-tier';
+export { MediaTierHost } from './media-tier-host';
 export { PlayableThumbnailList } from './playable-thumbnail-list';
 export { PlayerCanvas } from './player-canvas';
 export { PlayerControlSidebar } from './player-control-sidebar';

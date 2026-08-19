@@ -9,6 +9,7 @@ import { COLORS, DIMMED_BY_OVERLAP_OPACITY } from "@/constants/spread-constants"
 import { createLogger } from "@/utils/logger";
 import { useZoomLevel } from "@/stores/editor-settings-store";
 import { resolveEffectiveImageUrl } from "./resolve-effective-image-url";
+import { applyMediaTier } from "@/features/editor/components/playable-spread-view/media-tier";
 
 const log = createLogger("Editor", "EditableImage");
 
@@ -65,6 +66,9 @@ export function EditableImage({
 
   // Image URL priority: final_hires > illustrations[selected] > illustrations[0] > media_url (sketch)
   const imageUrl = resolveEffectiveImageUrl(image);
+  // Device-tier rendition (ADR-057): only rewrites when a player tier is
+  // active (MediaTierHost mounted) — edit canvases pass through unchanged.
+  const displayImageUrl = imageUrl ? applyMediaTier(imageUrl) : undefined;
 
   // Get display content for placeholder
   const artNoteText = image.art_note || image.visual_description || "";
@@ -207,7 +211,7 @@ export function EditableImage({
           )}
           <img
             key={imageUrl}
-            src={imageUrl}
+            src={displayImageUrl}
             alt={artNoteText}
             className="w-full h-full object-contain"
             loading="lazy"

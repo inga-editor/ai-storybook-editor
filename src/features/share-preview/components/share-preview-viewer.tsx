@@ -119,6 +119,8 @@ export function SharePreviewViewer({ book, snapshot, shareConfig }: SharePreview
         availableLanguages={availableLanguages}
         pageNumbering={book.template_layout?.page_numbering}
         isSharePreview={true}
+        // Web-only surface — fixed 'web' rendition tier (ADR-057).
+        mediaTier="web"
       />
     </div>
   );

@@ -137,7 +137,9 @@ function exportCopy(job: BackgroundJob): ToastCopy {
       ? 'PDF'
       : job.type === 'render_book_video'
         ? 'Video (QHD)'
-        : 'Video qualities';
+        : job.type === 'export_player_media'
+          ? 'Player media'
+          : 'Video qualities';
 
   switch (job.status) {
     case 'completed': {
@@ -149,7 +151,9 @@ function exportCopy(job: BackgroundJob): ToastCopy {
           ? 'PDF exported.'
           : job.type === 'render_book_video'
             ? 'Video rendered (QHD).'
-            : 'Video qualities ready (SD/HD/FHD).';
+            : job.type === 'export_player_media'
+              ? 'Player media exported.'
+              : 'Video qualities ready (SD/HD/FHD).';
       return { tone: 'success', message: okMsg };
     }
     case 'failed':

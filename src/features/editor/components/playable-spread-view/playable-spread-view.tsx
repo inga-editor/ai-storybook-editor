@@ -32,6 +32,8 @@ import { BranchPathModal } from "./branch-path-modal";
 import { FirstGestureGate } from "./first-gesture-gate";
 import { PlayerAudioMixerHost } from "./audio/player-audio-mixer-host";
 import { PlayerSpreadPreloadHost } from "./preload/player-spread-preload-host";
+import { MediaTierHost } from "./media-tier-host";
+import type { DeviceTier } from "./media-tier";
 import { BookBackgroundMusicPlayer } from "./audio/book-background-music-player";
 import { useMusicMediaUrl } from "./audio/use-music-media-url";
 import { useSoundMediaUrl } from "./audio/use-sound-media-url";
@@ -112,6 +114,12 @@ interface PlayableSpreadViewProps {
    * undefined and the preload behaves as a one-shot per active spread.
    */
   sourceKey?: string;
+  /**
+   * Device tier for media rendition resolve (ADR-057). When set, mounts
+   * MediaTierHost so render/preload call sites append `?tier=` to visual media
+   * URLs. Omit in edit-modes and video render — original URLs are served.
+   */
+  mediaTier?: DeviceTier;
 }
 
 const KEYBOARD_SHORTCUTS = {
@@ -135,6 +143,7 @@ export const PlayableSpreadView: React.FC<PlayableSpreadViewProps> = ({
   isSharePreview = false,
   selectedSpreadId: propSelectedSpreadId,
   sourceKey,
+  mediaTier,
 }) => {
 
   // === Internal State ===
@@ -471,6 +480,13 @@ export const PlayableSpreadView: React.FC<PlayableSpreadViewProps> = ({
   // === Render ===
   return (
     <div ref={rootRef} className="relative flex flex-col h-full">
+      {/* Media tier host — mounted only when the host surface specifies a tier
+          (player sub-app / preview / share-preview). Unmount resets tier to null.
+          MUST stay BEFORE PlayerSpreadPreloadHost: the tier is set in an effect,
+          and sibling effects run in mount order — the preload collector reads
+          the singleton and must see the tier already applied. */}
+      {mediaTier && <MediaTierHost tier={mediaTier} />}
+
       {/* Player audio mixer host — always mounted (pure player component). */}
       <PlayerAudioMixerHost
         rootRef={rootRef}

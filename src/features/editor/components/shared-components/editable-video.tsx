@@ -6,6 +6,7 @@ import { Video, Loader2 } from "lucide-react";
 import { cn } from "@/utils/utils";
 import type { SpreadVideo } from "@/types/spread-types";
 import { COLORS, DIMMED_BY_OVERLAP_OPACITY } from "@/constants/spread-constants";
+import { applyMediaTier } from "@/features/editor/components/playable-spread-view/media-tier";
 
 interface EditableVideoProps {
   video: SpreadVideo;
@@ -61,6 +62,9 @@ export function EditableVideo({
   }, []);
 
   const showVideo = video.media_url && !hasError;
+  // Device-tier rendition (ADR-057): rewrites only when a player tier is
+  // active (MediaTierHost mounted) — edit canvases pass through unchanged.
+  const videoSrc = video.media_url ? applyMediaTier(video.media_url) : undefined;
 
   return (
     <div
@@ -102,7 +106,7 @@ export function EditableVideo({
           {isThumbnail ? (
             // Show first frame as poster in thumbnail mode
             <video
-              src={video.media_url}
+              src={videoSrc}
               className="w-full h-full object-contain"
               preload="metadata"
               onLoadedData={handleLoadedData}
@@ -110,7 +114,7 @@ export function EditableVideo({
             />
           ) : (
             <video
-              src={video.media_url}
+              src={videoSrc}
               className="w-full h-full object-contain"
               preload="metadata"
               onLoadedData={handleLoadedData}

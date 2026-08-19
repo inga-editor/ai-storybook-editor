@@ -91,7 +91,10 @@ export interface ChannelCapability {
 // Single scope-widening point: add a leafKey to exportableLeafKeys (+ wire its
 // route) when a new channel ships — render logic stays untouched.
 export const V1_EXPORT_CAPABILITY: Record<ChannelKey, ChannelCapability> = {
-  player: { exportableLeafKeys: [], disabledLeafKeys: [] },
+  // Player export-able (ADR-057, job 18 export_player_media): one job converts
+  // every checked tier — the is_enabled checkbox is the tier-selection gate the
+  // handler reads at enqueue, so all 3 leaves toggle + export.
+  player: { exportableLeafKeys: ['web', 'mobile', 'ipad'], disabledLeafKeys: [] },
   digital: { exportableLeafKeys: [], disabledLeafKeys: [] },
   printer: { exportableLeafKeys: ['300dpi'], disabledLeafKeys: ['600dpi'] },
   // v1: only QHD (1440p) renders via job 07 (render_book_video); SD/HD/FHD are

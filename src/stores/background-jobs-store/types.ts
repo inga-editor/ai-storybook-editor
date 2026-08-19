@@ -121,6 +121,7 @@ export const EXPORT_TYPES = [
   'export_pdf',
   'render_book_video',
   'transcode_video',
+  'export_player_media',
 ] as const;
 
 /** Top-up / GC retention window: active jobs are caught regardless of age (via

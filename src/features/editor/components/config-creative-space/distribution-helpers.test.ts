@@ -138,8 +138,11 @@ describe('V1_EXPORT_CAPABILITY gating', () => {
     expect(V1_EXPORT_CAPABILITY.printer.exportableLeafKeys).toEqual(['300dpi']);
     expect(V1_EXPORT_CAPABILITY.printer.disabledLeafKeys).toEqual(['600dpi']);
   });
-  it('player/digital have no export-able leaves in v1', () => {
-    expect(V1_EXPORT_CAPABILITY.player.exportableLeafKeys).toEqual([]);
+  it('player: all 3 tiers export-able (job 18, ADR-057); none disabled', () => {
+    expect(V1_EXPORT_CAPABILITY.player.exportableLeafKeys).toEqual(['web', 'mobile', 'ipad']);
+    expect(V1_EXPORT_CAPABILITY.player.disabledLeafKeys).toEqual([]);
+  });
+  it('digital has no export-able leaves in v1', () => {
     expect(V1_EXPORT_CAPABILITY.digital.exportableLeafKeys).toEqual([]);
   });
   it('video: only qhd export-able (job 07); sd/hd/fhd locked (auto-chain 08 badge only)', () => {

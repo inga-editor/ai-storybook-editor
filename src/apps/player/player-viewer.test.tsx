@@ -32,11 +32,13 @@ vi.mock('@/features/editor/components/playable-spread-view/playable-spread-view'
   PlayableSpreadView: ({
     spreads,
     onSpreadSelect,
+    mediaTier,
   }: {
     spreads: { id: string }[];
     onSpreadSelect?: (id: string) => void;
+    mediaTier?: string;
   }) => (
-    <div data-testid="spread-view">
+    <div data-testid="spread-view" data-media-tier={mediaTier}>
       {spreads.map((sp) => (
         <button key={sp.id} data-testid={`sel-${sp.id}`} onClick={() => onSpreadSelect?.(sp.id)}>
           {sp.id}
@@ -106,6 +108,26 @@ describe('PlayerViewer lifecycle', () => {
     expect(screen.getByText('Cuốn sách thử')).toBeInTheDocument();
     expect(screen.getByText('Sách chưa có nội dung')).toBeInTheDocument();
     expect(screen.queryByTestId('spread-view')).not.toBeInTheDocument();
+  });
+});
+
+describe('PlayerViewer media tier wiring (ADR-057)', () => {
+  it('forwards options.deviceTier to PlayableSpreadView', () => {
+    render(
+      <PlayerViewer payload={makePayload()} options={{ deviceTier: 'ipad' }} onEvent={vi.fn()} />,
+    );
+    expect(screen.getByTestId('spread-view')).toHaveAttribute('data-media-tier', 'ipad');
+  });
+
+  it('falls back to detectDeviceTier when options omit deviceTier', () => {
+    vi.stubGlobal('screen', { width: 1920, height: 1080 } as Screen);
+    vi.stubGlobal('devicePixelRatio', 1);
+    try {
+      render(<PlayerViewer payload={makePayload()} options={{}} onEvent={vi.fn()} />);
+      expect(screen.getByTestId('spread-view')).toHaveAttribute('data-media-tier', 'web');
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
 

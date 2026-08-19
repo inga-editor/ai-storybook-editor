@@ -33,17 +33,20 @@ export function resolveSource(
 export interface LeafRef {
   sourceKind: 'book' | 'remix';
   sourceId: string;
-  channelKey: 'printer' | 'video';
-  leafKey: string; // '300dpi' | '600dpi' | 'sd' | 'hd' | 'fhd' | 'qhd'
+  channelKey: 'printer' | 'video' | 'player';
+  leafKey: string; // '300dpi' | '600dpi' | 'sd' | 'hd' | 'fhd' | 'qhd' | 'web' | 'mobile' | 'ipad'
   videoType?: 'classic' | 'dynamic';
 }
 
 const PRINTER_LEAF_KEYS = ['600dpi', '300dpi'] as const;
 const VIDEO_LEAF_KEYS = ['sd', 'hd', 'fhd', 'qhd'] as const;
+const PLAYER_LEAF_KEYS = ['web', 'mobile', 'ipad'] as const;
 
 /** Scan one source's (coalesced) distribution → LeafRefs grouped by job_id, for
- *  every printer/video leaf that is `exporting` and carries a job_id. Player and
- *  digital channels don't run background-job exports in v1 → skipped. */
+ *  every printer/video/player leaf that is `exporting` and carries a job_id.
+ *  One export_player_media job claims every enabled tier leaf (ADR-057), so one
+ *  job_id → up to 3 player LeafRefs (same shape as the transcode 08 fan-out).
+ *  The digital channel doesn't run background-job exports in v1 → skipped. */
 export function buildLeafRefsFromDistribution(
   sourceKind: 'book' | 'remix',
   sourceId: string,
@@ -60,6 +63,13 @@ export function buildLeafRefsFromDistribution(
     const leaf = dist.printer[leafKey];
     if (leaf?.status === 'exporting' && leaf.job_id) {
       add(leaf.job_id, { sourceKind, sourceId, channelKey: 'printer', leafKey });
+    }
+  }
+
+  for (const leafKey of PLAYER_LEAF_KEYS) {
+    const leaf = dist.player[leafKey];
+    if (leaf?.status === 'exporting' && leaf.job_id) {
+      add(leaf.job_id, { sourceKind, sourceId, channelKey: 'player', leafKey });
     }
   }
 

@@ -1,6 +1,7 @@
 // use-export-job-watcher.ts — Distribution background-job watcher. CONSUMER of
 // the unified BackgroundJobsStore (ADR-037): no own channel/reheal/poll — it
-// subscribes to EXPORT_TYPES (export_pdf + render_book_video + transcode_video)
+// subscribes to EXPORT_TYPES (export_pdf + render_book_video + transcode_video
+// + export_player_media)
 // via `subscribeJobs` and refetches the affected source's distribution so the
 // EXPORTING → UPDATED badge surfaces.
 //

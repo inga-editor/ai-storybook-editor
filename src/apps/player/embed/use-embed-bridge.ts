@@ -10,6 +10,7 @@ import { createLogger } from '@/utils/logger';
 import { getAllowedParentOrigins } from './allowed-parent-origins';
 import {
   isInboundMessage,
+  sanitizePlayerInitOptions,
   type PlayerInitOptions,
   type PlayerOutboundEvent,
 } from './player-messages';
@@ -86,7 +87,7 @@ export function useEmbedBridge({
         tokenLen: msg.token.length,
       });
       if (msg.type === 'player:init') {
-        onInitRef.current(msg.token, msg.options);
+        onInitRef.current(msg.token, sanitizePlayerInitOptions(msg.options));
       } else {
         onTokenRefreshRef.current(msg.token);
       }

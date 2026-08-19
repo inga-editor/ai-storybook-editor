@@ -188,6 +188,8 @@ export function ConfigDistributionSettings() {
     startRemixExportPdf,
     startBookRenderVideo,
     startRemixRenderVideo,
+    startBookExportPlayerMedia,
+    startRemixExportPlayerMedia,
   } = useDistributionActions();
 
   const [expandedSources, setExpandedSources] = React.useState<Set<string>>(
@@ -317,9 +319,28 @@ export function ConfigDistributionSettings() {
           ? await startBookRenderVideo(src.id, opts)
           : await startRemixRenderVideo(src.id, opts);
       }
+      if (channelKey === 'player') {
+        // ADR-057 job 18: empty body — the handler reads target tiers from
+        // player.{tier}.is_enabled (persisted above by ensureSaved).
+        log.info('handleExportChannel', 'start export-player-media', {
+          kind: src.kind,
+          id: src.id,
+        });
+        return src.kind === 'book'
+          ? await startBookExportPlayerMedia(src.id)
+          : await startRemixExportPlayerMedia(src.id);
+      }
       return { kind: 'skipped', reason: 'channel_not_exportable_v1' };
     },
-    [ensureSaved, startBookExportPdf, startRemixExportPdf, startBookRenderVideo, startRemixRenderVideo],
+    [
+      ensureSaved,
+      startBookExportPdf,
+      startRemixExportPdf,
+      startBookRenderVideo,
+      startRemixRenderVideo,
+      startBookExportPlayerMedia,
+      startRemixExportPlayerMedia,
+    ],
   );
 
   const handleViewVariant = React.useCallback(
