@@ -22,7 +22,8 @@ export interface BBoxPct {
  *  .lottie build sizes/positions from THIS, never the live (possibly re-dragged) part.bbox. */
 export interface LottiePartVersion {
   id: string;
-  media_url: string; // Storage URL (RGBA PNG, sized to the bbox px)
+  media_url: string; // Storage URL (RGBA PNG). Any resolution — the build scales it to the
+  // bbox rect (crop = box px → scale 100; a full-res replacement is scaled down, keeping quality).
   type: 'crop' | 'edited';
   original_url?: string; // edited: source version url (provenance)
   bboxAtCrop: BBoxPct; // ⚡ build uses THIS (01 §3.4)

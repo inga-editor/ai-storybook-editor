@@ -90,12 +90,25 @@ describe('buildLottieAnimation — anchor / parent math (README §5)', () => {
     expect(la.ks.r.k).toBe(0);
   });
 
-  it('defaults unset normal pivot to the bboxAtCrop center', () => {
+  it('defaults unset normal pivot to the bboxAtCrop center (asset px == box px → s=100)', () => {
     const a = withCropVersion(makePart({ id: 'a' }), { x: 10, y: 20, w: 30, h: 40 });
-    const anim = buildLottieAnimation([a], imgW, imgH, 'rig', new Map([['a', { dataUrl: PNG_1x1, w: 1, h: 1 }]]));
+    // box = 30%×40% of 1000×800 = 300×320; asset matches → scale stays 100, anchor in box px.
+    const anim = buildLottieAnimation([a], imgW, imgH, 'rig', new Map([['a', { dataUrl: PNG_1x1, w: 300, h: 320 }]]));
     // center = (10+15, 20+20)% = (25,40)% → comp [250,320]; anchor = center−topLeft = [150,160]
     expect(anim.layers[0].ks.p.k).toEqual([250, 320, 0]);
     expect(anim.layers[0].ks.a.k).toEqual([150, 160, 0]);
+    expect(anim.layers[0].ks.s.k).toEqual([100, 100, 100]);
+  });
+
+  it('scales a full-res asset down to its bbox rect (native px ≠ box px → keeps resolution)', () => {
+    // Same box (300×320) but a 1024² native asset (e.g. a swapped ball). Position is unchanged;
+    // scale maps native→box and anchor is the pivot fraction (center) in asset-local px.
+    const a = withCropVersion(makePart({ id: 'a' }), { x: 10, y: 20, w: 30, h: 40 });
+    const anim = buildLottieAnimation([a], imgW, imgH, 'rig', new Map([['a', { dataUrl: PNG_1x1, w: 1024, h: 1024 }]]));
+    const [la] = anim.layers;
+    expect(la.ks.p.k).toEqual([250, 320, 0]); // pivot comp — independent of asset px
+    expect(la.ks.a.k).toEqual([512, 512, 0]); // center of the 1024² asset (fx=fy=0.5)
+    expect(la.ks.s.k).toEqual([(300 / 1024) * 100, (320 / 1024) * 100, 100]);
   });
 
   it('emits a ty:3 null layer (no asset, origin anchor, 50/50 default pivot)', () => {

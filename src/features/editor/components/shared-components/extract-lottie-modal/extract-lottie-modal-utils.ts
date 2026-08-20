@@ -224,11 +224,26 @@ export function buildLottieAnimation(
       parent = parentIdx + 1;
     }
 
-    // Anchor: image layer = pivot minus crop top-left (layer-local px); null = origin.
-    const anchor: [number, number, number] =
-      isImageLayer && bboxAtCrop
-        ? [pivotCompX - (bboxAtCrop.x / 100) * imgW, pivotCompY - (bboxAtCrop.y / 100) * imgH, 0]
-        : [0, 0, 0];
+    // Anchor + scale: the asset fills its bboxAtCrop rect in comp px (README §5). The stored PNG
+    // may be a DIFFERENT resolution than that rect (e.g. a full-res 1024² swapped ball dropped
+    // into a ~178px slot), so `s` maps native asset px → box comp px — keeping full image
+    // resolution (no downscaled re-encode) while rendering at the correct size. Anchor is the
+    // pivot's position WITHIN the box, in asset-local px (transform origin, applied pre-scale).
+    // When asset px already equal the box (a crop at original resolution) → s=100, unchanged.
+    let anchor: [number, number, number] = [0, 0, 0];
+    let scale: [number, number, number] = [100, 100, 100];
+    if (isImageLayer && bboxAtCrop && asset) {
+      const boxLeftComp = (bboxAtCrop.x / 100) * imgW;
+      const boxTopComp = (bboxAtCrop.y / 100) * imgH;
+      const boxW = (bboxAtCrop.w / 100) * imgW;
+      const boxH = (bboxAtCrop.h / 100) * imgH;
+      const sx = boxW > 0 && asset.w > 0 ? (boxW / asset.w) * 100 : 100;
+      const sy = boxH > 0 && asset.h > 0 ? (boxH / asset.h) * 100 : 100;
+      const fx = boxW > 0 ? (pivotCompX - boxLeftComp) / boxW : 0;
+      const fy = boxH > 0 ? (pivotCompY - boxTopComp) / boxH : 0;
+      anchor = [fx * asset.w, fy * asset.h, 0];
+      scale = [sx, sy, 100];
+    }
 
     const layer: LottieLayer = {
       ddd: 0,
@@ -243,7 +258,7 @@ export function buildLottieAnimation(
       ks: {
         a: { a: 0, k: anchor },
         p: { a: 0, k: [posX, posY, 0] },
-        s: { a: 0, k: [100, 100, 100] },
+        s: { a: 0, k: scale },
         r: { a: 0, k: 0 },
         o: { a: 0, k: 100 },
       },
