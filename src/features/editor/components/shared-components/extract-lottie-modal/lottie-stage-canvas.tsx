@@ -13,6 +13,7 @@
 import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import { fitNaturalToFrame, type Size } from '../edit-image-modal/edit-image-modal-fit';
+import { SOURCE_DIM_OPACITY } from './extract-lottie-modal-constants';
 
 const CHECKERBOARD_STYLE: React.CSSProperties = {
   backgroundColor: '#0e1220',
@@ -28,11 +29,17 @@ export interface LottieStageCanvasProps {
   /** View tab: keep the source <img> laid out (sizes the wrapper) but invisible so the checkerboard
    *  shows through and the composite renders alone. */
   hideSource?: boolean;
+  /** Fade the source <img> (an image part is selected) so its box/asset stands out. Ignored when
+   *  `hideSource` wins. */
+  dimSource?: boolean;
   /** Extra cursor for the wrapper (e.g. 'crosshair' on the Pivot tab). */
   cursor?: string;
   isProcessing?: boolean;
   processingLabel?: string;
   onNaturalSize?: (natural: { w: number; h: number }) => void;
+  /** Click on the empty checkerboard (outside the image content) — used by the Parts tab to
+   *  deselect the active part. Fires only when the click lands on the stage backdrop itself. */
+  onBackgroundClick?: () => void;
   /** Overlay layers — each rendered `absolute inset-0` over the image area. */
   children?: ReactNode;
 }
@@ -41,10 +48,12 @@ export function LottieStageCanvas({
   sourceUrl,
   zoom,
   hideSource = false,
+  dimSource = false,
   cursor,
   isProcessing = false,
   processingLabel = 'Đang xử lý…',
   onNaturalSize,
+  onBackgroundClick,
   children,
 }: LottieStageCanvasProps) {
   const stageRef = useRef<HTMLDivElement>(null);
@@ -69,9 +78,16 @@ export function LottieStageCanvas({
   const scaled = fit
     ? { w: Math.round((fit.w * zoom) / 100), h: Math.round((fit.h * zoom) / 100) }
     : null;
+  const sourceOpacity = hideSource ? 0 : dimSource ? SOURCE_DIM_OPACITY : 1;
 
   return (
-    <div ref={stageRef} className="relative flex flex-1 overflow-auto p-6" style={CHECKERBOARD_STYLE}>
+    <div
+      ref={stageRef}
+      className="relative flex flex-1 overflow-auto p-6"
+      style={CHECKERBOARD_STYLE}
+      // Only when the backdrop itself is clicked (not the image/overlay content).
+      onClick={onBackgroundClick ? (e) => e.target === e.currentTarget && onBackgroundClick() : undefined}
+    >
       {/* `m-auto` centers the content when it fits and collapses to 0 on overflow (start stays
        *  reachable), matching EditImageModalCanvas. */}
       <div
@@ -85,11 +101,11 @@ export function LottieStageCanvas({
         <img
           src={sourceUrl}
           alt="Source"
-          className="block object-contain"
+          className="block object-contain transition-opacity"
           style={
             scaled
-              ? { width: scaled.w, height: scaled.h, maxWidth: 'none', opacity: hideSource ? 0 : 1 }
-              : { maxWidth: '100%', maxHeight: '100%', opacity: hideSource ? 0 : 1 }
+              ? { width: scaled.w, height: scaled.h, maxWidth: 'none', opacity: sourceOpacity }
+              : { maxWidth: '100%', maxHeight: '100%', opacity: sourceOpacity }
           }
           onLoad={(e) => {
             const img = e.currentTarget;

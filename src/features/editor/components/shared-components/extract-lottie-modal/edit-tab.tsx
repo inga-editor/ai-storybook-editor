@@ -134,14 +134,14 @@ export function useLottieEditTab({
   const refs = useLottieReferences();
 
   const selectedVersion = activePart ? selectedVersionOf(activePart) : null;
-  const hasAsset = activePart?.kind === 'normal' && !!selectedVersion;
+  const hasAsset = activePart?.kind !== 'null' && !!activePart && !!selectedVersion;
   const canSend = hasAsset && prompt.trim().length > 0 && !isProcessing;
 
   // Session references: Ảnh gốc + other cropped normal parts' selected version (exclude active).
   const sessionSources = useMemo<LottieRefSource[]>(() => {
     const list: LottieRefSource[] = [{ id: 'src:original', label: 'Ảnh gốc', url: sourceUrl }];
     for (const p of parts) {
-      if (p.id === activePart?.id || p.kind !== 'normal') continue;
+      if (p.id === activePart?.id || p.kind === 'null') continue;
       const v = selectedVersionOf(p);
       if (v) list.push({ id: `part:${p.id}`, label: p.name, url: v.media_url });
     }
@@ -315,10 +315,10 @@ export function useLottieEditTab({
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
             maxLength={PROMPT_MAX}
-            rows={3}
+            rows={8}
             placeholder="Describe what to inpaint…"
             aria-label="Inpaint prompt"
-            className="resize-none border-[var(--swap-modal-border-strong)] bg-[var(--swap-modal-surface-hover)] text-[var(--swap-modal-text-primary)] placeholder:text-[var(--swap-modal-text-muted)] focus-visible:ring-[var(--swap-modal-accent)]"
+            className="resize-y border-[var(--swap-modal-border-strong)] bg-[var(--swap-modal-surface-hover)] text-[var(--swap-modal-text-primary)] placeholder:text-[var(--swap-modal-text-muted)] focus-visible:ring-[var(--swap-modal-accent)]"
           />
         </section>
 

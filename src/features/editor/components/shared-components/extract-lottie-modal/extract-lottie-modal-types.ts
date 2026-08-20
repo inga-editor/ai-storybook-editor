@@ -7,8 +7,11 @@
 import type { SpreadImage } from '@/types/spread-types';
 import type { Stroke } from '../edit-image-modal/erase-stroke-engine';
 
-export type LottiePartKind = 'normal' | 'null';
-export type LottieModeTab = 'parts' | 'pivot' | 'edit' | 'view';
+// 'normal' = AI-segment cutout (RGBA), 'manual' = hand-drawn rectangle cropped from the ORIGINAL
+// image (opaque), 'null' = rig node (no asset). normal + manual are both image-bearing parts —
+// downstream (pivot/edit/view/build/extract) treats them identically via `kind !== 'null'`.
+export type LottiePartKind = 'normal' | 'manual' | 'null';
+export type LottieModeTab = 'parts' | 'pivot' | 'edit' | 'eraser' | 'view';
 
 /** Rectangle in % (0-100) of the ORIGINAL image — matches SpreadImage.geometry + crop APIs. */
 export interface BBoxPct {
@@ -36,6 +39,11 @@ export interface LottiePart {
   kind: LottiePartKind;
   parentId: string | null;
   bbox: BBoxPct | null; // % of original; null-part = null (rig node, no asset)
+  /** Crop/segment SOURCE image: undefined/null = the ORIGINAL image. Set when the part was created
+   *  while an image part was selected (sub-part extraction) — the parent's selected-version asset
+   *  URL + that asset's rect in ORIGINAL %. bbox stays in original %; source.rect maps original ↔
+   *  source-local space (segmentUrl of such a part is in source-local space too). */
+  source?: { url: string; rect: BBoxPct } | null;
   aspect: string; // 'Free' | '1:1' | ... (PART_ASPECT_RATIOS)
   segmentUrl: string | null; // RGBA cutout full-size (normal only)
   versions: LottiePartVersion[];

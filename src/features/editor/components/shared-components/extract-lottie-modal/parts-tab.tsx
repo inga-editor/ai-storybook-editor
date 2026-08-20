@@ -23,6 +23,11 @@ import {
 const SELECT_CONTENT_STYLE = { ...SWAP_MODAL_TOKENS, zIndex: Z_INDEX.selectDropdown };
 const SECTION_LABEL_CLASS =
   'mb-2 text-xs font-semibold uppercase tracking-wide text-[var(--swap-modal-text-muted)]';
+const KIND_LABEL: Record<LottiePartKind, string> = {
+  normal: 'Normal',
+  manual: 'Crop',
+  null: 'Null',
+};
 
 export interface PartsTabProps {
   createKind: LottiePartKind;
@@ -32,6 +37,8 @@ export interface PartsTabProps {
   onPromptChange: (prompt: string) => void;
   onCreate: () => void;
   isProcessing: boolean;
+  /** Name of the selected image part that create will crop/segment ON; null = the original image. */
+  sourceName: string | null;
 }
 
 export function PartsTab({
@@ -42,17 +49,29 @@ export function PartsTab({
   onPromptChange,
   onCreate,
   isProcessing,
+  sourceName,
 }: PartsTabProps) {
   const isNormal = createKind === 'normal';
+  const isManual = createKind === 'manual';
   const createDisabled = isProcessing || (isNormal && prompt.trim().length === 0);
 
   return (
     <div className="flex flex-col gap-5 px-4 py-4">
+      {/* Source hint: which image the create operates on (selected part vs original). */}
+      {createKind !== 'null' && (
+        <p className="text-[11px] text-[var(--swap-modal-text-muted)]">
+          Tạo trên:{' '}
+          <span className="font-medium text-[var(--swap-modal-text-primary)]">
+            {sourceName ?? 'Ảnh gốc'}
+          </span>
+        </p>
+      )}
+
       {/* Kind switch */}
       <section>
         <p className={SECTION_LABEL_CLASS}>Kind</p>
         <div className="flex rounded-lg bg-[var(--swap-modal-surface-hover)] p-1">
-          {(['normal', 'null'] as LottiePartKind[]).map((kind) => (
+          {(['normal', 'manual', 'null'] as LottiePartKind[]).map((kind) => (
             <button
               key={kind}
               type="button"
@@ -65,7 +84,7 @@ export function PartsTab({
                   : 'text-[var(--swap-modal-text-muted)] hover:text-[var(--swap-modal-text-primary)]',
               )}
             >
-              {kind === 'normal' ? 'Normal' : 'Null'}
+              {KIND_LABEL[kind]}
             </button>
           ))}
         </div>
@@ -108,6 +127,17 @@ export function PartsTab({
             </p>
           </section>
         </>
+      )}
+
+      {isManual && (
+        <section>
+          <p className={SECTION_LABEL_CLASS}>Crop tay</p>
+          <p className="text-xs leading-relaxed text-[var(--swap-modal-text-muted)]">
+            Thêm một khung chữ nhật vào canvas, kéo/thay đổi kích thước tuỳ ý, rồi bấm{' '}
+            <span className="font-semibold text-[var(--swap-modal-text-primary)]">Crop</span> để cắt
+            thẳng vùng ảnh đó thành một part.
+          </p>
+        </section>
       )}
 
       <button

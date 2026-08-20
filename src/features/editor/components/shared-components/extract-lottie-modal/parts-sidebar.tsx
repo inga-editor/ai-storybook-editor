@@ -4,7 +4,7 @@
 // Click item → select. ⚙ → PartConfigPopover (Name + Parent). Presentational — the shell owns state.
 
 import { useState } from 'react';
-import { Settings, Trash2, Square, Circle } from 'lucide-react';
+import { Settings, Trash2, Square, Circle, Crop } from 'lucide-react';
 import { cn } from '@/utils/utils';
 import { createLogger } from '@/utils/logger';
 import type { LottiePart } from './extract-lottie-modal-types';
@@ -21,6 +21,8 @@ export interface PartsSidebarProps {
   onDeletePart: (id: string) => void;
   onConfigSave: (id: string, patch: { name: string; parentId: string | null }) => void;
   onSelectVersion: (partId: string, versionId: string) => void;
+  /** Click on the empty area below the parts list → deselect (→ back to the original image). */
+  onDeselect: () => void;
 }
 
 export function PartsSidebar({
@@ -31,6 +33,7 @@ export function PartsSidebar({
   onDeletePart,
   onConfigSave,
   onSelectVersion,
+  onDeselect,
 }: PartsSidebarProps) {
   // At most one config popover open at a time (opening one closes the others).
   const [openConfigId, setOpenConfigId] = useState<string | null>(null);
@@ -41,13 +44,20 @@ export function PartsSidebar({
       style={{ width: LOTTIE_MODAL_LAYOUT.leftSidebar }}
       aria-label="Parts"
     >
-      <div className="flex shrink-0 items-center border-b border-[var(--swap-modal-border)] px-4 py-3">
+      <div
+        className="flex shrink-0 items-center border-b border-[var(--swap-modal-border)] px-4"
+        style={{ height: LOTTIE_MODAL_LAYOUT.stageHeaderH }}
+      >
         <span className="text-xs font-semibold uppercase tracking-wide text-[var(--swap-modal-text-muted)]">
           Parts
         </span>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
+      <div
+        className="min-h-0 flex-1 overflow-y-auto px-2 py-2"
+        // Click on the empty area below the list (not on a part row) → deselect.
+        onClick={(e) => e.target === e.currentTarget && onDeselect()}
+      >
         {parts.length === 0 ? (
           <p className="px-2 py-6 text-center text-xs text-[var(--swap-modal-text-muted)]">
             Chưa có part nào — tạo part ở panel bên phải.
@@ -57,7 +67,7 @@ export function PartsSidebar({
             {parts.map((part) => {
               const isActive = part.id === activePartId;
               const isNull = part.kind === 'null';
-              const KindIcon = isNull ? Circle : Square;
+              const KindIcon = isNull ? Circle : part.kind === 'manual' ? Crop : Square;
               return (
                 <li key={part.id}>
                   <PartConfigPopover
@@ -137,7 +147,12 @@ export function PartsSidebar({
                               <button
                                 key={v.id}
                                 type="button"
-                                onClick={() => onSelectVersion(part.id, v.id)}
+                                onClick={() => {
+                                  // Clicking a version thumbnail also activates its part and makes
+                                  // that version the selected (final) result.
+                                  onSelectPart(part.id);
+                                  onSelectVersion(part.id, v.id);
+                                }}
                                 className={cn(
                                   'relative aspect-square overflow-hidden rounded-md border bg-[var(--swap-modal-surface-hover)]',
                                   selected

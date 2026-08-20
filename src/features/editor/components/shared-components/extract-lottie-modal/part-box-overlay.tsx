@@ -31,6 +31,7 @@ import { selectedVersionOf } from './extract-lottie-modal-utils';
 import {
   PART_ASPECT_RATIOS,
   PART_BBOX_MIN_PCT,
+  PART_BADGE_ACCENT,
   SWAP_MODAL_TOKENS,
   Z_INDEX,
 } from './extract-lottie-modal-constants';
@@ -44,7 +45,7 @@ const CORNER_STYLE: Record<ResizeCorner, React.CSSProperties> = {
   se: { bottom: -5, right: -5, cursor: 'se-resize' },
 };
 const BOX_COLOR = '#ffffff';
-const ACCENT = '#3b6cf6';
+const ACCENT = PART_BADGE_ACCENT;
 
 interface DragState {
   type: 'drag' | 'resize';
@@ -64,6 +65,9 @@ export interface PartBoxOverlayProps {
   onSelectPart: (id: string) => void;
   onUpdateBBox: (id: string, bbox: BBoxPct) => void;
   onAspectChange: (id: string, aspect: string) => void;
+  /** Clicking the stage area OUTSIDE the active box deselects (→ back to the original image).
+   *  Parts tab only; omit to disable. */
+  onDeselect?: () => void;
 }
 
 export function PartBoxOverlay({
@@ -74,12 +78,14 @@ export function PartBoxOverlay({
   onSelectPart,
   onUpdateBBox,
   onAspectChange,
+  onDeselect,
 }: PartBoxOverlayProps) {
   const areaRef = useRef<HTMLDivElement>(null);
   const dragStateRef = useRef<DragState | null>(null);
 
   const active = parts.find((p) => p.id === activePartId) ?? null;
-  const activeIsNormalBox = active?.kind === 'normal' && !!active.bbox;
+  // Both normal (segment) and manual (hand-crop) parts have an editable box; null parts don't.
+  const activeIsBox = active?.kind !== 'null' && !!active?.bbox;
 
   const beginPointer = useCallback(
     (e: React.MouseEvent, box: BBoxPct, aspect: string, type: 'drag' | 'resize', corner?: ResizeCorner) => {
@@ -100,7 +106,7 @@ export function PartBoxOverlay({
 
   // Document-level move/up so a drag continues outside the box bounds.
   useEffect(() => {
-    if (!interactive || !activeIsNormalBox || !active) return;
+    if (!interactive || !activeIsBox || !active) return;
     const activeId = active.id;
     const onMove = (e: MouseEvent) => {
       const st = dragStateRef.current;
@@ -128,7 +134,7 @@ export function PartBoxOverlay({
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup', onUp);
     };
-  }, [interactive, activeIsNormalBox, active, onUpdateBBox]);
+  }, [interactive, activeIsBox, active, onUpdateBBox]);
 
   const handleAspectChange = useCallback(
     (id: string, aspect: string, box: BBoxPct) => {
@@ -146,7 +152,7 @@ export function PartBoxOverlay({
     return (
       <div ref={areaRef} className="absolute inset-0">
         {parts
-          .filter((p) => p.kind === 'normal' && p.bbox)
+          .filter((p) => p.kind !== 'null' && p.bbox)
           .map((p) => (
             <div
               key={p.id}
@@ -170,12 +176,47 @@ export function PartBoxOverlay({
   }
 
   // ── Active normal part → single bright box + asset overlay ─────────────────────
-  if (!activeIsNormalBox || !active.bbox) return null;
+  if (!activeIsBox || !active.bbox) return null;
   const box = active.bbox;
   const version = selectedVersionOf(active);
+  // Once cropped, the box is locked: border + name badge only (no drag/resize/aspect). Re-cropping
+  // uses a fresh part, so the frozen bboxAtCrop stays authoritative for the build.
+  const editable = interactive && !version;
 
   return (
-    <div ref={areaRef} className="absolute inset-0 select-none leading-none">
+    <div
+      ref={areaRef}
+      className="absolute inset-0 select-none leading-none"
+      // Click on the empty area (not the box) → deselect. `target === currentTarget` means the
+      // click landed on the area itself, not the box or its children.
+      onClick={onDeselect ? (e) => e.target === e.currentTarget && onDeselect() : undefined}
+    >
+      {/* Sub-part source context: the parent part's asset rendered bright at its rect (over the
+       *  dimmed original) + dashed boundary — the user positions the child box ON the actual crop
+       *  source, and SEES that the crop cuts from the parent, not the original. */}
+      {active.source && (
+        <div
+          className="pointer-events-none absolute"
+          style={{
+            left: `${active.source.rect.x}%`,
+            top: `${active.source.rect.y}%`,
+            width: `${active.source.rect.w}%`,
+            height: `${active.source.rect.h}%`,
+          }}
+        >
+          <img
+            src={active.source.url}
+            alt="Nguồn crop"
+            className="absolute inset-0 h-full w-full"
+            style={{ objectFit: 'fill' }}
+          />
+          <div
+            className="absolute inset-0"
+            style={{ border: `1px dashed ${ACCENT}`, opacity: 0.7 }}
+          />
+        </div>
+      )}
+
       <div
         className="absolute"
         style={{
@@ -183,10 +224,12 @@ export function PartBoxOverlay({
           top: `${box.y}%`,
           width: `${box.w}%`,
           height: `${box.h}%`,
+          // On the Parts tab the box always captures pointer events so clicking it never deselects
+          // (only a locked box drops the move cursor). Pivot tab keeps it click-through.
           pointerEvents: interactive ? 'auto' : 'none',
-          cursor: interactive ? 'move' : 'default',
+          cursor: editable ? 'move' : 'default',
         }}
-        onMouseDown={interactive ? (e) => beginPointer(e, box, active.aspect, 'drag') : undefined}
+        onMouseDown={editable ? (e) => beginPointer(e, box, active.aspect, 'drag') : undefined}
       >
         {/* Asset overlay (selected version rendered at bbox) */}
         {version && (
@@ -207,47 +250,50 @@ export function PartBoxOverlay({
           }}
         />
 
-        {/* Toolbar (interactive only): aspect Select + name tag */}
-        {interactive && (
-          <div
-            className="pointer-events-none absolute flex items-center justify-between gap-2"
-            style={{ top: -30, left: 0, right: 0, zIndex: 30 }}
-          >
-            <div
-              className="pointer-events-auto"
-              onMouseDown={(e) => e.stopPropagation()}
-              onClick={(e) => e.stopPropagation()}
-            >
-              <Select
-                value={active.aspect}
-                onValueChange={(v) => handleAspectChange(active.id, v, box)}
+        {/* Toolbar: name tag always (Parts + Pivot), aspect Select only while editable. A
+         *  cropped/locked or read-only box keeps the badge but drops the aspect control. */}
+        <div
+          className={`pointer-events-none absolute flex items-center gap-2 ${
+            editable ? 'justify-between' : 'justify-end'
+          }`}
+          style={{ top: -30, left: 0, right: 0, zIndex: 30 }}
+        >
+          {editable && (
+              <div
+                className="pointer-events-auto"
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={(e) => e.stopPropagation()}
               >
-                <SelectTrigger
-                  className="h-6 min-w-0 w-auto gap-1 rounded-md border-white bg-[var(--swap-modal-bg)] px-2 text-[11px] text-[var(--swap-modal-text-primary)]"
-                  aria-label="Aspect ratio"
+                <Select
+                  value={active.aspect}
+                  onValueChange={(v) => handleAspectChange(active.id, v, box)}
                 >
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent style={SELECT_CONTENT_STYLE}>
-                  {PART_ASPECT_RATIOS.map((r) => (
-                    <SelectItem key={r} value={r} className="text-xs">
-                      {r}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <span
-              className="whitespace-nowrap rounded-full px-2.5 py-0.5 text-[11px] font-semibold text-white shadow-sm"
-              style={{ background: ACCENT }}
-            >
-              {active.name}
-            </span>
-          </div>
-        )}
+                  <SelectTrigger
+                    className="h-6 min-w-0 w-auto gap-1 rounded-md border-white bg-[var(--swap-modal-bg)] px-2 text-[11px] text-[var(--swap-modal-text-primary)]"
+                    aria-label="Aspect ratio"
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent style={SELECT_CONTENT_STYLE}>
+                    {PART_ASPECT_RATIOS.map((r) => (
+                      <SelectItem key={r} value={r} className="text-xs">
+                        {r}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+          <span
+            className="whitespace-nowrap rounded-full px-2.5 py-0.5 text-[11px] font-semibold text-white shadow-sm"
+            style={{ background: ACCENT }}
+          >
+            {active.name}
+          </span>
+        </div>
 
-        {/* Corner handles (interactive only) */}
-        {interactive &&
+        {/* Corner handles (editable only) */}
+        {editable &&
           CORNERS.map((corner) => (
             <div
               key={corner}

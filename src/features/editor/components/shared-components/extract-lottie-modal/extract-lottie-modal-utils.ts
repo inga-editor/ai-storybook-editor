@@ -112,6 +112,144 @@ export async function cropImageByBBox(imgUrl: string, bboxPct: BBoxPct): Promise
   return canvas.toDataURL('image/png');
 }
 
+// ── 4.2b Source-rect mapping (sub-part extraction on a parent part's asset) ──
+
+/** Map a bbox in % of a SOURCE image (which occupies `rect` of the original) → original-image %. */
+export function localToOriginal(local: BBoxPct, rect: BBoxPct): BBoxPct {
+  return {
+    x: rect.x + (local.x / 100) * rect.w,
+    y: rect.y + (local.y / 100) * rect.h,
+    w: (local.w / 100) * rect.w,
+    h: (local.h / 100) * rect.h,
+  };
+}
+
+/** Inverse of localToOriginal (`rect` w/h must be > 0). */
+export function originalToLocal(orig: BBoxPct, rect: BBoxPct): BBoxPct {
+  return {
+    x: ((orig.x - rect.x) / rect.w) * 100,
+    y: ((orig.y - rect.y) / rect.h) * 100,
+    w: (orig.w / rect.w) * 100,
+    h: (orig.h / rect.h) * 100,
+  };
+}
+
+/** Intersection of two bboxes (same space). null = no overlap. */
+export function intersectBBox(a: BBoxPct, b: BBoxPct): BBoxPct | null {
+  const x1 = Math.max(a.x, b.x);
+  const y1 = Math.max(a.y, b.y);
+  const x2 = Math.min(a.x + a.w, b.x + b.w);
+  const y2 = Math.min(a.y + a.h, b.y + b.h);
+  if (x2 - x1 <= 0 || y2 - y1 <= 0) return null;
+  return { x: x1, y: y1, w: x2 - x1, h: y2 - y1 };
+}
+
+// ── 4.2c Erase extracted sub-parts from a part's asset (client-only, no AI) ──
+
+/** One region to erase: the sub-part's crop-time PNG (RGBA cutout for normal parts → erases only
+ *  the object pixels; opaque rect for manual crops → erases the whole rect) + its frozen crop
+ *  rect in ORIGINAL %. */
+export interface EraseRegion {
+  url: string;
+  rect: BBoxPct;
+}
+
+/** Sub-parts of `parent` in the EXTRACTION tree — parts whose crop/segment source was one of the
+ *  parent's version assets — that already carry a crop version. The pixel-space link is
+ *  `source.url` (rig `parentId` is reparentable and deliberately ignored). The returned version
+ *  is the crop-time one: an edited version's pixels no longer match what was cut out. */
+export function erasableChildrenOf(
+  parts: LottiePart[],
+  parent: LottiePart,
+): { part: LottiePart; version: LottiePartVersion }[] {
+  const parentUrls = new Set(parent.versions.map((v) => v.media_url));
+  const out: { part: LottiePart; version: LottiePartVersion }[] = [];
+  for (const p of parts) {
+    if (p.id === parent.id || p.kind === 'null' || !p.source) continue;
+    if (!parentUrls.has(p.source.url)) continue;
+    const version = p.versions.find((v) => v.type === 'crop') ?? p.versions[0];
+    if (!version) continue;
+    out.push({ part: p, version });
+  }
+  return out;
+}
+
+/** Alpha-dilation radius (asset px) when erasing sub-parts — the segment cutout's anti-aliased
+ *  edge would otherwise leave a semi-transparent halo around every erased region. */
+const ERASE_DILATE_PX = 2;
+
+/**
+ * Erase each region's pixels from a part asset → full-size PNG data URL (same dims as the asset).
+ * Pure canvas compositing: binarize each region's alpha (any alpha>0 → opaque so anti-aliased
+ * cutout edges erase fully), then `destination-out` draws at ±ERASE_DILATE_PX offsets mapped via
+ * `assetRect` (the asset's bboxAtCrop in original %). Returns null when nothing visible remains.
+ */
+export async function erasePartsFromAsset(
+  assetUrl: string,
+  assetRect: BBoxPct,
+  erasures: EraseRegion[],
+): Promise<string | null> {
+  const img = await loadImage(assetUrl);
+  const W = img.naturalWidth;
+  const H = img.naturalHeight;
+  if (!W || !H) return null;
+  const canvas = document.createElement('canvas');
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Canvas 2D context unavailable');
+  ctx.drawImage(img, 0, 0);
+
+  for (const erasure of erasures) {
+    const eImg = await loadImage(erasure.url);
+    const mask = document.createElement('canvas');
+    mask.width = eImg.naturalWidth;
+    mask.height = eImg.naturalHeight;
+    const mctx = mask.getContext('2d');
+    if (!mctx) throw new Error('Canvas 2D context unavailable');
+    mctx.drawImage(eImg, 0, 0);
+    const id = mctx.getImageData(0, 0, mask.width, mask.height);
+    for (let i = 3; i < id.data.length; i += 4) id.data[i] = id.data[i] > 0 ? 255 : 0;
+    mctx.putImageData(id, 0, 0);
+
+    const local = originalToLocal(erasure.rect, assetRect);
+    const dx = (local.x / 100) * W;
+    const dy = (local.y / 100) * H;
+    const dw = (local.w / 100) * W;
+    const dh = (local.h / 100) * H;
+    ctx.globalCompositeOperation = 'destination-out';
+    for (const ox of [-ERASE_DILATE_PX, 0, ERASE_DILATE_PX]) {
+      for (const oy of [-ERASE_DILATE_PX, 0, ERASE_DILATE_PX]) {
+        ctx.drawImage(mask, dx + ox, dy + oy, dw, dh);
+      }
+    }
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
+  // Empty check on a small downscale (a remainder invisible at 256px is visually nothing).
+  const scale = Math.min(1, 256 / Math.max(W, H));
+  const cw = Math.max(1, Math.round(W * scale));
+  const ch = Math.max(1, Math.round(H * scale));
+  const check = document.createElement('canvas');
+  check.width = cw;
+  check.height = ch;
+  const cctx = check.getContext('2d');
+  if (cctx) {
+    cctx.drawImage(canvas, 0, 0, cw, ch);
+    const { data } = cctx.getImageData(0, 0, cw, ch);
+    let hasPixel = false;
+    for (let i = 3; i < data.length; i += 4) {
+      if (data[i] > 0) {
+        hasPixel = true;
+        break;
+      }
+    }
+    if (!hasPixel) return null;
+  }
+
+  return canvas.toDataURL('image/png');
+}
+
 // ── 4.3 Build .lottie v2 ─────────────────────────────────────────────────────
 
 /** Resolve the version the build should use: explicit selection, else last (most recent). */
@@ -123,12 +261,14 @@ export function selectedVersionOf(part: LottiePart): LottiePartVersion | null {
   );
 }
 
-/** Pivot in % of the ORIGINAL image, with defaults (README §5): unset normal = center of
- *  bboxAtCrop; unset null = 50/50. `bboxAtCrop` is the selected version's frozen crop rect. */
+/** Transform-origin in % of the ORIGINAL image. No default pivot is invented: an unset image part
+ *  uses its bboxAtCrop TOP-LEFT (→ anchor [0,0], the neutral Lottie origin — render is unchanged,
+ *  no center joint is baked in); an unset null node (no geometry) uses 0,0. `bboxAtCrop` is the
+ *  selected version's frozen crop rect. */
 function pivotOf(part: LottiePart, bboxAtCrop: BBoxPct | null): { x: number; y: number } {
   if (part.pivot) return part.pivot;
-  if (part.kind === 'null' || !bboxAtCrop) return { x: 50, y: 50 };
-  return { x: bboxAtCrop.x + bboxAtCrop.w / 2, y: bboxAtCrop.y + bboxAtCrop.h / 2 };
+  if (part.kind === 'null' || !bboxAtCrop) return { x: 0, y: 0 };
+  return { x: bboxAtCrop.x, y: bboxAtCrop.y };
 }
 
 /** Bodymovin transform (static — no keyframes). */
@@ -187,8 +327,9 @@ export interface PartAsset {
  *
  * Layer order = parts order (head = topmost). `ind` is 1-based; `parent` references the parent
  * part's `ind`. Anchor (layer-local px) places the asset so its top-left lands at bboxAtCrop's
- * top-left while the pivot is the transform origin; parented children carry parent-LOCAL
- * position (child pivot comp − parent pivot comp).
+ * top-left while the pivot is the transform origin. A parented layer's `ks.p` lives in the
+ * PARENT's local (asset-px) space, so it is resolved by inverting the whole ancestor chain —
+ * anchor AND scale of every ancestor, not just the parent pivot delta.
  */
 export function buildLottieAnimation(
   parts: LottiePart[],
@@ -201,35 +342,22 @@ export function buildLottieAnimation(
   const assets: LottieAsset[] = [];
   const layers: LottieLayer[] = [];
 
-  parts.forEach((part, i) => {
+  // ── Pass 1: per-layer params in FIXED spaces — anchor/scale in asset px, pivot in comp px.
+  // Anchor + scale: the asset fills its bboxAtCrop rect in comp px (README §5). The stored PNG
+  // may be a DIFFERENT resolution than that rect (e.g. a full-res 1024² swapped ball dropped
+  // into a ~178px slot), so `s` maps native asset px → box comp px — keeping full image
+  // resolution (no downscaled re-encode) while rendering at the correct size. Anchor is the
+  // pivot's position WITHIN the box, in asset-local px (transform origin, applied pre-scale).
+  // When asset px already equal the box (a crop at original resolution) → s=100, unchanged.
+  const calcs = parts.map((part, i) => {
     const version = selectedVersionOf(part);
     const asset = assetByPartId.get(part.id);
-    const isImageLayer = part.kind === 'normal' && !!version && !!asset;
+    const isImageLayer = part.kind !== 'null' && !!version && !!asset;
     const bboxAtCrop = version?.bboxAtCrop ?? part.bbox ?? null;
 
     const pivot = pivotOf(part, bboxAtCrop);
-    const pivotCompX = (pivot.x / 100) * imgW;
-    const pivotCompY = (pivot.y / 100) * imgH;
+    const pivotComp = { x: (pivot.x / 100) * imgW, y: (pivot.y / 100) * imgH };
 
-    // Position: parent-local when parented (subtract parent pivot comp px).
-    let posX = pivotCompX;
-    let posY = pivotCompY;
-    let parent: number | undefined;
-    if (part.parentId && indexById.has(part.parentId)) {
-      const parentIdx = indexById.get(part.parentId)!;
-      const parentPart = parts[parentIdx];
-      const parentPivot = pivotOf(parentPart, selectedVersionOf(parentPart)?.bboxAtCrop ?? null);
-      posX -= (parentPivot.x / 100) * imgW;
-      posY -= (parentPivot.y / 100) * imgH;
-      parent = parentIdx + 1;
-    }
-
-    // Anchor + scale: the asset fills its bboxAtCrop rect in comp px (README §5). The stored PNG
-    // may be a DIFFERENT resolution than that rect (e.g. a full-res 1024² swapped ball dropped
-    // into a ~178px slot), so `s` maps native asset px → box comp px — keeping full image
-    // resolution (no downscaled re-encode) while rendering at the correct size. Anchor is the
-    // pivot's position WITHIN the box, in asset-local px (transform origin, applied pre-scale).
-    // When asset px already equal the box (a crop at original resolution) → s=100, unchanged.
     let anchor: [number, number, number] = [0, 0, 0];
     let scale: [number, number, number] = [100, 100, 100];
     if (isImageLayer && bboxAtCrop && asset) {
@@ -239,36 +367,77 @@ export function buildLottieAnimation(
       const boxH = (bboxAtCrop.h / 100) * imgH;
       const sx = boxW > 0 && asset.w > 0 ? (boxW / asset.w) * 100 : 100;
       const sy = boxH > 0 && asset.h > 0 ? (boxH / asset.h) * 100 : 100;
-      const fx = boxW > 0 ? (pivotCompX - boxLeftComp) / boxW : 0;
-      const fy = boxH > 0 ? (pivotCompY - boxTopComp) / boxH : 0;
+      const fx = boxW > 0 ? (pivotComp.x - boxLeftComp) / boxW : 0;
+      const fy = boxH > 0 ? (pivotComp.y - boxTopComp) / boxH : 0;
       anchor = [fx * asset.w, fy * asset.h, 0];
       scale = [sx, sy, 100];
     }
 
+    const rawParentIdx = part.parentId != null ? indexById.get(part.parentId) : undefined;
+    const parentIdx = rawParentIdx !== undefined && rawParentIdx !== i ? rawParentIdx : null;
+    return { part, asset, isImageLayer, pivotComp, anchor, scale, parentIdx };
+  });
+
+  // ── Pass 2: ks.p. Lottie evaluates a layer's transform in its parent's LOCAL space:
+  // world(x) = T_parent(p + M(x − a)), so the invariant "the anchor lands at pivotComp in comp
+  // space" gives p_L = T_parent⁻¹(pivotComp_L), inverted recursively up the chain:
+  //   toLocal(root, y)  = y                                  (comp space)
+  //   toLocal(i, y)     = a_i + (toLocal(parent_i, y) − p_i) / s_i
+  //   p_i               = toLocal(parent_i, pivotComp_i)
+  // A `stack` guards malformed parent cycles (degrades that link to comp space).
+  const posCache = new Map<number, { x: number; y: number }>();
+  const layerPos = (i: number, stack: ReadonlySet<number>): { x: number; y: number } => {
+    const hit = posCache.get(i);
+    if (hit) return hit;
+    const c = calcs[i];
+    const pos =
+      c.parentIdx === null || stack.has(i)
+        ? c.pivotComp
+        : toLocal(c.parentIdx, c.pivotComp, new Set(stack).add(i));
+    posCache.set(i, pos);
+    return pos;
+  };
+  const toLocal = (
+    i: number,
+    point: { x: number; y: number },
+    stack: ReadonlySet<number>,
+  ): { x: number; y: number } => {
+    const c = calcs[i];
+    const up =
+      c.parentIdx === null || stack.has(c.parentIdx) ? point : toLocal(c.parentIdx, point, stack);
+    const p = layerPos(i, stack);
+    return {
+      x: c.anchor[0] + (up.x - p.x) / (c.scale[0] / 100 || 1),
+      y: c.anchor[1] + (up.y - p.y) / (c.scale[1] / 100 || 1),
+    };
+  };
+
+  calcs.forEach((c, i) => {
+    const pos = layerPos(i, new Set());
     const layer: LottieLayer = {
       ddd: 0,
       ind: i + 1,
-      ty: isImageLayer ? 2 : 3,
-      nm: part.name,
+      ty: c.isImageLayer ? 2 : 3,
+      nm: c.part.name,
       sr: 1,
       ip: 0,
       op: LOTTIE_OP,
       st: 0,
       bm: 0,
       ks: {
-        a: { a: 0, k: anchor },
-        p: { a: 0, k: [posX, posY, 0] },
-        s: { a: 0, k: scale },
+        a: { a: 0, k: c.anchor },
+        p: { a: 0, k: [pos.x, pos.y, 0] },
+        s: { a: 0, k: c.scale },
         r: { a: 0, k: 0 },
         o: { a: 0, k: 100 },
       },
     };
-    if (parent !== undefined) layer.parent = parent;
+    if (c.parentIdx !== null) layer.parent = c.parentIdx + 1;
 
-    if (isImageLayer && asset) {
+    if (c.isImageLayer && c.asset) {
       const refId = `img_${i}`;
       layer.refId = refId;
-      assets.push({ id: refId, w: asset.w, h: asset.h, u: '', p: asset.dataUrl, e: 1 });
+      assets.push({ id: refId, w: c.asset.w, h: c.asset.h, u: '', p: c.asset.dataUrl, e: 1 });
     }
     layers.push(layer);
   });
@@ -318,7 +487,7 @@ export async function buildLottieFile(
 ): Promise<Blob> {
   const assetByPartId = new Map<string, PartAsset>();
   for (const part of parts) {
-    if (part.kind !== 'normal') continue;
+    if (part.kind === 'null') continue;
     const version = selectedVersionOf(part);
     if (!version) continue;
     assetByPartId.set(part.id, await fetchAsPartAsset(version.media_url));

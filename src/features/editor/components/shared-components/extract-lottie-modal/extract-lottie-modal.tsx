@@ -10,7 +10,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Star } from 'lucide-react';
+import { Eraser, Star } from 'lucide-react';
 import { toast } from 'sonner';
 import { useInteractionLayer, useGlobalHotkey } from '@/features/editor/contexts';
 import { createLogger } from '@/utils/logger';
@@ -50,6 +50,7 @@ import {
   LOTTIE_MODAL_LAYOUT,
   SEGMENT_MODEL_OPTIONS,
   LOTTIE_PARTS_FOLDER,
+  MANUAL_DEFAULT_BBOX,
 } from './extract-lottie-modal-constants';
 import {
   detectAlphaBBox,
@@ -58,6 +59,11 @@ import {
   buildLottieFile,
   slugify,
   downloadBlob,
+  localToOriginal,
+  originalToLocal,
+  intersectBBox,
+  erasableChildrenOf,
+  erasePartsFromAsset,
 } from './extract-lottie-modal-utils';
 import { useLottieDraft } from './use-lottie-draft';
 import { ExtractLottieModalHeader } from './extract-lottie-modal-header';
@@ -70,6 +76,7 @@ import { PivotTab } from './pivot-tab';
 import { LottieMaskCanvas } from './lottie-mask-canvas';
 import { ViewTab } from './view-tab';
 import { useLottieEditTab } from './edit-tab';
+import { useLottieEraserTab } from './lottie-eraser-tab';
 
 const log = createLogger('Editor', 'ExtractLottieModal');
 
@@ -84,6 +91,7 @@ const RIGHT_PANEL_TITLE: Record<LottieModeTab, string> = {
   parts: 'Tạo Part',
   pivot: 'Parameters',
   edit: 'Parameters',
+  eraser: 'Parameters',
   view: '',
 };
 
@@ -206,6 +214,9 @@ export function ExtractLottieModal({
   );
 
   const handleSelectPart = useCallback((id: string) => setActivePartId(id), []);
+  // Deselect → back to the original image (no active part). Used by outside-clicks on the stage
+  // and the sidebar empty area.
+  const handleDeselectPart = useCallback(() => setActivePartId(null), []);
 
   const handleDeletePart = useCallback(
     (id: string) => {
@@ -236,8 +247,19 @@ export function ExtractLottieModal({
     [updatePart],
   );
 
-  // ── Parts tab: create (segment / null) ──────────────────────────────────────────
+  // ── Parts tab: create (segment / manual / null) ─────────────────────────────────
+  // Crop/segment SOURCE: the selected image part's chosen version (sub-part extraction — e.g. cắt
+  // cánh tay từ part tay), else the ORIGINAL image. No selection / null part / part chưa crop →
+  // original. New sub-parts auto-parent to the source part (rig follows the extraction tree).
+  const createSourcePart =
+    activePart && activePart.kind !== 'null' && selectedVersionOf(activePart) ? activePart : null;
+
   const handleCreate = useCallback(async () => {
+    const sourceVersion = createSourcePart ? selectedVersionOf(createSourcePart)! : null;
+    const source = sourceVersion
+      ? { url: sourceVersion.media_url, rect: sourceVersion.bboxAtCrop }
+      : null;
+
     if (createKind === 'null') {
       const n = parts.filter((p) => p.kind === 'null').length + 1;
       const part: LottiePart = {
@@ -258,13 +280,40 @@ export function ExtractLottieModal({
       return;
     }
 
+    // Manual crop: drop a movable/resizable rectangle onto the canvas immediately (no AI). The
+    // user positions it, then the top-bar Crop button cuts the SOURCE image by this box.
+    if (createKind === 'manual') {
+      const n = parts.filter((p) => p.kind === 'manual').length + 1;
+      const part: LottiePart = {
+        id: crypto.randomUUID(),
+        name: `Crop ${n}`,
+        kind: 'manual',
+        parentId: source ? createSourcePart!.id : null,
+        // Default box centered within the source rect (original % either way).
+        bbox: source ? localToOriginal(MANUAL_DEFAULT_BBOX, source.rect) : { ...MANUAL_DEFAULT_BBOX },
+        aspect: 'Free',
+        segmentUrl: null,
+        source,
+        versions: [],
+        selectedVersionId: null,
+        pivot: null,
+        maskStrokes: [],
+      };
+      setParts((prev) => [...prev, part]);
+      setActivePartId(part.id);
+      return;
+    }
+
     const prompt = partsPrompt.trim();
     if (!prompt || !sourceUrl) return;
     setIsProcessing(true);
-    log.info('handleCreate', 'segment start', { promptLen: prompt.length });
+    log.info('handleCreate', 'segment start', {
+      promptLen: prompt.length,
+      sourcePart: createSourcePart?.id ?? null,
+    });
     try {
       const res = await callSegmentLayer({
-        imageUrl: sourceUrl,
+        imageUrl: source?.url ?? sourceUrl,
         prompt,
         ...(attribution?.snapshotId ? { snapshotId: attribution.snapshotId } : {}),
       });
@@ -272,16 +321,19 @@ export function ExtractLottieModal({
         toast.error(mapExtractError(res as ImageApiFailure));
         return;
       }
+      // Cutout (and its alpha bbox) live in SOURCE-image space → map bbox to original %.
       const segmentUrl = res.data.imageUrl;
-      const bbox = await detectAlphaBBox(segmentUrl);
+      const localBBox = await detectAlphaBBox(segmentUrl);
+      const bbox = source ? localToOriginal(localBBox, source.rect) : localBBox;
       const part: LottiePart = {
         id: crypto.randomUUID(),
         name: prompt,
         kind: 'normal',
-        parentId: null,
+        parentId: source ? createSourcePart!.id : null,
         bbox,
         aspect: 'Free',
         segmentUrl,
+        source,
         versions: [],
         selectedVersionId: null,
         pivot: null,
@@ -296,27 +348,39 @@ export function ExtractLottieModal({
     } finally {
       setIsProcessing(false);
     }
-  }, [createKind, parts, partsPrompt, sourceUrl, attribution]);
+  }, [createKind, parts, partsPrompt, sourceUrl, attribution, createSourcePart]);
 
   // ── Parts tab: crop the active part to its bbox ──────────────────────────────────
   const handleCrop = useCallback(async () => {
-    if (!activePart || activePart.kind !== 'normal' || !activePart.segmentUrl || !activePart.bbox) return;
+    if (!activePart || activePart.kind === 'null' || !activePart.bbox) return;
+    // Normal crops its AI segment cutout (transparent bg); manual crops its source image (parent
+    // asset for a sub-part, else the original).
+    const src = activePart.source ?? null;
+    const cropSource = activePart.kind === 'manual' ? src?.url ?? sourceUrl : activePart.segmentUrl;
+    if (!cropSource) return;
     const partId = activePart.id;
-    const segmentUrl = activePart.segmentUrl;
-    const bbox = activePart.bbox;
+    // Clip to the source rect (a sub-part box can't crop pixels outside the parent asset), then map
+    // into the crop-source image's local % (cutout + parent asset share source-local space).
+    const eff = src ? intersectBBox(activePart.bbox, src.rect) : activePart.bbox;
+    if (!eff) {
+      toast.error('Khung nằm ngoài vùng ảnh nguồn của part.');
+      return;
+    }
+    const localBBox = src ? originalToLocal(eff, src.rect) : eff;
     setIsProcessing(true);
     try {
-      const dataUrl = await cropImageByBBox(segmentUrl, bbox);
+      const dataUrl = await cropImageByBBox(cropSource, localBBox);
       const url = await uploadCroppedToStorage(dataUrl, LOTTIE_PARTS_FOLDER);
       const version: LottiePartVersion = {
         id: crypto.randomUUID(),
         media_url: url,
         type: 'crop',
-        bboxAtCrop: { ...bbox },
+        bboxAtCrop: { ...eff },
         created_time: new Date().toISOString(),
       };
       updatePart(partId, (p) => ({
         ...p,
+        bbox: { ...eff }, // sync the visible box to the clipped crop rect
         versions: [...p.versions, version],
         selectedVersionId: version.id,
       }));
@@ -326,7 +390,7 @@ export function ExtractLottieModal({
     } finally {
       setIsProcessing(false);
     }
-  }, [activePart, updatePart]);
+  }, [activePart, sourceUrl, updatePart]);
 
   // ── Box / pivot updates ──────────────────────────────────────────────────────────
   const handleUpdateBBox = useCallback(
@@ -366,6 +430,54 @@ export function ExtractLottieModal({
     [updatePart],
   );
 
+  // ── Parts tab: erase extracted sub-parts from the active part (client-only) ──────
+  // Every sub-part cropped FROM the active part gets its pixels erased from the part's asset
+  // (canvas destination-out — no AI call); the result lands as a NEW `edited` version on the
+  // SAME part (auto-selected). The rig tree + old version stay intact — switching back in the
+  // version selector undoes the erase, and the .lottie build stops double-painting sub-parts.
+  const activeSelectedVersion = useMemo(
+    () => (activePart && activePart.kind !== 'null' ? selectedVersionOf(activePart) : null),
+    [activePart],
+  );
+  const eraseChildren = useMemo(
+    () => (activePart && activeSelectedVersion ? erasableChildrenOf(parts, activePart) : []),
+    [activePart, activeSelectedVersion, parts],
+  );
+
+  const handleEraseExtracted = useCallback(async () => {
+    if (!activePart || !activeSelectedVersion || eraseChildren.length === 0) return;
+    const partId = activePart.id;
+    setIsProcessing(true);
+    log.info('handleEraseExtracted', 'start', { partId, childCount: eraseChildren.length });
+    try {
+      const dataUrl = await erasePartsFromAsset(
+        activeSelectedVersion.media_url,
+        activeSelectedVersion.bboxAtCrop,
+        eraseChildren.map(({ version }) => ({ url: version.media_url, rect: version.bboxAtCrop })),
+      );
+      if (!dataUrl) {
+        toast.error('Các phần đã tách phủ kín part — không còn pixel nào để giữ lại.');
+        return;
+      }
+      const url = await uploadCroppedToStorage(dataUrl, LOTTIE_PARTS_FOLDER);
+      const version: LottiePartVersion = {
+        id: crypto.randomUUID(),
+        media_url: url,
+        type: 'edited',
+        original_url: activeSelectedVersion.media_url,
+        bboxAtCrop: { ...activeSelectedVersion.bboxAtCrop },
+        created_time: new Date().toISOString(),
+      };
+      handleAddVersion(partId, version);
+      toast.success(`Đã xoá ${eraseChildren.length} phần đã tách khỏi part — version mới được chọn.`);
+    } catch (err) {
+      log.error('handleEraseExtracted', 'erase/upload failed', { error: String(err) });
+      toast.error('Không xoá được các phần đã tách — thử lại.');
+    } finally {
+      setIsProcessing(false);
+    }
+  }, [activePart, activeSelectedVersion, eraseChildren, handleAddVersion]);
+
   const handleClearMask = useCallback(
     (partId: string) => {
       redoRef.current = { partId: '', strokes: [] };
@@ -401,14 +513,23 @@ export function ExtractLottieModal({
     onClearMask: handleClearMask,
   });
 
+  const eraserTab = useLottieEraserTab({
+    activePart,
+    isProcessing,
+    setProcessing: setIsProcessing,
+    onAddVersion: handleAddVersion,
+  });
+
   // ── Extract (View tab) ───────────────────────────────────────────────────────────
-  const normalParts = parts.filter((p) => p.kind === 'normal');
-  const uncroppedNormal = normalParts.filter((p) => p.versions.length === 0);
-  const extractGate = parts.length > 0 && normalParts.length > 0 && uncroppedNormal.length === 0;
+  // Image parts (normal + manual) carry an asset; null parts are rig-only. The extract gate needs
+  // at least one image part, all of them cropped.
+  const imageParts = parts.filter((p) => p.kind !== 'null');
+  const uncroppedImage = imageParts.filter((p) => p.versions.length === 0);
+  const extractGate = parts.length > 0 && imageParts.length > 0 && uncroppedImage.length === 0;
   const extractTooltip = !extractGate
-    ? normalParts.length === 0
-      ? 'Cần ít nhất 1 part normal đã crop'
-      : `Chưa crop: ${uncroppedNormal.map((p) => p.name).join(', ')}`
+    ? imageParts.length === 0
+      ? 'Cần ít nhất 1 part ảnh đã crop'
+      : `Chưa crop: ${uncroppedImage.map((p) => p.name).join(', ')}`
     : undefined;
 
   const handleExtract = useCallback(async () => {
@@ -436,7 +557,8 @@ export function ExtractLottieModal({
         setIsProcessing(false);
         return;
       }
-      if (imageId) clearDraftFn();
+      // Draft is deliberately KEPT after a successful extract — reopening the modal restores the
+      // part session so the rig can be tweaked and re-extracted; only explicit Reset clears it.
       resetInMemory();
       restoredKeyRef.current = null;
       onClose();
@@ -451,26 +573,26 @@ export function ExtractLottieModal({
     parts,
     imageNatural,
     sourceUrl,
-    imageId,
-    clearDraftFn,
     resetInMemory,
     onCreateAutoPic,
     onClose,
   ]);
 
-  // ── Mask undo/redo hotkeys (Edit tab only) ───────────────────────────────────────
+  // ── Stroke undo/redo hotkeys (Edit tab = inpaint mask, Eraser tab = erase strokes) ──
   useGlobalHotkey(
     (e) =>
       open &&
-      activeTab === 'edit' &&
+      (activeTab === 'edit' || activeTab === 'eraser') &&
       !isProcessing &&
       (e.ctrlKey || e.metaKey) &&
       e.key.toLowerCase() === 'z',
     (e) => {
-      if (e.shiftKey) maskRedo();
-      else maskUndo();
+      const undoFn = activeTab === 'eraser' ? eraserTab.undo : maskUndo;
+      const redoFn = activeTab === 'eraser' ? eraserTab.redo : maskRedo;
+      if (e.shiftKey) redoFn();
+      else undoFn();
     },
-    [open, activeTab, isProcessing, maskUndo, maskRedo],
+    [open, activeTab, isProcessing, maskUndo, maskRedo, eraserTab.undo, eraserTab.redo],
   );
 
   // ── Interaction Layer Stack ───────────────────────────────────────────────────────
@@ -499,17 +621,15 @@ export function ExtractLottieModal({
 
   if (!open || !image) return null;
 
-  const cropHint =
-    activeTab === 'parts' &&
-    activePart?.kind === 'normal' &&
-    activePart.bbox &&
-    selectedVersionOf(activePart) &&
-    JSON.stringify(activePart.bbox) !== JSON.stringify(selectedVersionOf(activePart)?.bboxAtCrop)
-      ? 'Box đã thay đổi — bấm Crop để cắt lại'
-      : null;
-
+  // Crop needs a box + a source (normal from its segment cutout, manual from the original image) and
+  // an un-cropped part — once cropped the box locks, so re-cropping is done via a fresh part.
   const cropDisabled =
-    isProcessing || !activePart || activePart.kind !== 'normal' || !activePart.segmentUrl || !activePart.bbox;
+    isProcessing ||
+    !activePart ||
+    activePart.kind === 'null' ||
+    !activePart.bbox ||
+    !!selectedVersionOf(activePart) ||
+    (activePart.kind === 'normal' && !activePart.segmentUrl);
 
   const rightPanel =
     activeTab === 'parts' ? (
@@ -521,6 +641,7 @@ export function ExtractLottieModal({
         onPromptChange={setPartsPrompt}
         onCreate={handleCreate}
         isProcessing={isProcessing}
+        sourceName={createSourcePart?.name ?? null}
       />
     ) : activeTab === 'pivot' ? (
       <PivotTab
@@ -531,9 +652,11 @@ export function ExtractLottieModal({
       />
     ) : activeTab === 'edit' ? (
       editTab.ParamsPanel
+    ) : activeTab === 'eraser' ? (
+      eraserTab.ParamsPanel
     ) : null;
 
-  const editHasAsset = activePart?.kind === 'normal' && !!selectedVersionOf(activePart);
+  const editHasAsset = activePart?.kind !== 'null' && !!activePart && !!selectedVersionOf(activePart);
   const editVersion = editHasAsset ? selectedVersionOf(activePart!) : null;
 
   return createPortal(
@@ -568,6 +691,7 @@ export function ExtractLottieModal({
             onDeletePart={handleDeletePart}
             onConfigSave={handleConfigSave}
             onSelectVersion={handleSelectVersion}
+            onDeselect={handleDeselectPart}
           />
         )}
 
@@ -587,9 +711,23 @@ export function ExtractLottieModal({
                 >
                   Crop
                 </button>
-                {cropHint && (
-                  <span className="text-[11px] text-amber-400">{cropHint}</span>
-                )}
+                <button
+                  type="button"
+                  disabled={isProcessing || eraseChildren.length === 0}
+                  onClick={handleEraseExtracted}
+                  title={
+                    eraseChildren.length === 0
+                      ? 'Chọn part gốc đã crop và đã tách ít nhất 1 part con từ nó'
+                      : `Tạo version mới của part này với ${eraseChildren.length} phần đã tách bị xoá (${eraseChildren.map(({ part }) => part.name).join(', ')})`
+                  }
+                  className="flex items-center gap-1.5 rounded-md border border-[var(--swap-modal-border-strong)] bg-[var(--swap-modal-surface-hover)] px-3 py-1.5 text-sm font-semibold text-[var(--swap-modal-text-primary)] transition-colors hover:bg-[var(--swap-modal-surface-hover-strong)] disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <Eraser className="h-4 w-4" aria-hidden="true" />
+                  Xoá phần đã tách
+                  {eraseChildren.length > 0 && (
+                    <span className="tabular-nums">({eraseChildren.length})</span>
+                  )}
+                </button>
               </>
             )}
             {activeTab === 'view' && (
@@ -619,6 +757,8 @@ export function ExtractLottieModal({
               sourceUrl={sourceUrl}
               zoom={zoom}
               hideSource={activeTab === 'view'}
+              dimSource={!!activePart && activePart.kind !== 'null'}
+              onBackgroundClick={activeTab === 'parts' ? handleDeselectPart : undefined}
               cursor={activeTab === 'pivot' ? 'crosshair' : undefined}
               isProcessing={isProcessing}
               onNaturalSize={setImageNatural}
@@ -632,6 +772,7 @@ export function ExtractLottieModal({
                   onSelectPart={handleSelectPart}
                   onUpdateBBox={handleUpdateBBox}
                   onAspectChange={handleAspectChange}
+                  onDeselect={handleDeselectPart}
                 />
               )}
 
@@ -656,10 +797,23 @@ export function ExtractLottieModal({
               {activeTab === 'edit' && editHasAsset && editVersion && activePart && (
                 <LottieMaskCanvas
                   assetUrl={editVersion.media_url}
+                  name={activePart.name}
                   bbox={editVersion.bboxAtCrop}
                   brushSize={editTab.brushSize}
                   strokes={activePart.maskStrokes}
                   onStrokeCommit={handleStrokeCommit}
+                />
+              )}
+
+              {activeTab === 'eraser' && editHasAsset && editVersion && activePart && (
+                <LottieMaskCanvas
+                  variant="erase"
+                  assetUrl={editVersion.media_url}
+                  name={activePart.name}
+                  bbox={editVersion.bboxAtCrop}
+                  brushSize={eraserTab.brushSize}
+                  strokes={eraserTab.strokes}
+                  onStrokeCommit={eraserTab.onStrokeCommit}
                 />
               )}
 
