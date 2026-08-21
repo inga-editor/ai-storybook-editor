@@ -1,53 +1,33 @@
 // parse-base-entities.constants.ts — Mapping + column constants for the BASE-space Excel
-// import (design sketch-base-creative-space/05-import-base-entities.md). Differs from the
-// legacy single-column variants import (parse-sketch-entities.constants.ts):
-//   • reads THREE sheets in one pass (Characters + Props + the OPTIONAL Alter Characters —
-//     the base space merges all three kinds),
+// import (design sketch-base-creative-space/05-import-base-entities.md). ⚡REV 2026-08-21 —
+// tab discovery is by NAME RULE (no fixed tab list): every tab whose name contains `character`
+// is a character group, every tab whose name contains `prop` is a prop group. Each matching tab
+// is ONE group (`group_key = normalizeGroupKey(tabName)`). Differs from the legacy single-column
+// variants import (parse-sketch-entities.constants.ts):
+//   • N DYNAMIC groups discovered by rule (base space merges every char + prop group),
 //   • FOUR text columns mapped 1:1 (description / height / visual_design / art_language),
 //   • NO media_url (imagery is populated on generate, never imported),
 //   • NO Stages sheet (the stage space is separate, untouched).
 
-import type { ActorRole, BaseKind } from '@/types/sketch';
+import type { SheetKind } from '@/types/sketch';
 
-/** One Excel tab the base importer reads. */
-export interface ImportSheetConfig {
-  kind: BaseKind;
-  /** CANONICAL tab name — used for display/log/error copy only. The workbook lookup itself is
-   *  NORMALIZED (trim + lowercase, see `normalizeSheetName`), so `alter characters` and
-   *  `" ALTER CHARACTERS "` still match. */
-  sheet: string;
-  /** Key column, lowercase to match the normalized (lowercased) header lookup in the parser. */
+/** One tab-name discovery rule. A tab matching a rule becomes a group of `kind`, read via its
+ *  `keyColumn`. A tab matching BOTH rules (name contains `character` AND `prop`) is ambiguous → a
+ *  blocking error; a tab matching NEITHER is skipped (Stages / Storyboard / Flow / Book / lang). */
+export interface GroupTabRule {
+  match: RegExp;
+  kind: SheetKind;
   keyColumn: string;
-  /** Stamped onto EVERY entity parsed from this tab. Omitted ⇒ nothing is stamped — an absent
-   *  `actor_role` already means 0, and writing an explicit `0` would bloat the JSONB and add
-   *  noise to every collab diff. Only the alter tab sets it. */
-  actorRole?: ActorRole;
-  /** The tab may legitimately be missing (a book with no alter cast) ⇒ skip + `warn`, never a
-   *  blocking error. Characters/Props stay REQUIRED: their absence means the file is not a base
-   *  workbook at all. */
-  optional?: boolean;
 }
 
 /**
- * Which sheet + key column to read per base kind.
- *
- * ⚡2026-07-28 — `alter_characters` is the 3rd entry: SAME 8 columns and SAME key column
- * (`character`) as the primary tab, so it reuses `parseBaseEntities` verbatim; the ONLY difference
- * is the `actorRole: 1` stamp applied after parsing. Its rows land in the SAME `sketch.characters[]`
- * array (there is no `alter_characters` collection) — see `KIND_ENTITY_SOURCE`.
- *
- * Order matters: it is the order rows are appended to `characters[]` (primary first, alter last).
+ * ⚡REV 2026-08-21 — discovery replaces the old static `IMPORT_SHEETS`. Order is not significant
+ * (a tab matches at most one rule, else it is ambiguous). `alter_characters` is gone — an "Alter
+ * Characters" tab is just another character group (its normalized key is `alter_characters`).
  */
-export const IMPORT_SHEETS: ImportSheetConfig[] = [
-  { kind: 'characters', sheet: 'Characters', keyColumn: 'character' },
-  { kind: 'props', sheet: 'Props', keyColumn: 'prop' },
-  {
-    kind: 'alter_characters',
-    sheet: 'Alter Characters', // NOTE the space — matched case-insensitively after trim
-    keyColumn: 'character', // the alter tab's key column is `character`, NOT `alter_character`
-    actorRole: 1,
-    optional: true,
-  },
+export const GROUP_TAB_RULES: GroupTabRule[] = [
+  { match: /character/i, kind: 'characters', keyColumn: 'character' },
+  { match: /prop/i, kind: 'props', keyColumn: 'prop' },
 ];
 
 /** Non-key column names (lowercased — header lookup is case/space-insensitive). Each maps to

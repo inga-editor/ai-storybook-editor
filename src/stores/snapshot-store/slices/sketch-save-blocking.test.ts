@@ -57,6 +57,9 @@ describe('sketch save-blocking (T3 — 4 write paths + isolation + no stranded l
     useSnapshotStore.setState((s) => {
       s.sketchDegraded = [];
       s.sketchQuarantine = {};
+      // ⚡REV 2026-08-21 — base is a dynamic group map (empty by default). Seed the group node the
+      // flush path reads so its (fresh) node is non-null and the DEGRADED block is what refuses it.
+      s.sketch.base = { character_sheet: { kind: 'characters', name: 'character_sheet', styles: [] } };
       s.meta.bookId = BOOK;
       s.sync.isDirty = false;
       s.sync.isSaving = false;
@@ -103,7 +106,9 @@ describe('sketch save-blocking (T3 — 4 write paths + isolation + no stranded l
     // by the write-blocker → outcome `'blocked'` (was boolean `false` pre-phase-3), no gateway save.
     const key = `${BOOK}|1|11|character_sheet|`;
     useResourceLockStore.setState({ myLocks: new Set([key]) });
-    const ok = await flushSketchBaseSheetUnderLock('characters', { styles: [] });
+    // group_key IS the rtype-11 resource_id now (was kind→resource_id): flush the seeded/degraded
+    // `character_sheet` group so the degraded-block — not a missing node — is what refuses it.
+    const ok = await flushSketchBaseSheetUnderLock('character_sheet', { styles: [] });
     expect(ok).toBe('blocked');
     expect(callImageApi.mock.calls.map((c) => c[0])).not.toContain('/api/resource/save');
   });

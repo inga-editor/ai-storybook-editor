@@ -108,7 +108,7 @@ describe('resourceKeyToLockPredicate', () => {
 
 describe('describeResource / describeResetImpact (modal copy)', () => {
   it('labels every key shape in Vietnamese', () => {
-    expect(describeResource('base.character_sheet')).toContain('character sheet');
+    expect(describeResource('base.character_sheet')).toContain('character_sheet');
     expect(describeResource('characters/hero')).toContain('"hero"');
     expect(describeResource('spreads/sp-1')).toContain('"sp-1"');
     expect(describeResource('props')).toContain('Danh sách');

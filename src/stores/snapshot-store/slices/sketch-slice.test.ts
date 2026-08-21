@@ -432,7 +432,7 @@ describe('SketchSlice base (workspace) actions', () => {
       illustrations: [],
       crops: [],
     };
-    store.getState().addSketchBaseStyle('characters', style);
+    store.getState().addSketchBaseStyle('character_sheet', style);
     expect(store.getState().sketch.base.character_sheet.styles).toHaveLength(1);
     expect(store.getState().sketch.base.character_sheet.styles[0]).toEqual(style);
     expect(store.getState().sync.isDirty).toBe(true);
@@ -441,15 +441,15 @@ describe('SketchSlice base (workspace) actions', () => {
   it('removeSketchBaseStyle filters out by index + sets isDirty', () => {
     const s1 = { style_prompt: 'style 1', is_selected: false, image_references: [], illustrations: [], crops: [] };
     const s2 = { style_prompt: 'style 2', is_selected: false, image_references: [], illustrations: [], crops: [] };
-    store.getState().addSketchBaseStyle('characters', s1);
-    store.getState().addSketchBaseStyle('characters', s2);
-    store.getState().removeSketchBaseStyle('characters', 0);
+    store.getState().addSketchBaseStyle('character_sheet', s1);
+    store.getState().addSketchBaseStyle('character_sheet', s2);
+    store.getState().removeSketchBaseStyle('character_sheet', 0);
     expect(store.getState().sketch.base.character_sheet.styles).toHaveLength(1);
     expect(store.getState().sketch.base.character_sheet.styles[0].style_prompt).toBe('style 2');
   });
 
   it('removeSketchBaseStyle no-ops on out-of-range index (isDirty stays false)', () => {
-    store.getState().addSketchBaseStyle('characters', {
+    store.getState().addSketchBaseStyle('character_sheet', {
       style_prompt: 'test style',
       is_selected: false,
       image_references: [],
@@ -457,13 +457,13 @@ describe('SketchSlice base (workspace) actions', () => {
       crops: [],
     });
     resetDirty();
-    store.getState().removeSketchBaseStyle('characters', 99);
+    store.getState().removeSketchBaseStyle('character_sheet', 99);
     expect(store.getState().sketch.base.character_sheet.styles).toHaveLength(1);
     expect(store.getState().sync.isDirty).toBe(false);
   });
 
   it('addSketchBaseStyleIllustration prepends + sets is_selected true + clears others', () => {
-    store.getState().addSketchBaseStyle('characters', {
+    store.getState().addSketchBaseStyle('character_sheet', {
       style_prompt: 'test style',
       is_selected: false,
       image_references: [],
@@ -473,7 +473,7 @@ describe('SketchSlice base (workspace) actions', () => {
       crops: [],
     });
 
-    store.getState().addSketchBaseStyleIllustration('characters', 0, 'new.png');
+    store.getState().addSketchBaseStyleIllustration('character_sheet', 0, 'new.png');
 
     const illustrations = store.getState().sketch.base.character_sheet.styles[0].illustrations;
     expect(illustrations).toHaveLength(2);
@@ -485,7 +485,7 @@ describe('SketchSlice base (workspace) actions', () => {
   });
 
   it('setSketchBaseStyleIllustrations replaces the array', () => {
-    store.getState().addSketchBaseStyle('characters', {
+    store.getState().addSketchBaseStyle('character_sheet', {
       style_prompt: 'test style',
       is_selected: false,
       image_references: [],
@@ -499,7 +499,7 @@ describe('SketchSlice base (workspace) actions', () => {
       { type: 'created' as const, media_url: 'new1.png', created_time: '2026-07-13T00:00:00Z', is_selected: true },
       { type: 'created' as const, media_url: 'new2.png', created_time: '2026-07-13T00:00:00Z', is_selected: false },
     ];
-    store.getState().setSketchBaseStyleIllustrations('characters', 0, newIlls);
+    store.getState().setSketchBaseStyleIllustrations('character_sheet', 0, newIlls);
 
     const illustrations = store.getState().sketch.base.character_sheet.styles[0].illustrations;
     expect(illustrations).toHaveLength(2);
@@ -509,7 +509,7 @@ describe('SketchSlice base (workspace) actions', () => {
   });
 
   it('setSketchBaseStyleCrops replaces crops array', () => {
-    store.getState().addSketchBaseStyle('characters', {
+    store.getState().addSketchBaseStyle('character_sheet', {
       style_prompt: 'test style',
       is_selected: false,
       image_references: [],
@@ -538,7 +538,7 @@ describe('SketchSlice base (workspace) actions', () => {
         ],
       },
     ];
-    store.getState().setSketchBaseStyleCrops('characters', 0, newCrops);
+    store.getState().setSketchBaseStyleCrops('character_sheet', 0, newCrops);
 
     const crops = store.getState().sketch.base.character_sheet.styles[0].crops;
     expect(crops).toHaveLength(2);
@@ -549,7 +549,7 @@ describe('SketchSlice base (workspace) actions', () => {
   });
 
   it('setSketchBaseCropIllustrations replaces one crop\'s illustrations', () => {
-    store.getState().addSketchBaseStyle('characters', {
+    store.getState().addSketchBaseStyle('character_sheet', {
       style_prompt: 'test style',
       is_selected: false,
       image_references: [],
@@ -573,7 +573,7 @@ describe('SketchSlice base (workspace) actions', () => {
     const newIlls = [
       { type: 'created' as const, media_url: 'new-hero.png', created_time: '2026-07-13T00:00:00Z', is_selected: true },
     ];
-    store.getState().setSketchBaseCropIllustrations('characters', 0, 'hero', newIlls);
+    store.getState().setSketchBaseCropIllustrations('character_sheet', 0, 'hero', newIlls);
 
     const crops = store.getState().sketch.base.character_sheet.styles[0].crops;
     expect(crops[0].illustrations[0].media_url).toBe('new-hero.png');
@@ -593,7 +593,7 @@ describe('SketchSlice base (workspace) actions', () => {
     const heroIll = { type: 'created' as const, media_url: 'hero-crop.png', created_time: '2026-07-13T00:00:00Z', is_selected: true };
     const villainIll = { type: 'created' as const, media_url: 'villain-crop.png', created_time: '2026-07-13T00:00:00Z', is_selected: true };
 
-    store.getState().addSketchBaseStyle('characters', {
+    store.getState().addSketchBaseStyle('character_sheet', {
       style_prompt: 'style 1',
       is_selected: true,
       image_references: [],
@@ -603,7 +603,7 @@ describe('SketchSlice base (workspace) actions', () => {
         { key: 'villain', illustrations: [villainIll] },
       ],
     });
-    store.getState().addSketchBaseStyle('characters', {
+    store.getState().addSketchBaseStyle('character_sheet', {
       style_prompt: 'style 2',
       is_selected: false,
       image_references: [],
@@ -614,7 +614,7 @@ describe('SketchSlice base (workspace) actions', () => {
     });
 
     // Select style 1 → crops cloned into entities
-    store.getState().setSketchBaseStyleSelected('characters', 1); // st2
+    store.getState().setSketchBaseStyleSelected('character_sheet', 1); // st2
 
     // Assert exclusive is_selected
     expect(store.getState().sketch.base.character_sheet.styles[0].is_selected).toBe(false);
@@ -638,7 +638,7 @@ describe('SketchSlice base (workspace) actions', () => {
     ]);
 
     const cropIll = { type: 'created' as const, media_url: 'hero-crop.png', created_time: '2026-07-13T00:00:00Z', is_selected: true };
-    store.getState().addSketchBaseStyle('characters', {
+    store.getState().addSketchBaseStyle('character_sheet', {
       style_prompt: 'test style',
       is_selected: false,
       image_references: [],
@@ -647,7 +647,7 @@ describe('SketchSlice base (workspace) actions', () => {
     });
 
     // Select style
-    store.getState().setSketchBaseStyleSelected('characters', 0);
+    store.getState().setSketchBaseStyleSelected('character_sheet', 0);
 
     // Get the cloned crop from variant
     const heroBase = store.getState().sketch.characters[0].variants.find((v: SketchVariant) => v.key === 'base');
@@ -680,16 +680,16 @@ describe('SketchSlice base (workspace) actions', () => {
       { key: 'hero', variants: [variant('base')] },
       { key: 'villain', variants: [variant('base')] },
     ]);
-    store.getState().addSketchBaseStyle('characters', {
+    store.getState().addSketchBaseStyle('character_sheet', {
       style_prompt: 's1', is_selected: false, image_references: [], illustrations: [],
       crops: [
         { key: 'hero', illustrations: [ill('hero-old.png')] },
         { key: 'villain', illustrations: [ill('villain-old.png')] },
       ],
     });
-    store.getState().setSketchBaseStyleSelected('characters', 0); // lock → clones seeded
+    store.getState().setSketchBaseStyleSelected('character_sheet', 0); // lock → clones seeded
 
-    store.getState().setSketchBaseCropIllustrations('characters', 0, 'hero', [ill('hero-edited.png')]);
+    store.getState().setSketchBaseCropIllustrations('character_sheet', 0, 'hero', [ill('hero-edited.png')]);
 
     const [hero, villain] = store.getState().sketch.characters;
     const heroClone = hero.variants[0].raw_sheet?.crops[0];
@@ -704,17 +704,17 @@ describe('SketchSlice base (workspace) actions', () => {
 
   it('setSketchBaseCropIllustrations on an UNLOCKED style leaves entity base variants untouched', () => {
     store.getState().setSketchEntities('characters', [{ key: 'hero', variants: [variant('base')] }]);
-    store.getState().addSketchBaseStyle('characters', {
+    store.getState().addSketchBaseStyle('character_sheet', {
       style_prompt: 's1', is_selected: true, image_references: [], illustrations: [],
       crops: [{ key: 'hero', illustrations: [ill('locked-crop.png')] }],
     });
-    store.getState().addSketchBaseStyle('characters', {
+    store.getState().addSketchBaseStyle('character_sheet', {
       style_prompt: 's2', is_selected: false, image_references: [], illustrations: [],
       crops: [{ key: 'hero', illustrations: [ill('other-crop.png')] }],
     });
-    store.getState().setSketchBaseStyleSelected('characters', 0); // lock s1
+    store.getState().setSketchBaseStyleSelected('character_sheet', 0); // lock s1
 
-    store.getState().setSketchBaseCropIllustrations('characters', 1, 'hero', [ill('other-edited.png')]);
+    store.getState().setSketchBaseCropIllustrations('character_sheet', 1, 'hero', [ill('other-edited.png')]);
 
     // Clone still tracks the LOCKED style (s1), not the edited unlocked one.
     const clone = store.getState().sketch.characters[0].variants[0].raw_sheet?.crops[0];
@@ -726,17 +726,17 @@ describe('SketchSlice base (workspace) actions', () => {
       { key: 'hero', variants: [variant('base')] },
       { key: 'villain', variants: [variant('base')] },
     ]);
-    store.getState().addSketchBaseStyle('characters', {
+    store.getState().addSketchBaseStyle('character_sheet', {
       style_prompt: 's1', is_selected: false, image_references: [], illustrations: [],
       crops: [
         { key: 'hero', illustrations: [ill('hero-old.png')] },
         { key: 'villain', illustrations: [ill('villain-old.png')] },
       ],
     });
-    store.getState().setSketchBaseStyleSelected('characters', 0);
+    store.getState().setSketchBaseStyleSelected('character_sheet', 0);
 
     // Raw-edit auto re-crop replaces the whole crops[] → every clone follows.
-    store.getState().setSketchBaseStyleCrops('characters', 0, [
+    store.getState().setSketchBaseStyleCrops('character_sheet', 0, [
       { key: 'hero', illustrations: [ill('hero-recut.png')] },
       { key: 'villain', illustrations: [ill('villain-recut.png')] },
     ]);
@@ -748,12 +748,12 @@ describe('SketchSlice base (workspace) actions', () => {
 
   it('setSketchBaseStyleCrops on an UNLOCKED style does not touch entity base variants', () => {
     store.getState().setSketchEntities('characters', [{ key: 'hero', variants: [variant('base')] }]);
-    store.getState().addSketchBaseStyle('characters', {
+    store.getState().addSketchBaseStyle('character_sheet', {
       style_prompt: 's1', is_selected: false, image_references: [], illustrations: [],
       crops: [{ key: 'hero', illustrations: [ill('hero-old.png')] }],
     });
 
-    store.getState().setSketchBaseStyleCrops('characters', 0, [
+    store.getState().setSketchBaseStyleCrops('character_sheet', 0, [
       { key: 'hero', illustrations: [ill('hero-new.png')] },
     ]);
 
@@ -766,7 +766,7 @@ describe('SketchSlice base (workspace) actions', () => {
     ]);
     resetDirty();
 
-    store.getState().updateSketchBaseEntityText('characters', 'hero', {
+    store.getState().updateSketchBaseEntityText('character_sheet', 'hero', {
       visual_design: 'new design',
       art_language: 'new lang',
     });
@@ -785,7 +785,7 @@ describe('SketchSlice base (workspace) actions', () => {
     ]);
     resetDirty();
 
-    store.getState().updateSketchBaseEntityText('characters', 'hero', {
+    store.getState().updateSketchBaseEntityText('character_sheet', 'hero', {
       description: 'edited desc',
       height: 105,
       visual_design: 'new',
@@ -803,18 +803,18 @@ describe('SketchSlice base (workspace) actions', () => {
     ]);
     resetDirty();
 
-    store.getState().updateSketchBaseEntityText('characters', 'hero', { height: null });
+    store.getState().updateSketchBaseEntityText('character_sheet', 'hero', { height: null });
 
     expect(store.getState().sketch.characters[0].variants[0].height).toBeNull();
   });
 
   it('setSketchBaseStyleImageReferences replaces image_references on the target style', () => {
-    store.getState().addSketchBaseStyle('characters', {
+    store.getState().addSketchBaseStyle('character_sheet', {
       style_prompt: 's', is_selected: false, image_references: [], illustrations: [], crops: [],
     });
     resetDirty();
 
-    store.getState().setSketchBaseStyleImageReferences('characters', 0, [
+    store.getState().setSketchBaseStyleImageReferences('character_sheet', 0, [
       { title: 'ref-a.jpg', media_url: 'https://cdn/a.png' },
     ]);
 
@@ -939,143 +939,5 @@ describe('SketchSlice variant crop actions (positional crops[])', () => {
     ]);
     store.getState().setSketchVariantRawSheetIllustrations('characters', 'hero', 'hero_v', [ill('s.png')]);
     expect(heroV().raw_sheet.crops).toEqual([]);
-  });
-});
-
-// ── Alter characters (⚡ 2026-07-28) ──────────────────────────────────────────────────────────
-// `alter_characters` is a VIRTUAL kind over `sketch.characters[]` (actor_role === 1). The whole
-// feature's failure mode is SILENT: a missing filter mixes the two casts with no error anywhere,
-// so every kind↔cast pairing below is asserted explicitly.
-describe('SketchSlice alter characters (actor_role routing)', () => {
-  let store: ReturnType<typeof createTestStore>;
-  beforeEach(() => {
-    store = createTestStore();
-  });
-
-  const cropIll = (url: string) => ({
-    type: 'created' as const,
-    media_url: url,
-    created_time: '2026-07-28T00:00:00Z',
-    is_selected: true,
-  });
-
-  /** hero (primary) + hero_alt (alter) in ONE characters[] array, both with a 'base' variant. */
-  const seedMixedCast = () => {
-    store.setState((s: { sketch: { characters: SketchEntity[] } }) => {
-      s.sketch.characters = [
-        { key: 'hero', variants: [variant('base')] },
-        { key: 'hero_alt', actor_role: 1, variants: [variant('base')] },
-      ];
-    });
-  };
-
-  const baseCropUrlOf = (entityKey: string) =>
-    store
-      .getState()
-      .sketch.characters.find((e: SketchEntity) => e.key === entityKey)
-      ?.variants.find((v: SketchVariant) => v.key === 'base')?.raw_sheet?.crops[0]
-      ?.illustrations[0]?.media_url;
-
-  it('locking the ALTER sheet clones into actor_role=1 entities only', () => {
-    seedMixedCast();
-    store.getState().addSketchBaseStyle('alter_characters', {
-      style_prompt: 'alter style',
-      is_selected: false,
-      image_references: [],
-      illustrations: [],
-      // A crop keyed 'hero' is present too — it must be IGNORED (hero is not part of this kind).
-      crops: [
-        { key: 'hero_alt', illustrations: [cropIll('alt-crop.png')] },
-        { key: 'hero', illustrations: [cropIll('WRONG-hero.png')] },
-      ],
-    });
-    store.getState().setSketchBaseStyleSelected('alter_characters', 0);
-
-    expect(baseCropUrlOf('hero_alt')).toBe('alt-crop.png');
-    expect(baseCropUrlOf('hero')).toBeUndefined(); // primary untouched
-    // The style landed on the ALTER sheet, not the character sheet.
-    expect(store.getState().sketch.base.alter_character_sheet.styles[0].is_selected).toBe(true);
-    expect(store.getState().sketch.base.character_sheet.styles).toEqual([]);
-  });
-
-  it('locking the CHARACTER sheet leaves alter entities untouched', () => {
-    seedMixedCast();
-    store.getState().addSketchBaseStyle('characters', {
-      style_prompt: 'story style',
-      is_selected: false,
-      image_references: [],
-      illustrations: [],
-      crops: [
-        { key: 'hero', illustrations: [cropIll('hero-crop.png')] },
-        { key: 'hero_alt', illustrations: [cropIll('WRONG-alt.png')] },
-      ],
-    });
-    store.getState().setSketchBaseStyleSelected('characters', 0);
-
-    expect(baseCropUrlOf('hero')).toBe('hero-crop.png');
-    expect(baseCropUrlOf('hero_alt')).toBeUndefined();
-  });
-
-  it('setSketchEntities replaces only its own cast (alter write keeps the story cast)', () => {
-    seedMixedCast();
-    store.getState().setSketchEntities('alter_characters', [entity('villain_alt')]);
-    const keys = store.getState().sketch.characters.map((e: SketchEntity) => e.key);
-    expect(keys).toContain('hero'); // story cast survived
-    expect(keys).toContain('villain_alt');
-    expect(keys).not.toContain('hero_alt'); // the alter cast was the one replaced
-    // …and the new entity is stamped from the kind (absent flag ⇒ it would rejoin the story cast).
-    expect(
-      store.getState().sketch.characters.find((e: SketchEntity) => e.key === 'villain_alt')?.actor_role,
-    ).toBe(1);
-  });
-
-  it('setSketchEntities REFUSES an incoming key already held by the other cast', () => {
-    seedMixedCast();
-    // `hero_alt` is an alter; writing the story cast with that key would put the SAME key twice
-    // in `characters[]`, breaking the gateway `find:key=` anchor, the rtype-3 lock and the
-    // lineup entry ref all at once — with no error anywhere.
-    store.getState().setSketchEntities('characters', [entity('hero'), entity('hero_alt')]);
-    const chars = store.getState().sketch.characters;
-    expect(chars.filter((e: SketchEntity) => e.key === 'hero_alt')).toHaveLength(1);
-    expect(chars.find((e: SketchEntity) => e.key === 'hero_alt')?.actor_role).toBe(1); // still the alter
-    expect(chars.some((e: SketchEntity) => e.key === 'hero')).toBe(true); // rest of the batch landed
-    // …and the inverse direction is refused too.
-    store.getState().setSketchEntities('alter_characters', [entity('hero')]);
-    const after = store.getState().sketch.characters;
-    expect(after.filter((e: SketchEntity) => e.key === 'hero')).toHaveLength(1);
-    expect(after.find((e: SketchEntity) => e.key === 'hero')?.actor_role).toBeUndefined();
-  });
-
-  it('upsert under `characters` drops a stale actor_role; removal is kind-scoped', () => {
-    seedMixedCast();
-    store.getState().upsertSketchEntity('characters', { key: 'hero2', actor_role: 1, variants: [] });
-    expect(
-      store.getState().sketch.characters.find((e: SketchEntity) => e.key === 'hero2'),
-    ).toEqual({ key: 'hero2', variants: [] }); // absent ⇒ 0, no explicit 0 written
-
-    store.getState().removeSketchEntity('characters', 'hero_alt'); // wrong kind → no-op
-    expect(store.getState().sketch.characters.some((e: SketchEntity) => e.key === 'hero_alt')).toBe(true);
-    store.getState().removeSketchEntity('alter_characters', 'hero_alt');
-    expect(store.getState().sketch.characters.some((e: SketchEntity) => e.key === 'hero_alt')).toBe(false);
-  });
-
-  it('upsert REFUSES to move an entity across casts (would strip/flip actor_role silently)', () => {
-    seedMixedCast();
-    store.getState().upsertSketchEntity('characters', entity('hero_alt', [variant('base', 'hijacked')]));
-    const alt = store.getState().sketch.characters.find((e: SketchEntity) => e.key === 'hero_alt');
-    expect(alt?.actor_role).toBe(1); // still an alter
-    expect(alt?.variants).toEqual([variant('base')]); // untouched
-    // …and the inverse direction is refused too.
-    store.getState().upsertSketchEntity('alter_characters', entity('hero'));
-    expect(
-      store.getState().sketch.characters.find((e: SketchEntity) => e.key === 'hero')?.actor_role,
-    ).toBeUndefined();
-  });
-
-  it('a no-op removal (wrong cast) does NOT mark the store dirty', () => {
-    seedMixedCast();
-    store.setState((s: { sync: { isDirty: boolean } }) => { s.sync.isDirty = false; });
-    store.getState().removeSketchEntity('characters', 'hero_alt');
-    expect(store.getState().sync.isDirty).toBe(false);
   });
 });

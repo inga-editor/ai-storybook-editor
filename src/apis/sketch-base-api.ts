@@ -14,41 +14,25 @@
 
 import { callImageApi, type ImageApiFailure } from './image-api-client';
 import type { VariantModelParams } from './sketch-variant-api';
-import type { BaseKind } from '@/types/sketch';
+import type { SheetKind } from '@/types/sketch';
 import { createLogger } from '@/utils/logger';
 import type { SaveResourceDirective, SaveResourceOutcomeFields } from '@/types/save-resource';
 import { warnIfSaveResourceFailed } from '@/utils/save-resource-path';
 
 const log = createLogger('API', 'SketchBaseApi');
 
-/** Per-kind RAW-sheet generate route (05 = character, 06 = prop).
- *  ⚡ 2026-07-28: alter characters reuse the CHARACTER route (05) — the sheet they land in is
- *  selected by the `targetSheet` body param below, NOT by a separate endpoint. */
-const BASE_SHEET_ENDPOINT: Record<BaseKind, string> = {
+/** ⚡REV 2026-08-21 — per-KIND RAW-sheet generate route (05 = character, 06 = prop). The kind comes
+ *  from the target group's `base[group].kind`; every character group (whatever its key) routes to 05,
+ *  every prop group to 06. The base sheet node written is selected by the `targetGroup` body field,
+ *  NOT by the endpoint (both routes are group-agnostic). */
+export const BASE_SHEET_ENDPOINT: Record<SheetKind, string> = {
   characters: '/api/sketch/generate-base-character-sheet',
   props: '/api/sketch/generate-base-prop-sheet',
-  alter_characters: '/api/sketch/generate-base-character-sheet',
 };
 
-/** Which base-sheet node route 05 writes into. Wire enum (api 05 §request) — the response echoes
- *  the RESOLVED value back so the caller can verify it was honoured. */
-export type BaseSheetTarget = 'character_sheet' | 'alter_character_sheet';
-
-/**
- * kind → `targetSheet` discriminator for route 05. DERIVED HERE (not a caller argument) on
- * purpose: `targetSheet` and the entity set MUST both come from the ONE `kind` variable, because
- * api 05 is STATELESS — it happily writes the character cast into the alter sheet if the two
- * disagree, with NO server error (the FE is the only gate). Passing it separately would make that
- * mismatch expressible; deriving it makes it impossible.
- *
- * `props` is ABSENT on purpose: route 06 is `extra="forbid"`, so sending `targetSheet` there is a
- * 400. `Partial` + the `undefined` guard in the body build is what keeps prop requests
- * byte-identical to before this change.
- */
-const BASE_SHEET_TARGET: Partial<Record<BaseKind, BaseSheetTarget>> = {
-  characters: 'character_sheet',
-  alter_characters: 'alter_character_sheet',
-};
+/** Client-side mirror of the BE `targetGroup` format gate (`^[a-z0-9_]{1,64}$`). A malformed group
+ *  key means the caller derived it wrong — fail loudly here rather than let the BE 422. */
+const TARGET_GROUP_FORMAT = /^[a-z0-9_]{1,64}$/;
 
 /** One base entity's text row for the sheet prompt (camelCase — backend contract).
  * Only visual_design + art_language drive the sheet; description/height dropped 2026-07-14
@@ -81,6 +65,10 @@ export interface GenerateBaseSheetParams {
   artStyleId: string;
   stylePrompt: string;
   referenceImages: BaseReferenceImage[];
+  /** ⚡REV 2026-08-21 — the target base group key (`base[group_key]`). ALWAYS sent: both routes are
+   *  stateless, so the sheet node the crops land in is selected by THIS field. Format-guarded
+   *  client-side (`^[a-z0-9_]{1,64}$`) to mirror the BE gate. */
+  targetGroup: string;
   /** Optional model override; omit → backend DB default (kept byte-minimal in the request body). */
   modelParams?: SketchModelParams;
   /** Attribution-only snapshot version id → ai_service_logs.snapshot_id (book cost). */
@@ -97,29 +85,31 @@ export interface GenerateBaseSheetResult {
     cellOrder: string[];
     grid: SheetGrid;
     aiRequestId?: string;
-    /** Echo of the RESOLVED `targetSheet` (route 05 only; route 06 never sends it back). */
-    targetSheet?: BaseSheetTarget;
+    /** Echo of the RESOLVED `targetGroup` — the caller verifies it matches what it asked for. */
+    targetGroup?: string;
   } & SaveResourceOutcomeFields;
   error?: string;
   meta?: { processingTime?: number; mimeType?: string; tokenUsage?: number };
 }
 
 /**
- * Generate the RAW base sheet for one kind (all base entities as cells). Dispatches 05|06 by kind
- * and, for the two CHARACTER kinds, stamps the `targetSheet` discriminator so route 05 writes the
- * right sheet node. Storage layout is deliberately UNCHANGED for alter (same `characters/` prefix)
- * — the sheets are distinguished by the snapshot node, never by the folder.
- * Never throws — returns GenerateBaseSheetResult | ImageApiFailure (errorCode preserved).
+ * Generate the RAW base sheet for one group. `kind` (the group's `base[group].kind`) selects the
+ * route (05 character / 06 prop); `targetGroup` (the group key) tells the stateless endpoint which
+ * base sheet node to write. Never throws — returns GenerateBaseSheetResult | ImageApiFailure
+ * (errorCode preserved). A malformed `targetGroup` short-circuits to a synthetic failure.
  */
 export async function callGenerateBaseSheet(
-  kind: BaseKind,
-  { entities, artStyleId, stylePrompt, referenceImages, modelParams, snapshotId, saveResource }: GenerateBaseSheetParams,
+  kind: SheetKind,
+  { entities, artStyleId, stylePrompt, referenceImages, targetGroup, modelParams, snapshotId, saveResource }: GenerateBaseSheetParams,
 ): Promise<GenerateBaseSheetResult | ImageApiFailure> {
+  if (!TARGET_GROUP_FORMAT.test(targetGroup)) {
+    log.error('callGenerateBaseSheet', 'invalid targetGroup format — request not sent', { kind, targetGroup });
+    return { success: false, error: 'INVALID_TARGET_GROUP', httpStatus: 0, errorCode: 'INVALID_TARGET_GROUP' };
+  }
   const path = BASE_SHEET_ENDPOINT[kind];
-  const targetSheet = BASE_SHEET_TARGET[kind];
   log.info('callGenerateBaseSheet', 'start', {
     kind,
-    targetSheet: targetSheet ?? null,
+    targetGroup,
     entityCount: entities.length,
     referenceCount: referenceImages.length,
     hasModelParams: !!modelParams,
@@ -129,9 +119,8 @@ export async function callGenerateBaseSheet(
     artStyleId,
     stylePrompt,
     referenceImages,
-    // Route 05 only — route 06 (props) is extra="forbid", so an unconditional field would 400.
-    // Guard on `undefined` (not truthiness) so the map stays the single source of truth.
-    ...(targetSheet !== undefined ? { targetSheet } : {}),
+    // ALWAYS sent — both routes are stateless and select the sheet node by this field.
+    targetGroup,
     // Only include modelParams when present — keeps the body byte-minimal so the backend uses its DB default.
     ...(modelParams ? { modelParams } : {}),
     // Attribution-only — forward snapshotId so the AI-usage logger stamps book cost.
@@ -141,9 +130,9 @@ export async function callGenerateBaseSheet(
   });
   // The endpoint is stateless: if the echo ever disagrees with what we asked for, the raw sheet
   // landed in the WRONG sheet node server-side (BE-first saveResource) — loud, not silent.
-  const echoed = 'data' in res ? res.data?.targetSheet : undefined;
-  if (targetSheet && echoed && echoed !== targetSheet) {
-    log.error('callGenerateBaseSheet', 'targetSheet echo mismatch', { kind, requested: targetSheet, echoed });
+  const echoed = 'data' in res ? res.data?.targetGroup : undefined;
+  if (echoed && echoed !== targetGroup) {
+    log.error('callGenerateBaseSheet', 'targetGroup echo mismatch', { group: targetGroup, requested: targetGroup, echoed });
   }
   warnIfSaveResourceFailed(log.warn, 'callGenerateBaseSheet', res);
   return res;

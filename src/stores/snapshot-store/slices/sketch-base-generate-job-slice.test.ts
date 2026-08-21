@@ -8,8 +8,12 @@ import type { SketchEntity } from '@/types/sketch';
 import { callGenerateBaseSheet, type GenerateBaseSheetResult } from '@/apis/sketch-base-api';
 import { callCropSheetRow, type CropSheetRowResult } from '@/apis/sketch-variant-api';
 
-// Mock the api-client seams. ⚡2026-07-15: base crop migrated 07 → shared positional cutter (api 10)
-// which lives in sketch-variant-api → mock BOTH modules (generate on base, crop on variant).
+// ⚡REV 2026-08-21: ops are keyed by GROUP KEY (`base[group]`). The default character group is
+// `character_sheet`, props `prop_sheet`; an "alter" cast is just another character group
+// (`alter_character_sheet`) whose entities carry `group: 'alter_character_sheet'` in `characters[]`.
+//
+// Mock the api-client seams. Base crop reuses the shared positional cutter (api 10) which lives in
+// sketch-variant-api → mock BOTH modules (generate on base, crop on variant).
 vi.mock('@/apis/sketch-base-api', () => ({
   callGenerateBaseSheet: vi.fn(),
 }));
@@ -19,31 +23,18 @@ vi.mock('@/apis/sketch-variant-api', () => ({
 const mockedGenerateCall = vi.mocked(callGenerateBaseSheet);
 const mockedCropCall = vi.mocked(callCropSheetRow);
 
-// Mutable collab flag so tests can drive the solo (autoSave) vs collab (gateway flush) persist path.
-const lockState = vi.hoisted(() => ({ collabPersist: false as boolean }));
-
-// Mock resource-lock-store to isolate from collab (collabPersist drives the persist branch).
-vi.mock('@/stores/resource-lock-store', () => ({
-  useResourceLockStore: {
-    getState: () => ({ collabPersist: lockState.collabPersist, myUserId: null, holderNames: new Map() }),
-  },
-}));
-
-// Mock the base-sheet gateway flush (ADR-043 rtype 11) so the collab persist path can be asserted
-// WITHOUT a live lock store. Solo path never calls it (autoSaveSnapshot instead).
+// Mock the base-sheet gateway flush (ADR-043 rtype 11) so the persist path can be asserted WITHOUT a
+// live lock store. The engine seam picks whole-snapshot flush internally in solo.
 const mockedSheetFlush = vi.hoisted(() => vi.fn(async () => 'saved'));
 vi.mock('./collab-sketch-base-sheet-save-helper', () => ({
   flushSketchBaseSheetUnderLock: mockedSheetFlush,
 }));
 
-// Mock the per-entity gateway flush (grain B, rtype 3/4) — called after a crops replacement on the
-// LOCKED style (the store re-clones entity base variants → those nodes flush too).
-// ⚡ ADR-044 addendum 2 (rtype 14): the LOCKED-style crops replacement re-clones every entity base
-// variant → the WHOLE collection is persisted in ONE column-root save (not N per-entity flushes).
+// Mock the collection save (grain B, rtype 14) — called after a crops replacement on the LOCKED
+// style (the store re-clones every group entity's base variant → the WHOLE collection is persisted).
 const mockedCollectionSave = vi.hoisted(() => vi.fn(async () => 'saved'));
 vi.mock('./collab-sketch-base-entities-save-helper', () => ({
   saveEntityCollection: mockedCollectionSave,
-  BASE_KIND_TO_COLLECTION: { characters: 'characters', props: 'props', alter_characters: 'characters' },
 }));
 
 // Mock sonner toast
@@ -116,6 +107,12 @@ const okCropRow = (
   meta,
 });
 
+const baseEntity = (key: string, group?: string): SketchEntity => ({
+  key,
+  ...(group ? { group } : {}),
+  variants: [{ key: 'base', description: '', visual_design: `${key} look`, art_language: '' }],
+});
+
 describe('SketchBaseGenerateJobSlice', () => {
   let store: ReturnType<typeof createTestStore>['store'];
   let autoSaveSnapshot: ReturnType<typeof createTestStore>['autoSaveSnapshot'];
@@ -125,33 +122,17 @@ describe('SketchBaseGenerateJobSlice', () => {
     mockedCropCall.mockReset();
     mockedSheetFlush.mockReset().mockResolvedValue('saved');
     mockedCollectionSave.mockReset().mockResolvedValue('saved');
-    lockState.collabPersist = false; // default: solo (autoSave path)
     vi.mocked(toast.warning).mockReset();
     ({ store, autoSaveSnapshot } = createTestStore());
   });
 
   it('add-mode: start → generate → crop chain writes raw + crops → op finalizes to null', async () => {
-    // Setup base entities
-    const baseEntity: SketchEntity = {
-      key: 'hero',
-      variants: [
-        {
-          key: 'base',
-          description: '',
-          visual_design: 'mighty warrior',
-          art_language: '',
-        },
-      ],
-    };
-    store.getState().setSketchEntities('characters', [baseEntity]);
-
-    // Mock successful generate → crop chain
+    store.getState().setSketchEntities('characters', [baseEntity('hero')]);
     mockedGenerateCall.mockResolvedValueOnce(okGenerate('raw.png'));
     mockedCropCall.mockResolvedValueOnce(okCropRow([{ cell: 1, imageUrl: 'crop-hero.png' }]));
 
-    // Start the job in 'add' mode (creates a new style)
     store.getState().startBaseSheetGenerate({
-      kind: 'characters',
+      group: 'character_sheet',
       mode: 'add',
       stylePrompt: 'test prompt',
       referenceImages: [],
@@ -161,39 +142,29 @@ describe('SketchBaseGenerateJobSlice', () => {
     await tick();
     await tick();
 
-    // Assert raw written (prepended + selected)
     const style = store.getState().sketch.base.character_sheet.styles[0];
     expect(style.illustrations).toHaveLength(1);
     expect(style.illustrations[0].media_url).toBe('raw.png');
     expect(style.illustrations[0].is_selected).toBe(true);
 
-    // Assert crops written
     expect(style.crops).toHaveLength(1);
     expect(style.crops[0].key).toBe('hero');
     expect(style.crops[0].illustrations[0].media_url).toBe('crop-hero.png');
 
-    // Assert op finalized (null after success)
-    expect(store.getState().baseSheetGenerateOps.characters).toBeUndefined();
+    expect(store.getState().baseSheetGenerateOps.character_sheet).toBeUndefined();
 
-    // ⚡ phase-3: persist-after ALWAYS routes through the engine seam (the seam picks whole-snapshot
-    // flush in solo internally) — the slice no longer calls autoSaveSnapshot directly.
-    expect(mockedSheetFlush).toHaveBeenCalledWith('characters');
+    // ⚡ phase-3: persist-after ALWAYS routes through the engine seam (whole-snapshot flush in solo).
+    expect(mockedSheetFlush).toHaveBeenCalledWith('character_sheet');
     expect(autoSaveSnapshot).not.toHaveBeenCalled();
   });
 
-  it('collab persist: generate → crop chain flushes the whole SHEET via gateway (NOT autoSave)', async () => {
-    lockState.collabPersist = true; // collab space → gateway held-session owns persistence
-    const baseEntity: SketchEntity = {
-      key: 'hero',
-      variants: [{ key: 'base', description: '', visual_design: 'mighty warrior', art_language: '' }],
-    };
-    store.getState().setSketchEntities('characters', [baseEntity]);
-
+  it('generate → crop chain flushes the whole SHEET via gateway (NOT autoSave)', async () => {
+    store.getState().setSketchEntities('characters', [baseEntity('hero')]);
     mockedGenerateCall.mockResolvedValueOnce(okGenerate('raw.png'));
     mockedCropCall.mockResolvedValueOnce(okCropRow([{ cell: 1, imageUrl: 'crop-hero.png' }]));
 
     store.getState().startBaseSheetGenerate({
-      kind: 'characters',
+      group: 'character_sheet',
       mode: 'add',
       stylePrompt: 'test prompt',
       referenceImages: [],
@@ -203,33 +174,27 @@ describe('SketchBaseGenerateJobSlice', () => {
     await tick();
     await tick();
 
-    // Raw + crops still written locally.
     const style = store.getState().sketch.base.character_sheet.styles[0];
     expect(style.illustrations[0].media_url).toBe('raw.png');
     expect(style.crops[0].illustrations[0].media_url).toBe('crop-hero.png');
 
-    // ⚡ phase-3: grain A via the engine seam (no node arg / releaseIfAcquired — engine owns the lifecycle).
-    expect(mockedSheetFlush).toHaveBeenCalledWith('characters');
+    expect(mockedSheetFlush).toHaveBeenCalledWith('character_sheet');
     expect(autoSaveSnapshot).not.toHaveBeenCalled();
     // Fresh add-style is never locked → no entity clone changed → grain B untouched.
     expect(mockedCollectionSave).not.toHaveBeenCalled();
   });
 
-  it('collab persist on the LOCKED style: crops replacement saves the whole collection ONCE (grain B, rtype 14)', async () => {
-    lockState.collabPersist = true;
-    store.getState().setSketchEntities('characters', [
-      { key: 'hero', variants: [{ key: 'base', description: '', visual_design: 'w', art_language: '' }] },
-      { key: 'villain', variants: [{ key: 'base', description: '', visual_design: 'v', art_language: '' }] },
-    ]);
+  it('on the LOCKED style: crops replacement saves the whole collection ONCE (grain B, rtype 14)', async () => {
+    store.getState().setSketchEntities('characters', [baseEntity('hero'), baseEntity('villain')]);
     // Existing LOCKED style → regenerate replaces its crops → the store re-clones entity variants.
-    store.getState().addSketchBaseStyle('characters', {
+    store.getState().addSketchBaseStyle('character_sheet', {
       style_prompt: 's1',
       is_selected: false,
       image_references: [],
       illustrations: [],
       crops: [],
     });
-    store.getState().setSketchBaseStyleSelected('characters', 0);
+    store.getState().setSketchBaseStyleSelected('character_sheet', 0);
 
     mockedGenerateCall.mockResolvedValueOnce(okGenerate('raw.png', ['hero', 'villain']));
     mockedCropCall.mockResolvedValueOnce(
@@ -240,7 +205,7 @@ describe('SketchBaseGenerateJobSlice', () => {
     );
 
     store.getState().startBaseSheetGenerate({
-      kind: 'characters',
+      group: 'character_sheet',
       mode: 'regenerate',
       styleIndex: 0,
       stylePrompt: 's1',
@@ -251,37 +216,32 @@ describe('SketchBaseGenerateJobSlice', () => {
     await tick();
     await tick();
 
-    // Entity base-variant clones live-followed the new crops…
     const [hero, villain] = store.getState().sketch.characters;
     expect(hero.variants[0].raw_sheet?.crops[0].illustrations[0].media_url).toBe('crop-hero.png');
     expect(villain.variants[0].raw_sheet?.crops[0].illustrations[0].media_url).toBe('crop-villain.png');
 
-    // …and the WHOLE characters collection persisted ONCE (rtype 14) after the sheet flush — the
-    // per-entity N-write loop is gone (both clones ride in the one column-root array save).
+    // …and the WHOLE characters collection persisted ONCE (rtype 14) after the sheet flush.
     expect(mockedSheetFlush).toHaveBeenCalled();
     expect(mockedCollectionSave).toHaveBeenCalledTimes(1);
     expect(mockedCollectionSave).toHaveBeenCalledWith('characters');
     expect(autoSaveSnapshot).not.toHaveBeenCalled();
   });
 
-  it('collab persist on the LOCKED style: FAILED generate (no crops landed) skips the entity flush', async () => {
-    lockState.collabPersist = true;
-    store.getState().setSketchEntities('characters', [
-      { key: 'hero', variants: [{ key: 'base', description: '', visual_design: 'w', art_language: '' }] },
-    ]);
-    store.getState().addSketchBaseStyle('characters', {
+  it('on the LOCKED style: FAILED generate (no crops landed) skips the entity flush', async () => {
+    store.getState().setSketchEntities('characters', [baseEntity('hero')]);
+    store.getState().addSketchBaseStyle('character_sheet', {
       style_prompt: 's1',
       is_selected: false,
       image_references: [],
       illustrations: [],
       crops: [],
     });
-    store.getState().setSketchBaseStyleSelected('characters', 0);
+    store.getState().setSketchBaseStyleSelected('character_sheet', 0);
 
     mockedGenerateCall.mockResolvedValueOnce({ success: false, error: { code: 'LLM_ERROR', message: 'boom' } } as never);
 
     store.getState().startBaseSheetGenerate({
-      kind: 'characters',
+      group: 'character_sheet',
       mode: 'regenerate',
       styleIndex: 0,
       stylePrompt: 's1',
@@ -298,17 +258,13 @@ describe('SketchBaseGenerateJobSlice', () => {
   });
 
   it('opStale: reset op mid-await → crops NOT written', async () => {
-    const baseEntity: SketchEntity = {
-      key: 'hero',
-      variants: [{ key: 'base', description: '', visual_design: 'test', art_language: '' }],
-    };
-    store.getState().setSketchEntities('characters', [baseEntity]);
+    store.getState().setSketchEntities('characters', [baseEntity('hero')]);
 
     const dGen = deferred<ReturnType<typeof okGenerate>>();
     mockedGenerateCall.mockReturnValueOnce(dGen.promise as never);
 
     store.getState().startBaseSheetGenerate({
-      kind: 'characters',
+      group: 'character_sheet',
       mode: 'add',
       stylePrompt: 'test',
       referenceImages: [],
@@ -322,32 +278,23 @@ describe('SketchBaseGenerateJobSlice', () => {
       s.baseSheetGenerateOps = {};
     });
 
-    // Resolve generate (but op is stale, runCrop guard should bail)
     dGen.resolve(okGenerate('raw.png'));
     await tick();
     await tick();
 
-    // Assert raw NOT written
     const style = store.getState().sketch.base.character_sheet.styles[0];
     expect(style.illustrations).toEqual([]); // no raw added
-
-    // Assert crop was never called (opStale prevented runCrop)
     expect(mockedCropCall).not.toHaveBeenCalled();
   });
 
-  it('per-kind single-flight: a second start on the SAME kind is blocked', async () => {
-    const baseEntity: SketchEntity = {
-      key: 'hero',
-      variants: [{ key: 'base', description: '', visual_design: 'test', art_language: '' }],
-    };
-    store.getState().setSketchEntities('characters', [baseEntity]);
+  it('per-group single-flight: a second start on the SAME group is blocked', async () => {
+    store.getState().setSketchEntities('characters', [baseEntity('hero')]);
 
     const dGen = deferred<ReturnType<typeof okGenerate>>();
     mockedGenerateCall.mockReturnValueOnce(dGen.promise as never);
 
-    // First start
     store.getState().startBaseSheetGenerate({
-      kind: 'characters',
+      group: 'character_sheet',
       mode: 'add',
       stylePrompt: 'test',
       referenceImages: [],
@@ -356,25 +303,21 @@ describe('SketchBaseGenerateJobSlice', () => {
     await tick();
     expect(mockedGenerateCall).toHaveBeenCalledTimes(1);
 
-    // Second start on the SAME kind (its sheet node already has a writer) → no-op
+    // Second start on the SAME group (its sheet node already has a writer) → no-op
     store.getState().startBaseSheetGenerate({
-      kind: 'characters',
+      group: 'character_sheet',
       mode: 'add',
       stylePrompt: 'test2',
       referenceImages: [],
       artStyleId: 'style-2',
     });
-    expect(mockedGenerateCall).toHaveBeenCalledTimes(1); // still 1, not 2
+    expect(mockedGenerateCall).toHaveBeenCalledTimes(1);
 
     dGen.resolve(okGenerate('raw.png'));
     await tick();
   });
 
-  it('per-kind parallel: props starts while characters is still generating', async () => {
-    const baseEntity = (key: string): SketchEntity => ({
-      key,
-      variants: [{ key: 'base', description: '', visual_design: 'test', art_language: '' }],
-    });
+  it('per-group parallel: props starts while characters is still generating', async () => {
     store.getState().setSketchEntities('characters', [baseEntity('hero')]);
     store.getState().setSketchEntities('props', [baseEntity('lantern')]);
 
@@ -384,7 +327,7 @@ describe('SketchBaseGenerateJobSlice', () => {
     mockedGenerateCall.mockReturnValueOnce(dProp.promise as never);
 
     store.getState().startBaseSheetGenerate({
-      kind: 'characters',
+      group: 'character_sheet',
       mode: 'add',
       stylePrompt: 'chars',
       referenceImages: [],
@@ -392,7 +335,7 @@ describe('SketchBaseGenerateJobSlice', () => {
     });
     await tick();
     store.getState().startBaseSheetGenerate({
-      kind: 'props',
+      group: 'prop_sheet',
       mode: 'add',
       stylePrompt: 'props',
       referenceImages: [],
@@ -402,26 +345,26 @@ describe('SketchBaseGenerateJobSlice', () => {
 
     expect(mockedGenerateCall).toHaveBeenCalledTimes(2); // both dispatched
     const ops = store.getState().baseSheetGenerateOps;
-    expect(ops.characters).toBeDefined();
-    expect(ops.props).toBeDefined();
+    expect(ops.character_sheet).toBeDefined();
+    expect(ops.prop_sheet).toBeDefined();
 
     dChar.resolve(okGenerate('raw.png'));
     dProp.resolve(okGenerate('raw2.png'));
     await tick();
   });
 
-  it('cancel/dismiss address ONE kind — the other kind is untouched', () => {
+  it('cancel/dismiss address ONE group — the other group is untouched', () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     store.setState((s: any) => {
-      s.baseSheetGenerateOps.characters = {
-        kind: 'characters',
+      s.baseSheetGenerateOps.character_sheet = {
+        group: 'character_sheet',
         styleIndex: 0,
         phase: 'generating',
         startedAt: 'now',
         isRecrop: false,
       };
-      s.baseSheetGenerateOps.props = {
-        kind: 'props',
+      s.baseSheetGenerateOps.prop_sheet = {
+        group: 'prop_sheet',
         styleIndex: 0,
         phase: 'generating',
         startedAt: 'now',
@@ -430,24 +373,19 @@ describe('SketchBaseGenerateJobSlice', () => {
       };
     });
 
-    store.getState().cancelBaseSheetGenerate('characters');
-    expect(store.getState().baseSheetGenerateOps.characters?.cancelRequested).toBe(true);
-    expect(store.getState().baseSheetGenerateOps.props?.cancelRequested).toBeUndefined();
+    store.getState().cancelBaseSheetGenerate('character_sheet');
+    expect(store.getState().baseSheetGenerateOps.character_sheet?.cancelRequested).toBe(true);
+    expect(store.getState().baseSheetGenerateOps.prop_sheet?.cancelRequested).toBeUndefined();
 
-    store.getState().dismissBaseSheetGenerateError('props');
-    expect(store.getState().baseSheetGenerateOps.props).toBeUndefined();
-    expect(store.getState().baseSheetGenerateOps.characters).toBeDefined();
+    store.getState().dismissBaseSheetGenerateError('prop_sheet');
+    expect(store.getState().baseSheetGenerateOps.prop_sheet).toBeUndefined();
+    expect(store.getState().baseSheetGenerateOps.character_sheet).toBeDefined();
   });
 
   it('recrop: style with raw → crop-only overwrites crops', async () => {
-    const baseEntity: SketchEntity = {
-      key: 'hero',
-      variants: [{ key: 'base', description: '', visual_design: 'test', art_language: '' }],
-    };
-    store.getState().setSketchEntities('characters', [baseEntity]);
+    store.getState().setSketchEntities('characters', [baseEntity('hero')]);
 
-    // Add style with raw + old crops
-    store.getState().addSketchBaseStyle('characters', {
+    store.getState().addSketchBaseStyle('character_sheet', {
       style_prompt: 'test style',
       is_selected: false,
       image_references: [],
@@ -464,32 +402,22 @@ describe('SketchBaseGenerateJobSlice', () => {
       ],
     });
 
-    // Mock crop result (new crops)
     mockedCropCall.mockResolvedValueOnce(okCropRow([{ cell: 1, imageUrl: 'new-crop.png' }]));
 
-    // Start recrop (crop-only, references the existing raw at style index 0)
-    store.getState().recropBaseSheet('characters', 0);
+    store.getState().recropBaseSheet('character_sheet', 0);
     await tick();
     await tick();
 
-    // Assert raw untouched
     const style = store.getState().sketch.base.character_sheet.styles[0];
-    expect(style.illustrations[0].media_url).toBe('raw.png');
-
-    // Assert crops overwritten
+    expect(style.illustrations[0].media_url).toBe('raw.png'); // raw untouched
     expect(style.crops[0].illustrations[0].media_url).toBe('new-crop.png');
   });
 
   it('error: add-mode generate fail (no raw) → orphaned style rolled back + op.error persists until dismiss', async () => {
-    const baseEntity: SketchEntity = {
-      key: 'hero',
-      variants: [{ key: 'base', description: '', visual_design: 'test', art_language: '' }],
-    };
-    store.getState().setSketchEntities('characters', [baseEntity]);
-    // Sheet starts empty — add appends one style, which must be rolled back on failure.
-    expect(store.getState().sketch.base.character_sheet.styles).toHaveLength(0);
+    store.getState().setSketchEntities('characters', [baseEntity('hero')]);
+    // Sheet node does not exist yet — add appends one style, which must be rolled back on failure.
+    expect(store.getState().sketch.base.character_sheet?.styles ?? []).toHaveLength(0);
 
-    // Mock generate fail
     /* eslint-disable @typescript-eslint/no-explicit-any */
     mockedGenerateCall.mockResolvedValueOnce({
       success: false,
@@ -499,7 +427,7 @@ describe('SketchBaseGenerateJobSlice', () => {
     /* eslint-enable @typescript-eslint/no-explicit-any */
 
     store.getState().startBaseSheetGenerate({
-      kind: 'characters',
+      group: 'character_sheet',
       mode: 'add',
       stylePrompt: 'test',
       referenceImages: [],
@@ -508,24 +436,18 @@ describe('SketchBaseGenerateJobSlice', () => {
     await tick();
     await tick();
 
-    // Assert the appended (empty) style was rolled back — sheet back to original length.
+    // Appended (empty) style rolled back — sheet back to empty.
     expect(store.getState().sketch.base.character_sheet.styles).toHaveLength(0);
 
-    // Assert op.error set + op kept (not finalized to null)
-    expect(store.getState().baseSheetGenerateOps.characters).not.toBeUndefined();
-    expect(store.getState().baseSheetGenerateOps.characters?.error).toContain('image model');
+    expect(store.getState().baseSheetGenerateOps.character_sheet).not.toBeUndefined();
+    expect(store.getState().baseSheetGenerateOps.character_sheet?.error).toContain('image model');
 
-    // Dismiss
-    store.getState().dismissBaseSheetGenerateError('characters');
-    expect(store.getState().baseSheetGenerateOps.characters).toBeUndefined();
+    store.getState().dismissBaseSheetGenerateError('character_sheet');
+    expect(store.getState().baseSheetGenerateOps.character_sheet).toBeUndefined();
   });
 
   it('refs: pre-hosted art-style refs → persisted verbatim on the style + sent as media_url to generate', async () => {
-    const baseEntity: SketchEntity = {
-      key: 'hero',
-      variants: [{ key: 'base', description: '', visual_design: 'test', art_language: '' }],
-    };
-    store.getState().setSketchEntities('characters', [baseEntity]);
+    store.getState().setSketchEntities('characters', [baseEntity('hero')]);
 
     mockedGenerateCall.mockResolvedValueOnce(okGenerate('raw.png'));
     mockedCropCall.mockResolvedValueOnce(okCropRow([{ cell: 1, imageUrl: 'crop-hero.png' }]));
@@ -535,7 +457,7 @@ describe('SketchBaseGenerateJobSlice', () => {
       { title: 'ref-b', media_url: 'https://cdn/ref-b.png' },
     ];
     store.getState().startBaseSheetGenerate({
-      kind: 'characters',
+      group: 'character_sheet',
       mode: 'add',
       stylePrompt: 'test',
       referenceImages: refs,
@@ -546,28 +468,26 @@ describe('SketchBaseGenerateJobSlice', () => {
     await tick();
 
     const style = store.getState().sketch.base.character_sheet.styles[0];
-    // Persisted verbatim (already hosted — no upload roundtrip).
     expect(style.image_references).toEqual(refs);
-    // Generate received media_url refs only (title stripped, order preserved).
     const genArg = mockedGenerateCall.mock.calls[0][1];
     expect(genArg.referenceImages).toEqual([
       { media_url: 'https://cdn/ref-a.png' },
       { media_url: 'https://cdn/ref-b.png' },
     ]);
+    // ALWAYS ships the group key as targetGroup.
+    expect(genArg.targetGroup).toBe('character_sheet');
+    // Route dispatched by the group's kind.
+    expect(mockedGenerateCall.mock.calls[0][0]).toBe('characters');
   });
 
   it('refs: empty → image_references untouched + generate receives an empty array', async () => {
-    const baseEntity: SketchEntity = {
-      key: 'hero',
-      variants: [{ key: 'base', description: '', visual_design: 'test', art_language: '' }],
-    };
-    store.getState().setSketchEntities('characters', [baseEntity]);
+    store.getState().setSketchEntities('characters', [baseEntity('hero')]);
 
     mockedGenerateCall.mockResolvedValueOnce(okGenerate('raw.png'));
     mockedCropCall.mockResolvedValueOnce(okCropRow([{ cell: 1, imageUrl: 'crop-hero.png' }]));
 
     store.getState().startBaseSheetGenerate({
-      kind: 'characters',
+      group: 'character_sheet',
       mode: 'add',
       stylePrompt: 'test',
       referenceImages: [],
@@ -578,19 +498,14 @@ describe('SketchBaseGenerateJobSlice', () => {
     await tick();
 
     const style = store.getState().sketch.base.character_sheet.styles[0];
-    expect(style.image_references).toEqual([]); // never written when no refs picked
+    expect(style.image_references).toEqual([]);
     const genArg = mockedGenerateCall.mock.calls[0][1];
     expect(genArg.referenceImages).toEqual([]);
   });
 
   it('error: add-mode crop fail AFTER raw landed → style KEPT (not rolled back) + op.error set', async () => {
-    const baseEntity: SketchEntity = {
-      key: 'hero',
-      variants: [{ key: 'base', description: '', visual_design: 'test', art_language: '' }],
-    };
-    store.getState().setSketchEntities('characters', [baseEntity]);
+    store.getState().setSketchEntities('characters', [baseEntity('hero')]);
 
-    // Generate succeeds (raw lands), crop fails → partial success → keep the style.
     mockedGenerateCall.mockResolvedValueOnce(okGenerate('raw.png'));
     /* eslint-disable @typescript-eslint/no-explicit-any */
     mockedCropCall.mockResolvedValueOnce({
@@ -601,7 +516,7 @@ describe('SketchBaseGenerateJobSlice', () => {
     /* eslint-enable @typescript-eslint/no-explicit-any */
 
     store.getState().startBaseSheetGenerate({
-      kind: 'characters',
+      group: 'character_sheet',
       mode: 'add',
       stylePrompt: 'test',
       referenceImages: [],
@@ -611,28 +526,19 @@ describe('SketchBaseGenerateJobSlice', () => {
     await tick();
     await tick();
 
-    // Style KEPT (raw already landed = partial success) with the raw illustration.
     const styles = store.getState().sketch.base.character_sheet.styles;
     expect(styles).toHaveLength(1);
     expect(styles[0].illustrations[0].media_url).toBe('raw.png');
 
-    // op.error set + kept
-    expect(store.getState().baseSheetGenerateOps.characters).not.toBeUndefined();
-    expect(store.getState().baseSheetGenerateOps.characters?.error).toContain('crop');
+    expect(store.getState().baseSheetGenerateOps.character_sheet).not.toBeUndefined();
+    expect(store.getState().baseSheetGenerateOps.character_sheet?.error).toContain('crop');
   });
 
   it('positional pairing: crops keyed by 1-based cell (skipped middle cell does NOT shift keys) + warn', async () => {
-    // 3 base entities in reading order alpha,bravo,charlie. Backend cuts cells 1 & 3, SKIPS cell 2.
     const entityKeys = ['alpha', 'bravo', 'charlie'];
-    const entities: SketchEntity[] = entityKeys.map((key) => ({
-      key,
-      variants: [{ key: 'base', description: '', visual_design: `${key} look`, art_language: '' }],
-    }));
-    store.getState().setSketchEntities('characters', entities);
+    store.getState().setSketchEntities('characters', entityKeys.map((k) => baseEntity(k)));
 
     mockedGenerateCall.mockResolvedValueOnce(okGenerate('raw.png', entityKeys));
-    // Crops for cell 1 + cell 3 only. If the slice paired by ARRAY INDEX the second crop would wrongly
-    // land on 'bravo' (index 1) — assert it lands on 'charlie' (cell 3 → cellOrder[2]).
     mockedCropCall.mockResolvedValueOnce(
       okCropRow(
         [
@@ -644,7 +550,7 @@ describe('SketchBaseGenerateJobSlice', () => {
     );
 
     store.getState().startBaseSheetGenerate({
-      kind: 'characters',
+      group: 'character_sheet',
       mode: 'add',
       stylePrompt: 'test',
       referenceImages: [],
@@ -655,23 +561,18 @@ describe('SketchBaseGenerateJobSlice', () => {
     await tick();
 
     const style = store.getState().sketch.base.character_sheet.styles[0];
-    expect(style.crops).toHaveLength(2); // only 2 crops written (cell 2 skipped)
+    expect(style.crops).toHaveLength(2);
     const alpha = style.crops.find((c: { key: string }) => c.key === 'alpha');
     const charlie = style.crops.find((c: { key: string }) => c.key === 'charlie');
     expect(alpha?.illustrations[0].media_url).toBe('crop-alpha.png');
     expect(charlie?.illustrations[0].media_url).toBe('crop-charlie.png'); // cell 3 → charlie (NOT bravo)
     expect(style.crops.find((c: { key: string }) => c.key === 'bravo')).toBeUndefined();
 
-    // Non-fatal skipped warn surfaced.
     expect(vi.mocked(toast.warning)).toHaveBeenCalled();
   });
 
   it('degraded meta (geoFallback / fullbleed) → non-fatal warn toast, crops still written', async () => {
-    const baseEntity: SketchEntity = {
-      key: 'hero',
-      variants: [{ key: 'base', description: '', visual_design: 'test', art_language: '' }],
-    };
-    store.getState().setSketchEntities('characters', [baseEntity]);
+    store.getState().setSketchEntities('characters', [baseEntity('hero')]);
 
     mockedGenerateCall.mockResolvedValueOnce(okGenerate('raw.png'));
     mockedCropCall.mockResolvedValueOnce(
@@ -679,7 +580,7 @@ describe('SketchBaseGenerateJobSlice', () => {
     );
 
     store.getState().startBaseSheetGenerate({
-      kind: 'characters',
+      group: 'character_sheet',
       mode: 'add',
       stylePrompt: 'test',
       referenceImages: [],
@@ -690,23 +591,19 @@ describe('SketchBaseGenerateJobSlice', () => {
     await tick();
 
     const style = store.getState().sketch.base.character_sheet.styles[0];
-    expect(style.crops[0].illustrations[0].media_url).toBe('crop-hero.png'); // crop still written
+    expect(style.crops[0].illustrations[0].media_url).toBe('crop-hero.png');
     expect(vi.mocked(toast.warning)).toHaveBeenCalled();
   });
 
   it('modelParams: threaded through start → generate call; crop uses base pathPrefix + cellCount', async () => {
-    const baseEntity: SketchEntity = {
-      key: 'hero',
-      variants: [{ key: 'base', description: '', visual_design: 'test', art_language: '' }],
-    };
-    store.getState().setSketchEntities('characters', [baseEntity]);
+    store.getState().setSketchEntities('characters', [baseEntity('hero')]);
 
     mockedGenerateCall.mockResolvedValueOnce(okGenerate('raw.png'));
     mockedCropCall.mockResolvedValueOnce(okCropRow([{ cell: 1, imageUrl: 'crop-hero.png' }]));
 
     const modelParams = { model: 'google/nano-banana-pro', params: { temperature: 0.7 } };
     store.getState().startBaseSheetGenerate({
-      kind: 'characters',
+      group: 'character_sheet',
       mode: 'add',
       stylePrompt: 'test',
       referenceImages: [],
@@ -717,29 +614,23 @@ describe('SketchBaseGenerateJobSlice', () => {
     await tick();
     await tick();
 
-    // Generate received modelParams verbatim.
     const genArg = mockedGenerateCall.mock.calls[0][1];
     expect(genArg.modelParams).toEqual(modelParams);
-    // crop-sheet-row (api 10) called with the base pathPrefix + cellCount derived from cellOrder.
     const cropArg = mockedCropCall.mock.calls[0][0];
     expect(cropArg.pathPrefix).toBe('sketches/base/characters');
     expect(cropArg.cellCount).toBe(1);
   });
 
   describe('saveResource wiring — opt-in BE-first double-write', () => {
-    it('passes saveResource with correct base style anchor for character', async () => {
+    it('passes saveResource with the group base style anchor for a character group', async () => {
       const { store } = createTestStore('snap-base');
-      const baseEntity: SketchEntity = {
-        key: 'hero',
-        variants: [{ key: 'base', description: '', visual_design: 'mighty warrior', art_language: '' }],
-      };
-      store.getState().setSketchEntities('characters', [baseEntity]);
+      store.getState().setSketchEntities('characters', [baseEntity('hero')]);
 
       mockedGenerateCall.mockResolvedValueOnce(okGenerate('gen.png'));
       mockedCropCall.mockResolvedValueOnce(okCropRow([{ cell: 1, imageUrl: 'crop.png' }]));
 
       store.getState().startBaseSheetGenerate({
-        kind: 'characters',
+        group: 'character_sheet',
         mode: 'add',
         stylePrompt: 'test prompt',
         referenceImages: [],
@@ -755,19 +646,15 @@ describe('SketchBaseGenerateJobSlice', () => {
       });
     });
 
-    it('passes saveResource with correct base style anchor for props', async () => {
+    it('passes saveResource with the group base style anchor for a prop group', async () => {
       const { store } = createTestStore('snap-prop');
-      const baseEntity: SketchEntity = {
-        key: 'sword',
-        variants: [{ key: 'base', description: '', visual_design: 'mighty sword', art_language: '' }],
-      };
-      store.getState().setSketchEntities('props', [baseEntity]);
+      store.getState().setSketchEntities('props', [baseEntity('sword')]);
 
-      mockedGenerateCall.mockResolvedValueOnce(okGenerate('gen.png'));
+      mockedGenerateCall.mockResolvedValueOnce(okGenerate('gen.png', ['sword']));
       mockedCropCall.mockResolvedValueOnce(okCropRow([{ cell: 1, imageUrl: 'crop.png' }]));
 
       store.getState().startBaseSheetGenerate({
-        kind: 'props',
+        group: 'prop_sheet',
         mode: 'add',
         stylePrompt: 'test prompt',
         referenceImages: [],
@@ -783,49 +670,38 @@ describe('SketchBaseGenerateJobSlice', () => {
       });
     });
 
-    it('passes saveResource anchored on the ALTER sheet node for alter_characters', async () => {
-      const { store } = createTestStore('snap-alter');
-      store.getState().setSketchEntities('alter_characters', [
-        { key: 'stunt-hero', variants: [{ key: 'base', description: '', visual_design: 'stand-in', art_language: '' }] },
-      ]);
+    it('anchors on a NON-legacy group key verbatim (custom Excel tab group)', async () => {
+      const { store } = createTestStore('snap-custom');
+      store.getState().setSketchEntities('characters', [baseEntity('gob', 'goblins_2')]);
 
-      mockedGenerateCall.mockResolvedValueOnce(okGenerate('gen.png', ['stunt-hero']));
+      mockedGenerateCall.mockResolvedValueOnce(okGenerate('gen.png', ['gob']));
       mockedCropCall.mockResolvedValueOnce(okCropRow([{ cell: 1, imageUrl: 'crop.png' }]));
 
       store.getState().startBaseSheetGenerate({
-        kind: 'alter_characters',
+        group: 'goblins_2',
         mode: 'add',
         stylePrompt: 'test prompt',
         referenceImages: [],
         artStyleId: 'style-1',
       });
       await tick();
-      await tick();
-      await tick();
 
       const genArg = mockedGenerateCall.mock.calls[0][1];
+      expect(genArg.targetGroup).toBe('goblins_2');
       expect(genArg.saveResource).toMatchObject({
-        type: 'image_version',
-        path: expect.stringContaining(
-          'table:snapshots/id:snap-alter/col:sketch/key:base/key:alter_character_sheet/key:styles/idx:',
-        ),
-        action: 'create',
+        path: expect.stringContaining('col:sketch/key:base/key:goblins_2/key:styles/idx:'),
       });
     });
 
     it('omits saveResource when snapshotId is null (not opted in)', async () => {
       const { store } = createTestStore(null);
-      const baseEntity: SketchEntity = {
-        key: 'hero',
-        variants: [{ key: 'base', description: '', visual_design: 'mighty warrior', art_language: '' }],
-      };
-      store.getState().setSketchEntities('characters', [baseEntity]);
+      store.getState().setSketchEntities('characters', [baseEntity('hero')]);
 
       mockedGenerateCall.mockResolvedValueOnce(okGenerate('gen.png'));
       mockedCropCall.mockResolvedValueOnce(okCropRow([{ cell: 1, imageUrl: 'crop.png' }]));
 
       store.getState().startBaseSheetGenerate({
-        kind: 'characters',
+        group: 'character_sheet',
         mode: 'add',
         stylePrompt: 'test prompt',
         referenceImages: [],
@@ -833,34 +709,30 @@ describe('SketchBaseGenerateJobSlice', () => {
       });
       await tick();
 
-      // When snapshotId is null, saveResource should be undefined (not opted in)
       const genArg = mockedGenerateCall.mock.calls[0][1];
       expect(genArg.saveResource).toBeUndefined();
     });
   });
 
-  // ⚡2026-07-28 — alter characters. `sketch['alter_characters']` DOES NOT EXIST: alter entities
-  // live in `sketch.characters[]` behind `actor_role === 1`. Every read here must resolve through
-  // KIND_ENTITY_SOURCE, or the alter group generates an EMPTY sheet with no type error and no
-  // runtime error (the failure the whole feature is most exposed to).
-  describe('alter characters — entity source, sheet routing, storage layout', () => {
-    /** hero (story cast) + stunt-hero (alter) sharing the ONE characters[] array. */
+  // ⚡REV 2026-08-21 — an "alter" cast is just another CHARACTER group (`alter_character_sheet`).
+  // Its entities carry `group: 'alter_character_sheet'` in `characters[]`; they generate in parallel
+  // with the default `character_sheet` group and land in their own base node.
+  describe('multiple character groups — entity source, node routing, storage layout', () => {
+    /** hero (default character group) + stunt-hero (alter group) sharing the ONE characters[] array. */
     function seedMixedCast(s: ReturnType<typeof createTestStore>['store']) {
       s.getState().setSketchEntities('characters', [
-        { key: 'hero', variants: [{ key: 'base', description: '', visual_design: 'brave', art_language: '' }] },
-      ]);
-      s.getState().setSketchEntities('alter_characters', [
-        { key: 'stunt-hero', variants: [{ key: 'base', description: '', visual_design: 'stand-in', art_language: '' }] },
+        baseEntity('hero'),
+        baseEntity('stunt-hero', 'alter_character_sheet'),
       ]);
     }
 
-    it('generating the ALTER sheet sends ONLY actor_role=1 entities', async () => {
+    it('generating the ALTER group sends ONLY that group’s entities', async () => {
       seedMixedCast(store);
       mockedGenerateCall.mockResolvedValueOnce(okGenerate('raw.png', ['stunt-hero']));
       mockedCropCall.mockResolvedValueOnce(okCropRow([{ cell: 1, imageUrl: 'crop-alter.png' }]));
 
       store.getState().startBaseSheetGenerate({
-        kind: 'alter_characters',
+        group: 'alter_character_sheet',
         mode: 'add',
         stylePrompt: 'test',
         referenceImages: [],
@@ -870,15 +742,17 @@ describe('SketchBaseGenerateJobSlice', () => {
 
       const genArg = mockedGenerateCall.mock.calls[0][1];
       expect(genArg.entities.map((e: { key: string }) => e.key)).toEqual(['stunt-hero']);
+      expect(genArg.targetGroup).toBe('alter_character_sheet');
+      expect(mockedGenerateCall.mock.calls[0][0]).toBe('characters'); // still route 05
     });
 
-    it('generating the CHARACTER sheet excludes the alter cast (no leak in the other direction)', async () => {
+    it('generating the default CHARACTER group excludes the alter cast (no leak)', async () => {
       seedMixedCast(store);
       mockedGenerateCall.mockResolvedValueOnce(okGenerate('raw.png', ['hero']));
       mockedCropCall.mockResolvedValueOnce(okCropRow([{ cell: 1, imageUrl: 'crop-hero.png' }]));
 
       store.getState().startBaseSheetGenerate({
-        kind: 'characters',
+        group: 'character_sheet',
         mode: 'add',
         stylePrompt: 'test',
         referenceImages: [],
@@ -890,13 +764,13 @@ describe('SketchBaseGenerateJobSlice', () => {
       expect(genArg.entities.map((e: { key: string }) => e.key)).toEqual(['hero']);
     });
 
-    it('results land in base.alter_character_sheet — the character sheet is untouched', async () => {
+    it('results land in base.alter_character_sheet — the default character node is untouched', async () => {
       seedMixedCast(store);
       mockedGenerateCall.mockResolvedValueOnce(okGenerate('raw-alter.png', ['stunt-hero']));
       mockedCropCall.mockResolvedValueOnce(okCropRow([{ cell: 1, imageUrl: 'crop-alter.png' }]));
 
       store.getState().startBaseSheetGenerate({
-        kind: 'alter_characters',
+        group: 'alter_character_sheet',
         mode: 'add',
         stylePrompt: 'test',
         referenceImages: [],
@@ -909,16 +783,16 @@ describe('SketchBaseGenerateJobSlice', () => {
       const alterStyle = store.getState().sketch.base.alter_character_sheet.styles[0];
       expect(alterStyle.illustrations[0].media_url).toBe('raw-alter.png');
       expect(alterStyle.crops[0].key).toBe('stunt-hero');
-      expect(store.getState().sketch.base.character_sheet.styles).toHaveLength(0);
+      expect(store.getState().sketch.base.character_sheet).toBeUndefined();
     });
 
-    it('storage prefix stays sketches/base/characters for alter (layout keyed on the COLLECTION)', async () => {
+    it('storage prefix stays sketches/base/characters for a character group (layout keyed on the KIND)', async () => {
       seedMixedCast(store);
       mockedGenerateCall.mockResolvedValueOnce(okGenerate('raw.png', ['stunt-hero']));
       mockedCropCall.mockResolvedValueOnce(okCropRow([{ cell: 1, imageUrl: 'crop-alter.png' }]));
 
       store.getState().startBaseSheetGenerate({
-        kind: 'alter_characters',
+        group: 'alter_character_sheet',
         mode: 'add',
         stylePrompt: 'test',
         referenceImages: [],
@@ -928,22 +802,20 @@ describe('SketchBaseGenerateJobSlice', () => {
       await tick();
       await tick();
 
-      // NOT `sketches/base/alter_characters` — the two character sheets deliberately share the
-      // folder and are told apart by the snapshot node they write.
+      // NOT `sketches/base/alter_character_sheet` — every character group shares the folder and is
+      // told apart by the snapshot node it writes.
       expect(mockedCropCall.mock.calls[0][0].pathPrefix).toBe('sketches/base/characters');
     });
 
-    it('all THREE kinds generate in parallel (three independent rtype-11 sheet nodes)', async () => {
+    it('three GROUPS generate in parallel (three independent rtype-11 sheet nodes)', async () => {
       seedMixedCast(store);
-      store.getState().setSketchEntities('props', [
-        { key: 'lantern', variants: [{ key: 'base', description: '', visual_design: 'lamp', art_language: '' }] },
-      ]);
+      store.getState().setSketchEntities('props', [baseEntity('lantern')]);
       const pending = [deferred(), deferred(), deferred()];
       pending.forEach((d) => mockedGenerateCall.mockReturnValueOnce(d.promise as never));
 
-      for (const kind of ['characters', 'props', 'alter_characters'] as const) {
+      for (const group of ['character_sheet', 'prop_sheet', 'alter_character_sheet'] as const) {
         store.getState().startBaseSheetGenerate({
-          kind,
+          group,
           mode: 'add',
           stylePrompt: 'test',
           referenceImages: [],
@@ -954,17 +826,14 @@ describe('SketchBaseGenerateJobSlice', () => {
 
       expect(mockedGenerateCall).toHaveBeenCalledTimes(3);
       const ops = store.getState().baseSheetGenerateOps;
-      expect(ops.characters).toBeDefined();
-      expect(ops.props).toBeDefined();
-      expect(ops.alter_characters).toBeDefined();
-
-      // Left in flight on purpose — the point is that three ops COEXIST, and settling them here
-      // would race the shared crop mock across the three chains.
+      expect(ops.character_sheet).toBeDefined();
+      expect(ops.prop_sheet).toBeDefined();
+      expect(ops.alter_character_sheet).toBeDefined();
     });
 
-    it('recrop of the alter sheet derives cellOrder from the alter cast only', async () => {
+    it('recrop of the alter group derives cellOrder from the alter cast only', async () => {
       seedMixedCast(store);
-      store.getState().addSketchBaseStyle('alter_characters', {
+      store.getState().addSketchBaseStyle('alter_character_sheet', {
         style_prompt: 's1',
         is_selected: false,
         image_references: [],
@@ -975,7 +844,7 @@ describe('SketchBaseGenerateJobSlice', () => {
       });
       mockedCropCall.mockResolvedValueOnce(okCropRow([{ cell: 1, imageUrl: 'recrop-alter.png' }]));
 
-      store.getState().recropBaseSheet('alter_characters', 0);
+      store.getState().recropBaseSheet('alter_character_sheet', 0);
       await tick();
       await tick();
 
@@ -985,13 +854,11 @@ describe('SketchBaseGenerateJobSlice', () => {
       expect(style.crops[0].key).toBe('stunt-hero');
     });
 
-    it('empty alter group → generate is refused (no request, warn toast) instead of an empty sheet', async () => {
-      store.getState().setSketchEntities('characters', [
-        { key: 'hero', variants: [{ key: 'base', description: '', visual_design: 'brave', art_language: '' }] },
-      ]);
+    it('empty group → generate is refused (no request, warn toast) instead of an empty sheet', async () => {
+      store.getState().setSketchEntities('characters', [baseEntity('hero')]);
 
       store.getState().startBaseSheetGenerate({
-        kind: 'alter_characters',
+        group: 'alter_character_sheet',
         mode: 'add',
         stylePrompt: 'test',
         referenceImages: [],
@@ -1001,8 +868,8 @@ describe('SketchBaseGenerateJobSlice', () => {
 
       expect(mockedGenerateCall).not.toHaveBeenCalled();
       expect(vi.mocked(toast.warning)).toHaveBeenCalled();
-      // …and no orphaned style was appended to the alter sheet.
-      expect(store.getState().sketch.base.alter_character_sheet.styles).toHaveLength(0);
+      // …and no orphaned node was materialised for the empty group.
+      expect(store.getState().sketch.base.alter_character_sheet).toBeUndefined();
     });
   });
 });

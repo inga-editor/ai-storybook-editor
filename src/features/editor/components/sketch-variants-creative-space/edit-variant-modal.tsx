@@ -39,14 +39,13 @@ import {
 } from '@/stores/snapshot-store/slices/collab-sketch-variant-save-helper';
 import { toastSketchSaveOutcome } from '@/stores/snapshot-store/slices/sketch-save-outcome-toast';
 import { useInteractionLayer } from '@/features/editor/contexts';
-import type { BaseKind } from '@/types/sketch';
-import { sketchEntitiesOfKind } from '@/types/sketch';
+import type { SheetKind } from '@/types/sketch';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('Editor', 'EditVariantModal');
 
 export interface EditVariantModalProps {
-  kind: BaseKind;
+  kind: SheetKind;
   entityKey: string;
   variantKey: string; // non-base
   onClose: () => void;
@@ -65,7 +64,9 @@ export function EditVariantModal({ kind, entityKey, variantKey, onClose }: EditV
   // Baseline seeded ONCE from the store (getState — non-reactive read; mirrors edit-base-entity-modal)
   // keyed on the variant identity → no re-seed on every keystroke, no set-state-in-effect (React 19).
   const seed = useMemo<VariantTextDraft>(() => {
-    const variant = sketchEntitiesOfKind(useSnapshotStore.getState().sketch, kind)
+    // ⚡REV 2026-08-21 — `kind` IS the snapshot collection (characters | props); index it directly.
+    const sketch = useSnapshotStore.getState().sketch;
+    const variant = (kind === 'props' ? sketch.props : sketch.characters)
       .find((e) => e.key === entityKey)
       ?.variants.find((v) => v.key === variantKey);
     return {

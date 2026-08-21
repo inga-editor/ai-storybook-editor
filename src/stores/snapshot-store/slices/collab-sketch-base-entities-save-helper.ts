@@ -21,8 +21,8 @@ import {
   type ResourceType,
   type SavePayload,
 } from '@/stores/resource-lock-store';
-import type { BaseKind } from '@/types/sketch';
 import type { SaveOutcome } from '@/stores/save-session-store/types';
+import type { SheetKind } from '@/types/sketch';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('Store', 'CollabSketchBaseEntitiesSaveHelper');
@@ -34,17 +34,15 @@ export const RESOURCE_TYPE_ENTITY_COLLECTION = 14 satisfies ResourceType;
 export type EntityCollectionName = 'characters' | 'props' | 'stages';
 
 /**
- * Base-space kind → the entity collection it PERSISTS INTO.
- * ⚠️ `alter_characters` is NOT its own collection (memory `alter-character-sketch-schema`): an alter
- * character is an `actor_role` flag inside `sketch.characters[]`, so it maps to `characters`. The
- * base space MUST key its rtype-14 session by this COLLECTION (never by kind), or the `characters`
- * and `alter_characters` kinds would open TWO sessions on the SAME `sketch.characters` array with
- * divergent baselines → last-write-wins data loss.
+ * Base-group kind → the entity collection it PERSISTS INTO. A group's `kind` is already a collection
+ * name, so this is an identity map for the two base kinds — it exists so the base space keys its
+ * rtype-14 session by COLLECTION (never by group_key): multiple groups of the same kind (e.g. several
+ * character groups) all share ONE `sketch.characters` array, and keying by group_key would open
+ * divergent-baseline sessions on the same array → last-write-wins data loss.
  */
-export const BASE_KIND_TO_COLLECTION: Record<BaseKind, EntityCollectionName> = {
+export const BASE_KIND_TO_COLLECTION: Record<SheetKind, EntityCollectionName> = {
   characters: 'characters',
   props: 'props',
-  alter_characters: 'characters',
 };
 
 /** 3 = edit: the save always REPLACES the whole array (create-on-first-save handled by the gateway's

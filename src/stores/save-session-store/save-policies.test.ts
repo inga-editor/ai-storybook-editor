@@ -124,12 +124,13 @@ describe('resolveTarget parity (step/rtype/resource_id/locale)', () => {
     );
   });
 
-  it('sketch-base-sheet → resolveSketchBaseSheetLockTarget (reverse-mapped from sheet id)', () => {
+  it('sketch-base-sheet → resolveSketchBaseSheetLockTarget (id IS the group key, ⚡REV 2026-08-21)', () => {
+    // The rtype-11 resource_id is the GROUP KEY, passed straight through (no reverse map).
     expect(SAVE_POLICIES['sketch-base-sheet'].resolveTarget('character_sheet')).toEqual(
-      resolveSketchBaseSheetLockTarget('characters'),
+      resolveSketchBaseSheetLockTarget('character_sheet'),
     );
-    expect(SAVE_POLICIES['sketch-base-sheet'].resolveTarget('prop_sheet')).toEqual(
-      resolveSketchBaseSheetLockTarget('props'),
+    expect(SAVE_POLICIES['sketch-base-sheet'].resolveTarget('goblins_2')).toEqual(
+      resolveSketchBaseSheetLockTarget('goblins_2'),
     );
   });
 

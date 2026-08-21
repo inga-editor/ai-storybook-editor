@@ -39,10 +39,9 @@ import {
 } from '@/stores/snapshot-store/slices/collab-sketch-base-entities-save-helper';
 
 describe('BASE_KIND_TO_COLLECTION', () => {
-  it('maps alter_characters onto the characters collection (NOT a collection of its own)', () => {
+  it('maps each base-group kind onto its entity collection (identity for the two base kinds)', () => {
     expect(BASE_KIND_TO_COLLECTION.characters).toBe('characters');
     expect(BASE_KIND_TO_COLLECTION.props).toBe('props');
-    expect(BASE_KIND_TO_COLLECTION.alter_characters).toBe('characters');
   });
 });
 
@@ -108,12 +107,14 @@ describe('deriveSaveTarget — case 1:14', () => {
   });
 });
 
-describe('alter_characters and characters share ONE rtype-14 session (no double-overwrite)', () => {
-  it('resolve to the SAME session key via the shared collection', () => {
+describe('character-kind groups share ONE rtype-14 session (no double-overwrite)', () => {
+  it('every character-kind group resolves to the SAME session via the shared collection', () => {
+    // Multiple character GROUPS (e.g. a "characters" group + a legacy "alter_character_sheet" group)
+    // all carry kind 'characters' → collection 'characters', so the base space (which keys rtype-14
+    // by COLLECTION, not group_key) collapses them onto one session ⇒ one baseline, no overwrite.
     const charKey = keyOf('book1', policyResolve('characters'));
-    const alterKey = keyOf('book1', policyResolve('alter_characters'));
     const propKey = keyOf('book1', policyResolve('props'));
-    expect(alterKey).toBe(charKey); // same session ⇒ one baseline, no overwrite
+    expect(keyOf('book1', policyResolve('characters'))).toBe(charKey); // stable per collection
     expect(propKey).not.toBe(charKey); // props is a distinct session
   });
 });

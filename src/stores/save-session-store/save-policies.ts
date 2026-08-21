@@ -43,7 +43,6 @@ import {
 import {
   resolveSketchBaseSheetLockTarget,
   buildSketchBaseSheetPayload,
-  SKETCH_KIND_TO_SHEET_RESOURCE_ID,
 } from '@/stores/snapshot-store/slices/collab-sketch-base-sheet-save-helper';
 import {
   resolveLineupsLockTarget,
@@ -54,7 +53,7 @@ import {
   buildEntityCollectionPayload,
   type EntityCollectionName,
 } from '@/stores/snapshot-store/slices/collab-sketch-base-entities-save-helper';
-import { sheetOf, getSketchTextboxContent, type BaseKind } from '@/types/sketch';
+import { sheetOf, getSketchTextboxContent, type SheetKind } from '@/types/sketch';
 import type { SketchLineupTab, SketchSpread, SketchSpreadImage } from '@/types/sketch';
 import { parseEntityId } from './entity-id';
 import { splitSketchImageId, splitSketchTextboxId } from './sketch-spread-item-id';
@@ -101,21 +100,8 @@ function getSketchEntityNode(id: string): unknown {
 }
 
 // --- sketch-base-sheet (step 1, rtype 11) ------------------------------------
-// id = the sheet resource_id ('character_sheet' | 'prop_sheet' | 'alter_character_sheet'); the
-// policy reverse-maps it to a BaseKind for both the lock target and the node read.
-
-const SHEET_RESOURCE_ID_TO_KIND: Record<string, BaseKind> = Object.entries(
-  SKETCH_KIND_TO_SHEET_RESOURCE_ID,
-).reduce<Record<string, BaseKind>>((acc, [kind, sheetId]) => {
-  acc[sheetId] = kind as BaseKind;
-  return acc;
-}, {});
-
-function sheetKindFromId(sheetId: string): BaseKind {
-  const kind = SHEET_RESOURCE_ID_TO_KIND[sheetId];
-  if (!kind) throw new Error(`sketch-base-sheet: unknown sheet resource_id "${sheetId}"`);
-  return kind;
-}
+// ⚡REV 2026-08-21 — id = the GROUP KEY, which IS the rtype-11 resource_id (passed straight to
+// `resolveSketchBaseSheetLockTarget`). The node itself is `sheetOf(base, id)`.
 
 // --- spread resolvers (scene rtype 6 / retouch rtype 10) ---------------------
 // No shared exported resolver exists today (the spaces build these inline via useMemo, and the
@@ -232,7 +218,7 @@ export const SAVE_POLICIES: Record<SaveDomain, SavePolicy> = {
     locking: 'none', // entity-grain (variant / base-entity modal) — lock-exempt
     resolveTarget: (id) => {
       const { kind, key } = parseEntityId(id);
-      return resolveSketchVariantLockTarget(kind as BaseKind, key);
+      return resolveSketchVariantLockTarget(kind as SheetKind, key);
     },
     ownedKeys: undefined,
     getNode: getSketchEntityNode,
@@ -252,9 +238,10 @@ export const SAVE_POLICIES: Record<SaveDomain, SavePolicy> = {
 
   'sketch-base-sheet': {
     locking: 'none', // kind-level sheet node (rtype 11) — lock-exempt
-    resolveTarget: (id) => resolveSketchBaseSheetLockTarget(sheetKindFromId(id)),
+    resolveTarget: (id) => resolveSketchBaseSheetLockTarget(id),
     ownedKeys: undefined,
-    getNode: (id) => sheetOf(useSnapshotStore.getState().sketch.base, sheetKindFromId(id)) ?? null,
+    // ⚡REV 2026-08-21 — the node IS `base[groupKey]` (id is the group key).
+    getNode: (id) => sheetOf(useSnapshotStore.getState().sketch.base, id) ?? null,
     buildPayload: (node) => buildSketchBaseSheetPayload(node),
     idleAutoSaveMs: DEFAULT_IDLE_AUTO_SAVE_MS,
   },

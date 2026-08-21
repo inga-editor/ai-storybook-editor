@@ -18,8 +18,9 @@ export type Step = 1 | 2 | 3;
  *  (`spreads[].{videos,auto_pics,audios,auto_audios,composites,quizzes}[]`) · 10 retouch_spread
  *  (per-spread RETOUCH sub-tree at step=3 — ADR-044 rev; the whole retouch owned-key set of a
  *  spread, sole writer of `shapes`) ·
- *  11 base_sheet (sketch-base per-kind sheet — step=1; the whole `sketch.base.{kind}_sheet`
- *  node, resource_id `character_sheet`|`prop_sheet`; ADR-043 sketch-base collab, Phase 01) ·
+ *  11 base_sheet (sketch-base per-group sheet — step=1; the whole `sketch.base[group_key]`
+ *  node, resource_id === the dynamic group_key (Excel-tab-derived; legacy `character_sheet` /
+ *  `prop_sheet` / `alter_character_sheet` remain valid group keys); ADR-043 sketch-base collab) ·
  *  12 lineup (`sketch.lineups[]` — the WHOLE multi-tab lineup array, collection-scope
  *  column-root save; resource_id sentinel `lineups`, step=1; ADR-043 §Mở rộng 2026-07-25) ·
  *  13 actor (casting-swap grain = actant; the whole `actors[]` row addressed by actant_id,

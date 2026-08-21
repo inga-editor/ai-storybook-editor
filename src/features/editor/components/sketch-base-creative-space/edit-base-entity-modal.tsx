@@ -47,8 +47,12 @@ import { useEditSessionStatusStore } from '@/stores/edit-session-status-store';
 import { useInteractionLayer } from '@/features/editor/contexts';
 import { titleCase } from '@/features/editor/components/sketch-variants-creative-space/sketch-variants-constants';
 import { nounForKind } from './sketch-base-constants';
-import type { BaseKind } from '@/types/sketch';
-import { sketchEntitiesOfKind } from '@/types/sketch';
+import {
+  deriveSheetKindFromKey,
+  resolveEntityGroup,
+  type SheetKind,
+  type SketchEntity,
+} from '@/types/sketch';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('Editor', 'EditBaseEntityModal');
@@ -66,21 +70,32 @@ interface EntityDraft {
 type DraftMap = Record<string, EntityDraft>;
 
 export interface EditBaseEntityModalProps {
-  kind: BaseKind;
+  group: string;
   onClose: () => void;
 }
 
-export function EditBaseEntityModal({ kind, onClose }: EditBaseEntityModalProps) {
-  const entityKeys = useSketchBaseEntityKeys(kind);
+/** Entities of one group, read from a snapshot state (getState — non-reactive baseline source). */
+function groupEntitiesOf(sketch: { base: Record<string, { kind?: SheetKind }>; characters: SketchEntity[]; props: SketchEntity[] }, group: string, kind: SheetKind): SketchEntity[] {
+  const src = kind === 'props' ? sketch.props ?? [] : sketch.characters ?? [];
+  return src.filter((e) => resolveEntityGroup(e, kind) === group);
+}
+
+export function EditBaseEntityModal({ group, onClose }: EditBaseEntityModalProps) {
+  const entityKeys = useSketchBaseEntityKeys(group);
   const { updateSketchBaseEntityText, autoSaveSnapshot } = useSnapshotActions();
   const modalContentRef = useRef<HTMLDivElement>(null);
+
+  // The group's kind: self-describing base node → else derived from the key (drives the persist
+  // collection + the modal title noun).
+  const kind: SheetKind =
+    useSnapshotStore.getState().sketch.base[group]?.kind ?? deriveSheetKindFromKey(group);
 
   // Baseline seeded ONCE from the store (getState, not a reactive read) — the diff target on Save.
   // Static (NOT reactive) so a peer's edit to an untouched entity never makes it look dirty (which
   // would clobber the peer on Save), and so discard-on-close only drops MY local edits.
   const initialDrafts = useMemo<DraftMap>(() => {
     const out: DraftMap = {};
-    for (const e of sketchEntitiesOfKind(useSnapshotStore.getState().sketch, kind)) {
+    for (const e of groupEntitiesOf(useSnapshotStore.getState().sketch, group, kind)) {
       const base = e.variants.find((v) => v.key === 'base');
       if (!base) continue;
       out[e.key] = {
@@ -90,7 +105,7 @@ export function EditBaseEntityModal({ kind, onClose }: EditBaseEntityModalProps)
       };
     }
     return out;
-  }, [kind]);
+  }, [group, kind]);
 
   const [drafts, setDrafts] = useState<DraftMap>(() => {
     const copy: DraftMap = {};
@@ -143,7 +158,7 @@ export function EditBaseEntityModal({ kind, onClose }: EditBaseEntityModalProps)
   const handleSave = useCallback(async () => {
     if (isSaving) return;
     if (!allHeightsValid) {
-      log.debug('handleSave', 'blocked — invalid height draft on a changed tab', { kind });
+      log.debug('handleSave', 'blocked — invalid height draft on a changed tab', { group });
       return;
     }
     const keys = changedKeys;
@@ -151,13 +166,13 @@ export function EditBaseEntityModal({ kind, onClose }: EditBaseEntityModalProps)
       const d = drafts[key];
       // Partial merge — `description` intentionally omitted so its stored value persists.
       // height: "" → an explicit null (clear), else the parsed integer cm.
-      updateSketchBaseEntityText(kind, key, {
+      updateSketchBaseEntityText(group, key, {
         height: heightDraftToPayload(d.height),
         visual_design: d.visual_design,
         art_language: d.art_language,
       });
     }
-    log.info('handleSave', 'commit base entity text edits', { kind, changed: keys.length });
+    log.info('handleSave', 'commit base entity text edits', { group, changed: keys.length });
     if (useResourceLockStore.getState().collabPersist) {
       // Grain B (rtype 14): the drafts are committed to the store above — now persist the WHOLE
       // collection in ONE column-root save (`alter_characters` → `characters`). Degraded collection
@@ -187,7 +202,7 @@ export function EditBaseEntityModal({ kind, onClose }: EditBaseEntityModalProps)
       void autoSaveSnapshot();
     }
     onClose();
-  }, [isSaving, allHeightsValid, changedKeys, drafts, kind, updateSketchBaseEntityText, autoSaveSnapshot, onClose]);
+  }, [isSaving, allHeightsValid, changedKeys, drafts, group, kind, updateSketchBaseEntityText, autoSaveSnapshot, onClose]);
 
   const guardClose = useCallback(() => {
     if (isSaving) return; // save in flight — let it settle

@@ -1,42 +1,18 @@
 // sketch-variants-constants.ts — static config + local UI-state shapes for SketchVariantsSpace.
-// The Variant creative space covers NON-BASE variants of BOTH kinds (character + prop) in ONE
-// space (no `kind` prop). Split out (Phase 05) so root/sidebar/content/modals each stay < 500
+// The Variant creative space covers NON-BASE variants of EVERY base group (character + prop groups)
+// in ONE space (no `kind` prop). Split out (Phase 05) so root/sidebar/content/modals each stay < 500
 // lines, and so the modal connector can import the state shapes without pulling in the whole root.
+//
+// ⚡REV 2026-08-21 — GROUP-BASED: the sidebar groups are DYNAMIC (`useSketchBaseGroups()`), so this
+// file no longer pins a hard `KIND_GROUPS` list. `SheetKind` is the only kind vocabulary
+// (`alter_characters` is gone — every character is a plain character group), and for a variant the
+// kind IS its snapshot collection (`characters` | `props`).
 //
 // ⚡ `titleCase` is ALSO consumed by the sibling sketch-base-creative-space (shared helper, single
 //    source — base-sheet-content-area / edit-base-entity-modal / sketch-base-edit-image-modal import
 //    it from here). Do NOT remove or move it.
 
-import type { BaseKind, SketchVariant, VariantRef } from '@/types/sketch';
-
-/** Per-kind config for the variant groups (Character / Prop / Alter Character). Stage has NO
- *  variant sheet. */
-export interface KindGroupConfig {
-  kind: BaseKind;
-  /** Group header title. */
-  title: string;
-  /** Singular noun for empty-state / labels. */
-  noun: string;
-}
-
-/**
- * Fixed order: Character → Prop → Alter Character (alter LAST, same order as the Base space).
- * Variant workspace covers those three only (no Stage).
- *
- * ⚠️ This list is this space's OWN — it deliberately does NOT re-export the Base space's
- * `KIND_GROUPS` (that one carries `sheetName`, an import-only concern). Adding a kind to the Base
- * space does NOT reach this sidebar; it has to be added here on purpose.
- *
- * ⚡2026-07-28 alter: NOT a new entity array — `alter_characters` reads `sketch.characters[]`
- * filtered by `actor_role === 1` (KIND_ENTITY_SOURCE), so it shares the `characters` grant and the
- * rtype-3 entity lock. The group lists a FLAT list of that cast's non-base variants, with the same
- * ✏ + ✨ affordances as the Character group.
- */
-export const KIND_GROUPS: KindGroupConfig[] = [
-  { kind: 'characters', title: 'Character', noun: 'character' },
-  { kind: 'props', title: 'Prop', noun: 'prop' },
-  { kind: 'alter_characters', title: 'Alter Character', noun: 'alter character' },
-];
+import type { SheetKind, SketchVariant, VariantRef } from '@/types/sketch';
 
 /** Zoom bounds for the content-area preview. Applied as CSS width % (NOT transform:scale —
  *  memory: zoom-via-css-width / reference generate-canvas.tsx) so overflow scroll metrics stay
@@ -72,23 +48,25 @@ export const GATE_TOOLTIP: Record<VariantGateReason, string> = {
 /** Shared EditImageModal binding target, discriminated by SCOPE (mirrors the base space's target).
  *  `raw` = the 21:9 sheet shown in the Raw tab — committing an edit AUTO re-cuts the 4 cells
  *  (overwrites crops[]); `crop` = one of the 4 candidate cells — edits that cell ONLY.
+ *  `kind` IS the snapshot collection (characters | props) — used directly for the storage path.
  *  Consumed by the modal connector (§3.4). */
 export type EditImageTarget =
-  | { kind: BaseKind; entityKey: string; variantKey: string; scope: 'raw' }
-  | { kind: BaseKind; entityKey: string; variantKey: string; scope: 'crop'; cropIndex: number };
+  | { group: string; kind: SheetKind; entityKey: string; variantKey: string; scope: 'raw' }
+  | { group: string; kind: SheetKind; entityKey: string; variantKey: string; scope: 'crop'; cropIndex: number };
 
 /** Shared ExtractImageModal binding target — CROP scope only (reframe one candidate cell → a new
  *  version of it). The raw 21:9 sheet is excluded (its cells come from the auto-cut, not a manual
  *  crop). Consumed by VariantExtractImageModal (→ crops[cropIndex].illustrations + onCreateImages). */
 export interface ExtractImageTarget {
-  kind: BaseKind;
+  kind: SheetKind;
   entityKey: string;
   variantKey: string;
   cropIndex: number;
 }
 
 /** Structural equality for two variant refs (null-safe). Used by the root (derive selection,
- *  match the running op) and the sidebar (highlight the selected row). */
+ *  match the running op) and the sidebar (highlight the selected row). kind+entityKey+variantKey
+ *  identify a variant uniquely (the group is derived from the entity, so it is not compared). */
 export function sameRef(a: VariantRef | null | undefined, b: VariantRef | null | undefined): boolean {
   return (
     !!a && !!b && a.kind === b.kind && a.entityKey === b.entityKey && a.variantKey === b.variantKey

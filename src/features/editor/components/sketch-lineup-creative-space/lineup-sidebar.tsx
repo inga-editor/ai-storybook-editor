@@ -1,8 +1,9 @@
 // lineup-sidebar.tsx — left sidebar of SketchLineupSpace (design 01). Header = tri-state select-all
 // checkbox + title "Lineup" + ＋ New tab (2026-07-25 multi-tab — the ＋ mirrors the tab strip's).
-// One collapsible group per wired kind (Character / Prop / Alter Character — `LINEUP_WIRED_KINDS`);
-// each row = ONE variant (base INCLUDED, unlike the Variants space) with a checkbox. An EMPTY group
-// still renders, with a hint instead of rows (never-hide-disabled-ui).
+// ⚡REV 2026-08-21 — ONE collapsible group per `useSketchBaseGroups()` descriptor (N dynamic
+// character/prop groups, label = group name), NOT a fixed 3-kind list. Each row = ONE variant
+// (base INCLUDED, unlike the Variants space) with a checkbox. An EMPTY group still renders, with a
+// hint instead of rows (never-hide-disabled-ui).
 //
 // Rows lacking a locked crop or a height render DISABLED + greyed + ⓘ reason tooltip — never
 // filtered out (memory: never-hide-disabled-ui): the WHY + where-to-fix must stay discoverable.
@@ -19,22 +20,19 @@ import { ChevronDown, ChevronRight, Info, Plus } from 'lucide-react';
 import { Checkbox } from '@/components/ui/checkbox';
 import { cn } from '@/utils/utils';
 import { createLogger } from '@/utils/logger';
-import type { BaseKind, LineupEntry } from '@/types/sketch';
-import {
-  LINEUP_TAB_LIMIT,
-  disabledReason,
-  rowLabel,
-  selectable,
-  type KindGroupConfig,
-} from './lineup-constants';
+import type { BaseGroup, LineupEntry, SheetKind } from '@/types/sketch';
+import { LINEUP_TAB_LIMIT, disabledReason, nounForKind, rowLabel, selectable } from './lineup-constants';
 
 const log = createLogger('Editor', 'LineupSidebar');
 
 interface LineupSidebarProps {
-  groups: KindGroupConfig[];
-  entriesByKind: Record<BaseKind, LineupEntry[]>;
+  /** ⚡REV 2026-08-21 — dynamic base groups (one per character/prop group), in display order. */
+  groups: BaseGroup[];
+  /** LineupEntry[] per group, keyed by `group_key`. */
+  entriesByGroup: Record<string, LineupEntry[]>;
   checkedRefs: ReadonlySet<string>;
-  expandedGroups: Record<BaseKind, boolean>;
+  /** Expand state keyed by `group_key`; a MISSING key defaults to expanded (design README §2.2). */
+  expandedGroups: Record<string, boolean>;
   /** Peer-lock (or otherwise write-blocked) → every WRITE affordance greyed; browse stays live. */
   disabled: boolean;
   /** Holder name for the peer-lock tooltip (null → generic). Only read when `disabled`. */
@@ -42,19 +40,19 @@ interface LineupSidebarProps {
   /** false at the 12-tab cap → ＋ greyed with a reason (never hidden). */
   canCreateTab: boolean;
   /** Kinds the viewer may EDIT (UX gate for the gateway OR-gate over-permit — signed-off
-   *  Validation S1). Owner/full grant → both kinds present. */
-  grantedKinds: ReadonlySet<BaseKind>;
+   *  Validation S1). Owner/full grant → both kinds present. Wire vocab stays 2-kind. */
+  grantedKinds: ReadonlySet<SheetKind>;
   onToggleEntry: (entry: LineupEntry, checked: boolean) => void;
   /** true = add every missing GRANTED selectable entry; false = drop selectable members
    *  (dangling kept — the root builds the exact payload). */
   onToggleAll: (checked: boolean) => void;
-  onToggleGroup: (kind: BaseKind) => void;
+  onToggleGroup: (groupKey: string) => void;
   onCreateTab: () => void;
 }
 
 export function LineupSidebar({
   groups,
-  entriesByKind,
+  entriesByGroup,
   checkedRefs,
   expandedGroups,
   disabled,
@@ -72,14 +70,14 @@ export function LineupSidebar({
   const { allChecked, someChecked, hasSelectable } = useMemo(() => {
     const selectableEntries = groups
       .filter((g) => grantedKinds.has(g.kind))
-      .flatMap((g) => entriesByKind[g.kind].filter(selectable));
+      .flatMap((g) => (entriesByGroup[g.group_key] ?? []).filter(selectable));
     const checkedCount = selectableEntries.filter((e) => checkedRefs.has(e.ref)).length;
     return {
       allChecked: selectableEntries.length > 0 && checkedCount === selectableEntries.length,
       someChecked: checkedCount > 0,
       hasSelectable: selectableEntries.length > 0,
     };
-  }, [groups, entriesByKind, checkedRefs, grantedKinds]);
+  }, [groups, entriesByGroup, checkedRefs, grantedKinds]);
 
   const handleToggleAll = () => {
     // Anything short of "all checked" → select all; only a full set clears (design 01 §2.3).
@@ -125,11 +123,11 @@ export function LineupSidebar({
 
       <div className="flex-1 overflow-y-auto p-2" role="tree" aria-label="Lineup variants">
         {groups.map((group) => (
-          <LineupKindGroup
-            key={group.kind}
+          <LineupGroup
+            key={group.group_key}
             group={group}
-            entries={entriesByKind[group.kind]}
-            expanded={expandedGroups[group.kind]}
+            entries={entriesByGroup[group.group_key] ?? []}
+            expanded={expandedGroups[group.group_key] ?? true}
             checkedRefs={checkedRefs}
             granted={grantedKinds.has(group.kind)}
             peerReason={peerReason}
@@ -142,7 +140,7 @@ export function LineupSidebar({
   );
 }
 
-function LineupKindGroup({
+function LineupGroup({
   group,
   entries,
   expanded,
@@ -152,21 +150,20 @@ function LineupKindGroup({
   onToggleEntry,
   onToggleGroup,
 }: {
-  group: KindGroupConfig;
+  group: BaseGroup;
   entries: LineupEntry[];
   expanded: boolean;
   checkedRefs: ReadonlySet<string>;
   granted: boolean;
   peerReason: string | null;
   onToggleEntry: (entry: LineupEntry, checked: boolean) => void;
-  onToggleGroup: (kind: BaseKind) => void;
+  onToggleGroup: (groupKey: string) => void;
 }) {
-  const { kind, title, noun } = group;
   // Kind not granted → the whole group greys (UX mitigation of the OR-gate over-permit); the
   // group stays expandable so the rows remain discoverable (never hidden).
   const grantReason = granted
     ? null
-    : `You do not have edit rights for ${title.toLowerCase()}s in the Sketch step`;
+    : `You do not have edit rights for ${group.name} in the Sketch step`;
 
   return (
     <div className="mb-1" role="group">
@@ -179,21 +176,23 @@ function LineupKindGroup({
           )}
           aria-expanded={expanded}
           title={grantReason ?? undefined}
-          onClick={() => onToggleGroup(kind)}
+          onClick={() => onToggleGroup(group.group_key)}
         >
           {expanded ? (
             <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
           ) : (
             <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
           )}
-          <span className="truncate">{title}</span>
+          <span className="truncate">{group.name}</span>
         </button>
       </div>
 
       {expanded && (
         <div className="mt-0.5 space-y-0.5 pl-4">
           {entries.length === 0 ? (
-            <p className="px-2 py-1.5 text-xs text-muted-foreground">No {noun}s imported yet</p>
+            <p className="px-2 py-1.5 text-xs text-muted-foreground">
+              No {nounForKind(group.kind)}s imported yet
+            </p>
           ) : (
             entries.map((entry) => (
               <LineupRow

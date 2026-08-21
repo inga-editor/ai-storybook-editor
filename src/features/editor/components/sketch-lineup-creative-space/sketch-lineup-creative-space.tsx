@@ -1,12 +1,11 @@
 // sketch-lineup-creative-space.tsx — root of the Lineup creative space (design README §2). ONE
-// space for ALL wired kinds (character + prop + alter character), covering EVERY variant incl.
-// 'base'. Sidebar picks variants; the content area lays their locked crops side-by-side on one
-// shared ruler.
+// space for ALL character/prop base groups, covering EVERY variant incl. 'base'. Sidebar picks
+// variants; the content area lays their locked crops side-by-side on one shared ruler.
 //
-// ⚡ 2026-07-28 ALTER: alter characters are deliberately selectable HERE (the one story-facing
-// exception) — comparing an alter's height against the primary cast is the point of casting. The
-// UI knows 3 kinds; the SNAPSHOT vocabulary stays 2 (`LINEUP_ENTRY_KINDS`) — an alter persists as
-// `kind:'characters'` and is re-split by `actor_role` on read. See `toTabEntry`/`lineupEntryRef`.
+// ⚡REV 2026-08-21 — DYNAMIC GROUPS: the sidebar is N groups from `useSketchBaseGroups()`, not a
+// fixed 3-kind list. Each group's `kind` (`characters` | `props`) IS the rtype-12 persist
+// vocabulary (`LINEUP_ENTRY_KINDS`), so nothing is narrowed on write — the group model only
+// changes the UI grouping, never the wire shape.
 //
 // ⚡ 2026-07-25 MULTI-TAB + PERSIST (ADR-043 §Mở rộng): selection is no longer local — each tab is
 // a PERSISTED named selection in `sketch.lineups[]` (rtype 12 collab node). ADR-044 addendum 2 —
@@ -29,24 +28,21 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { createLogger } from '@/utils/logger';
 import { useSnapshotStore } from '@/stores/snapshot-store';
-import { useSketchLineupEntries, useSketchLineups } from '@/stores/snapshot-store/selectors';
+import { effectiveCropUrl, useSketchBaseGroups, useSketchLineups } from '@/stores/snapshot-store/selectors';
 import { useCurrentBook, useCurrentBookId } from '@/stores/book-store';
 import { useAuthStore } from '@/stores/auth-store';
 import { useCollabPersistSession } from '@/features/editor/hooks/use-collab-persist-session';
 import { useContentSyncSession } from '@/features/editor/hooks/use-content-sync-session';
 import { useMyCollaboration } from '@/features/editor/components/collaborators-creative-space/hooks/use-my-collaboration';
-import type { BaseKind, LineupEntry, SketchLineupTab } from '@/types/sketch';
+import type { LineupEntry, SheetKind, SketchEntity, SketchLineupTab } from '@/types/sketch';
+import { deriveSheetKindFromKey, lineupEntryRef, resolveEntityGroup } from '@/types/sketch';
 import { LineupSidebar } from './lineup-sidebar';
 import { LineupContentArea } from './lineup-content-area';
 import { NewLineupTabModal } from './new-lineup-tab-modal';
 import { DeleteLineupTabAlertDialog } from './delete-lineup-tab-alert-dialog';
 import { useLineupLockSession } from './use-lineup-lock-session';
 import {
-  ALL_KINDS,
-  DEFAULT_EXPANDED_GROUPS,
-  KIND_GROUPS,
   LINEUP_TAB_LIMIT,
-  LINEUP_WIRED_KINDS,
   ZOOM,
   buildCleanupEntries,
   buildToggleAllEntries,
@@ -57,6 +53,11 @@ import {
   refOf,
   selectable,
 } from './lineup-constants';
+
+/** Kinds this space can persist (the rtype-12 wire vocabulary) — used for the owner/collaborator
+ *  grant set. Dynamic groups still map onto exactly these two collections. */
+const LINEUP_KINDS: readonly SheetKind[] = ['characters', 'props'];
+const EMPTY_ENTITIES: SketchEntity[] = [];
 
 const log = createLogger('Editor', 'SketchLineupSpace');
 
@@ -70,12 +71,37 @@ export function SketchLineupSpace() {
   useContentSyncSession(bookId);
   const { runWrite } = useLineupLockSession();
 
-  // Three UI kinds. `characters` is the STORY cast only (KIND_ENTITY_SOURCE filters `actor_role`),
-  // so an alter is listed EXACTLY ONCE — in the Alter group, never also under Character.
-  const charEntries = useSketchLineupEntries('characters');
-  const propEntries = useSketchLineupEntries('props');
-  const alterEntries = useSketchLineupEntries('alter_characters');
+  // ⚡REV 2026-08-21 — DYNAMIC GROUPS: one per `useSketchBaseGroups()` descriptor. Entities are
+  // projected once, keyed by group_key, from the raw char/prop slices (mirrors
+  // `useSketchLineupEntries` for a SINGLE group — but bulk, since a per-group hook loop would
+  // break the rules of hooks when a peer import changes the group count). `resolveEntityGroup`
+  // places each entity in EXACTLY ONE group, so no variant renders twice.
+  const groups = useSketchBaseGroups();
+  const characters = useSnapshotStore((s) => s.sketch.characters ?? EMPTY_ENTITIES);
+  const props = useSnapshotStore((s) => s.sketch.props ?? EMPTY_ENTITIES);
   const tabs = useSketchLineups();
+
+  const entriesByGroup = useMemo<Record<string, LineupEntry[]>>(() => {
+    const out: Record<string, LineupEntry[]> = {};
+    for (const g of groups) {
+      const kind = deriveSheetKindFromKey(g.group_key);
+      const src = kind === 'props' ? props : characters;
+      out[g.group_key] = src
+        .filter((e) => resolveEntityGroup(e, kind) === g.group_key)
+        .flatMap((e) =>
+          e.variants.map((v) => ({
+            kind,
+            entityKey: e.key,
+            variantKey: v.key,
+            // Prefix REQUIRED (2026-07-25): entity keys are only unique WITHIN a collection.
+            ref: lineupEntryRef(kind, e.key, v.key),
+            imageUrl: effectiveCropUrl(v),
+            heightCm: v.height ?? null,
+          })),
+        );
+    }
+    return out;
+  }, [groups, characters, props]);
 
   // Granted kinds — the FE mitigation of the gateway's characters∨props OR-gate over-permit
   // (signed-off Validation S1): an ungranted kind renders greyed, the gateway stays the authority.
@@ -83,15 +109,13 @@ export function SketchLineupSpace() {
   const currentUserId = useAuthStore((s) => s.user?.id) ?? null;
   const isOwner = book ? book.owner_id === currentUserId : true;
   const { access_rights } = useMyCollaboration(bookId ?? null, currentUserId, isOwner);
-  const grantedKinds = useMemo<ReadonlySet<BaseKind>>(() => {
-    if (isOwner) return ALL_KINDS;
+  const grantedKinds = useMemo<ReadonlySet<SheetKind>>(() => {
+    if (isOwner) return new Set<SheetKind>(LINEUP_KINDS);
     const sketchStep = access_rights?.steps?.sketch;
-    if (!sketchStep?.enabled) return new Set<BaseKind>(); // null rights → disable all defensively
-    // Grant key = the REAL collection (`grantKeyOf`), so `alter_characters` rides the `characters`
-    // grant — alter introduces no new grant (Phase 01). Derived from LINEUP_WIRED_KINDS so a newly
-    // wired kind can never be left ungranted for the owner (that reads as a false "no edit rights").
-    const granted = new Set<BaseKind>();
-    for (const kind of LINEUP_WIRED_KINDS) {
+    if (!sketchStep?.enabled) return new Set<SheetKind>(); // null rights → disable all defensively
+    // Grant key = the REAL collection (`grantKeyOf` — identity for `SheetKind`).
+    const granted = new Set<SheetKind>();
+    for (const kind of LINEUP_KINDS) {
       if (sketchStep.resources[grantKeyOf(kind)]) granted.add(kind);
     }
     return granted;
@@ -102,8 +126,9 @@ export function SketchLineupSpace() {
   const [virtualTab] = useState<SketchLineupTab>(mintVirtualTab);
   const [activeTabId, setActiveTabId] = useState<string>(virtualTab.id);
   const [zoom, setZoom] = useState<number>(ZOOM.default);
-  const [expandedGroups, setExpandedGroups] =
-    useState<Record<BaseKind, boolean>>(DEFAULT_EXPANDED_GROUPS);
+  // Keyed by group_key; a MISSING key defaults to expanded (design README §2.2) — groups are
+  // dynamic, so we never pre-seed every key.
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
   const [tabDialog, setTabDialog] = useState<TabDialogState | null>(null);
   const [deletingTabId, setDeletingTabId] = useState<string | null>(null);
 
@@ -129,16 +154,12 @@ export function SketchLineupSpace() {
     lastSeenActiveRef.current = present ? activeTabId : null;
   }, [effectiveTabs, activeTabId]);
 
-  const entriesByKind = useMemo<Record<BaseKind, LineupEntry[]>>(
-    () => ({ characters: charEntries, props: propEntries, alter_characters: alterEntries }),
-    [charEntries, propEntries, alterEntries],
-  );
-  // Sidebar order (KIND_GROUPS order, snapshot order within a group) IS the canvas order
-  // (Validation S1). DERIVED from KIND_GROUPS — a hand-written concat is how a newly wired kind
-  // ends up rendering rows whose checks are silently dropped on write.
+  // Sidebar order (group order, snapshot order within a group) IS the canvas order (Validation
+  // S1). DERIVED from the group list + per-group projection — every rendered row reaches the
+  // canvas + the rtype-12 persist.
   const allEntries = useMemo(
-    () => KIND_GROUPS.flatMap((g) => entriesByKind[g.kind]),
-    [entriesByKind],
+    () => groups.flatMap((g) => entriesByGroup[g.group_key] ?? []),
+    [groups, entriesByGroup],
   );
 
   // Checked = DERIVED from the active tab's persisted membership (peer edits move checkboxes).
@@ -202,12 +223,11 @@ export function SketchLineupSpace() {
 
   const handleToggleEntry = useCallback(
     (entry: LineupEntry, checked: boolean) => {
-      // `uiKind` = which GROUP the row came from; `ref` already carries the PERSIST kind as its
-      // prefix (lineupEntryRef), so one line shows both sides of the mapping — a disagreement
-      // between them is the silent-drop failure mode for alter.
+      // `entry.kind` (the group's kind) IS the persist kind — `ref` carries it as its prefix
+      // (lineupEntryRef), so the checked row and its persisted entry always resolve to one string.
       log.info('handleToggleEntry', 'entry toggled', {
         ref: entry.ref,
-        uiKind: entry.kind,
+        kind: entry.kind,
         checked,
       });
       writeActiveTabEntries((base) => buildToggleEntries(base, entry, checked));
@@ -296,10 +316,11 @@ export function SketchLineupSpace() {
   );
 
   // ── Browse handlers — NO lock (browse ≠ lock) ───────────────────────────────────────────────
-  const handleToggleGroup = useCallback((kind: BaseKind) => {
+  const handleToggleGroup = useCallback((groupKey: string) => {
     setExpandedGroups((prev) => {
-      const next = { ...prev, [kind]: !prev[kind] };
-      log.debug('handleToggleGroup', 'group toggled', { kind, expanded: next[kind] });
+      // Missing key defaults to expanded → first toggle collapses.
+      const next = { ...prev, [groupKey]: !(prev[groupKey] ?? true) };
+      log.debug('handleToggleGroup', 'group toggled', { groupKey, expanded: next[groupKey] });
       return next;
     });
   }, []);
@@ -319,8 +340,8 @@ export function SketchLineupSpace() {
   return (
     <main className="flex h-full" role="main" aria-label="Sketch lineup creative space">
       <LineupSidebar
-        groups={KIND_GROUPS}
-        entriesByKind={entriesByKind}
+        groups={groups}
+        entriesByGroup={entriesByGroup}
         checkedRefs={checkedRefs}
         expandedGroups={expandedGroups}
         disabled={writeDisabled}

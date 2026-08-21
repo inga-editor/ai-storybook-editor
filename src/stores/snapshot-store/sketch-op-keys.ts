@@ -8,8 +8,10 @@
 import type { VariantRef } from '@/types/sketch';
 import type { VariantOpKey, VariantSheetGenerateOp } from './types';
 
-/** Key for `variantSheetGenerateOps` — one op per (kind, entity, variant). */
-export function variantOpKey(ref: VariantRef): VariantOpKey {
+/** Key for `variantSheetGenerateOps` — one op per (kind, entity, variant). ⚡REV 2026-08-21 — the key
+ *  does NOT include the group (a variant is identified by kind+entity+variant), so callers that only
+ *  hold those three (e.g. the per-row status selector) need not resolve the entity's group. */
+export function variantOpKey(ref: Pick<VariantRef, 'kind' | 'entityKey' | 'variantKey'>): VariantOpKey {
   return `${ref.kind}|${ref.entityKey}|${ref.variantKey}`;
 }
 

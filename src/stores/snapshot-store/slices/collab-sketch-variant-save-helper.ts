@@ -24,21 +24,18 @@
 // eval-time cycle (save-session-store → save-policies → this module).
 
 import { type LockTarget, type ResourceType } from '@/stores/resource-lock-store';
-import type { BaseKind } from '@/types/sketch';
+import type { SheetKind } from '@/types/sketch';
 import { makeEntityId } from '@/stores/save-session-store/entity-id';
 import type { SaveOutcome } from '@/stores/save-session-store/types';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('Store', 'CollabSketchVariantSaveHelper');
 
-/** Sketch step-1 entity kind → gateway `resource_type` (3 character · 4 prop). Stage (5) has NO
- *  variant space, so it is deliberately absent — only the two variant kinds are addressable here. */
-export const SKETCH_KIND_TO_RESOURCE_TYPE: Record<BaseKind, ResourceType> = {
+/** ⚡REV 2026-08-21 — sketch step-1 entity kind → gateway `resource_type` (3 character · 4 prop).
+ *  Every character (any group) is rtype 3; stages (5) have no variant space, so they are absent. */
+export const SKETCH_KIND_TO_RESOURCE_TYPE: Record<SheetKind, ResourceType> = {
   characters: 3,
   props: 4,
-  // ⚡ 2026-07-28: an alter character IS a `characters[]` entity — same rtype 3, same grant, and
-  // `resource_id` (the entity key) is unique across the whole collection, so the two never collide.
-  alter_characters: 3,
 };
 
 /** crud audit enum used for every variant-space save: 3 = edit (the entity node always already
@@ -49,7 +46,7 @@ const ACTION_TYPE_EDIT = 3 as const;
  * Build the STEP-1 LockTarget for a sketch entity node (whole-entity grain).
  * `locale` is null (entity nodes are not locale-scoped, unlike a textbox).
  */
-export function resolveSketchVariantLockTarget(kind: BaseKind, entityKey: string): LockTarget {
+export function resolveSketchVariantLockTarget(kind: SheetKind, entityKey: string): LockTarget {
   return {
     step: 1,
     resource_type: SKETCH_KIND_TO_RESOURCE_TYPE[kind],
@@ -94,7 +91,7 @@ export interface FlushSketchEntityOptions {
  * @returns the engine `SaveOutcome` — the CALLER maps it to a toast (this helper no longer self-toasts).
  */
 export async function flushSketchEntityUnderLock(
-  kind: BaseKind,
+  kind: SheetKind,
   entityKey: string,
   _node?: unknown,
   _opts?: FlushSketchEntityOptions,

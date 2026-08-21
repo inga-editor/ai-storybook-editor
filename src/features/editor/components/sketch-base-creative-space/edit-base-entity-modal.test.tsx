@@ -11,14 +11,22 @@ import { render, screen, fireEvent, cleanup, within } from '@testing-library/rea
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const ENTITY_KEYS = ['alice', 'bob'];
+// ⚡REV 2026-08-21 — the modal is group-based: entities carry `group`, and it reads the group's kind
+// off `sketch.base[group]`. `character_1` is a plain character group (derives to `characters`).
+const GROUP = 'character_1';
 
 const makeEntity = (key: string, height: number | null) => ({
   key,
+  group: GROUP,
   variants: [{ key: 'base', height, visual_design: `${key} vd`, art_language: `${key} al` }],
 });
 
 const snapshotState = {
-  sketch: { characters: ENTITY_KEYS.map((k) => makeEntity(k, 110)), props: [] },
+  sketch: {
+    base: { [GROUP]: { kind: 'characters', name: 'Character 1', styles: [] } },
+    characters: ENTITY_KEYS.map((k) => makeEntity(k, 110)),
+    props: [],
+  },
 };
 
 vi.mock('@/stores/snapshot-store', () => ({
@@ -63,7 +71,7 @@ describe('EditBaseEntityModal — invalid-height tab marker', () => {
   beforeEach(cleanup);
 
   it('flags the offending BACKGROUND tab so a greyed Save has a discoverable cause', () => {
-    render(<EditBaseEntityModal kind="characters" onClose={() => {}} />);
+    render(<EditBaseEntityModal group={GROUP} onClose={() => {}} />);
 
     fireEvent.change(heightInput(), { target: { value: 'abc' } });
     // Alice's own hint is visible while she is active…
@@ -79,7 +87,7 @@ describe('EditBaseEntityModal — invalid-height tab marker', () => {
   });
 
   it('marks no tab while every dirty height is valid', () => {
-    render(<EditBaseEntityModal kind="characters" onClose={() => {}} />);
+    render(<EditBaseEntityModal group={GROUP} onClose={() => {}} />);
 
     fireEvent.change(heightInput(), { target: { value: '95' } });
     fireEvent.click(tab('bob'));
@@ -89,7 +97,7 @@ describe('EditBaseEntityModal — invalid-height tab marker', () => {
   });
 
   it('clears the marker once the offending tab is corrected', () => {
-    render(<EditBaseEntityModal kind="characters" onClose={() => {}} />);
+    render(<EditBaseEntityModal group={GROUP} onClose={() => {}} />);
 
     fireEvent.change(heightInput(), { target: { value: '5001' } }); // out of range
     fireEvent.click(tab('bob'));
@@ -103,7 +111,7 @@ describe('EditBaseEntityModal — invalid-height tab marker', () => {
   });
 
   it('leaves an UNTOUCHED tab unmarked (the gate spans dirty tabs only)', () => {
-    render(<EditBaseEntityModal kind="characters" onClose={() => {}} />);
+    render(<EditBaseEntityModal group={GROUP} onClose={() => {}} />);
 
     // Nothing typed anywhere → nothing dirty → no marker, and Save stays disabled on dirtiness.
     expect(markerOn('alice')).not.toBeInTheDocument();

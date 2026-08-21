@@ -71,26 +71,27 @@ describe('normalizeSketch (shape mapping)', () => {
     expect(normalizeSketch(valid)).toEqual(valid);
   });
 
-  it('defaults a missing base workspace to three empty sheets (backward-compat)', () => {
+  // ⚡REV 2026-08-21 — an absent base workspace is an EMPTY group map (dynamic keys, no fixed sheets).
+  it('defaults a missing base workspace to an empty group map (backward-compat)', () => {
     const result = normalizeSketch({ id: 'no-base', characters: [], props: [], stages: [], spreads: [] });
-    expect(result.base).toEqual({ character_sheet: { styles: [] }, prop_sheet: { styles: [] }, alter_character_sheet: { styles: [] } });
+    expect(result.base).toEqual({});
   });
 
-  // ⚡ 2026-07-28: a pre-alter snapshot has 2 sheets — the 3rd defaults in (ABSENT, no anomaly),
-  // and the 2 existing sheets pass through untouched.
-  it('defaults ONLY the missing alter sheet on a pre-alter base workspace (no anomaly)', () => {
+  // ⚡REV 2026-08-21 — keeps EXACTLY the present group keys; an absent group is never injected.
+  it('keeps exactly the present group keys — never injects an absent group (no anomaly)', () => {
     const { sketch, anomalies } = collect({
       base: { character_sheet: { styles: [style('watercolor')] }, prop_sheet: { styles: [] } },
     });
+    expect(Object.keys(sketch.base).sort()).toEqual(['character_sheet', 'prop_sheet']);
     expect(sketch.base.character_sheet.styles).toHaveLength(1);
-    expect(sketch.base.alter_character_sheet).toEqual({ styles: [] });
+    expect(sketch.base.alter_character_sheet).toBeUndefined();
     expect(anomalies).toEqual([]);
   });
 
-  it('defaults missing nested arrays to [] (defensive)', () => {
+  it('defaults missing nested arrays to [] and base to an empty map (defensive)', () => {
     expect(normalizeSketch({ id: 'only-id' })).toEqual({
       id: 'only-id',
-      base: { character_sheet: { styles: [] }, prop_sheet: { styles: [] }, alter_character_sheet: { styles: [] } },
+      base: {},
       characters: [],
       props: [],
       stages: [],
@@ -252,13 +253,9 @@ describe('normalizeSketch data-safety (never silently blank populated data)', ()
     expect(resets(stylesGarbage.anomalies)).toHaveLength(1);
     expect(resets(stylesGarbage.anomalies)[0].resource).toBe('base.character_sheet');
 
-    // base itself unreadable → attributable to BOTH sheets (nothing narrower exists).
+    // base itself unreadable → one coarse `base` reset (no group is derivable from a non-object).
     const baseGarbage = collect({ base: 'nope' });
-    expect(resets(baseGarbage.anomalies).map((a) => a.resource).sort()).toEqual([
-      'base.alter_character_sheet',
-      'base.character_sheet',
-      'base.prop_sheet',
-    ]);
+    expect(resets(baseGarbage.anomalies).map((a) => a.resource)).toEqual(['base']);
   });
 
   it('does NOT blank populated entity collections that are malformed — placeholder + reset instead', () => {
@@ -503,7 +500,7 @@ describe('normalizeSketch fault isolation (T2 — getter throw)', () => {
     expect(rs[0].resource).toBe('characters');
   });
 
-  it('a throwing `base` getter degrades both sheets only', () => {
+  it('a throwing `base` getter degrades base coarsely (one `base` reset), siblings intact', () => {
     const blob: Record<string, unknown> = { id: 'sk1', ...structuredClone(healthyRest) };
     delete blob.base;
     Object.defineProperty(blob, 'base', {
@@ -514,13 +511,9 @@ describe('normalizeSketch fault isolation (T2 — getter throw)', () => {
     });
     blob.characters = [{ key: 'kid', variants: [] }];
     const { sketch, anomalies } = collect(blob);
-    expect(sketch.base).toEqual({ character_sheet: { styles: [] }, prop_sheet: { styles: [] }, alter_character_sheet: { styles: [] } });
+    expect(sketch.base).toEqual({});
     expect(sketch.characters).toEqual([{ key: 'kid', variants: [] }]);
-    expect(resets(anomalies).map((a) => a.resource).sort()).toEqual([
-      'base.alter_character_sheet',
-      'base.character_sheet',
-      'base.prop_sheet',
-    ]);
+    expect(resets(anomalies).map((a) => a.resource)).toEqual(['base']);
   });
 
   it('a throwing element inside an entity array degrades that collection, siblings intact', () => {
@@ -749,14 +742,10 @@ describe('coerceSketchNode (merge boundary — base/spreads coverage)', () => {
     expect(resets(anomalies)[0].resource).toBe('base.character_sheet');
   });
 
-  it('a whole malformed base node degrades every sheet', () => {
+  it('a whole malformed base node degrades base coarsely (one `base` reset)', () => {
     const { coerced, anomalies } = collectNode(['base'], 'garbage');
-    expect(coerced).toEqual({ character_sheet: { styles: [] }, prop_sheet: { styles: [] }, alter_character_sheet: { styles: [] } });
-    expect(resets(anomalies).map((a) => a.resource).sort()).toEqual([
-      'base.alter_character_sheet',
-      'base.character_sheet',
-      'base.prop_sheet',
-    ]);
+    expect(coerced).toEqual({});
+    expect(resets(anomalies).map((a) => a.resource)).toEqual(['base']);
   });
 
   it('the alter sheet node coerces at path grain like the other two (rtype 11)', () => {

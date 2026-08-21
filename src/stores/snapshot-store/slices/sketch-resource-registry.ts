@@ -85,9 +85,8 @@ export type SketchDegradedIntake = SketchDegradedEntry & { raw?: unknown };
  */
 export type SketchResourceKey =
   | 'sketch' // root — coarse: blocks every step-1 write
-  | 'base.character_sheet'
-  | 'base.prop_sheet'
-  | 'base.alter_character_sheet' // ⚡ 2026-07-28 — 3rd base sheet (alter characters)
+  | 'base' // ⚡REV 2026-08-21 — coarse: blocks every rtype-11 base write (unattributable group)
+  | `base.${string}` // ⚡REV 2026-08-21 — node-grain: one group sheet (dynamic group key)
   | `characters/${string}` // node-grain: entity key
   | `props/${string}`
   | `stages/${string}`
@@ -97,18 +96,13 @@ export type SketchResourceKey =
   | `spreads/${string}` // node-grain: spread id
   | 'spreads'; // collection-grain — coarse
 
-/** The base-sheet subset of the resource keys (one per `BaseKind` sheet node). */
-export type SketchSheetResourceKey =
-  | 'base.character_sheet'
-  | 'base.prop_sheet'
-  | 'base.alter_character_sheet';
+/** ⚡REV 2026-08-21 — the node-grain base-sheet subset (`base.<groupKey>`, dynamic). */
+export type SketchSheetResourceKey = `base.${string}`;
 
+/** A resource key that addresses ONE group sheet node (prefix check — every `base.*` except the
+ *  coarse `'base'` is a group). */
 export function isSheetResourceKey(key: SketchResourceKey): key is SketchSheetResourceKey {
-  return (
-    key === 'base.character_sheet' ||
-    key === 'base.prop_sheet' ||
-    key === 'base.alter_character_sheet'
-  );
+  return key !== 'base' && key.startsWith('base.');
 }
 
 /** step=1 rtypes per entity collection (mirrors ResourceType: 3 character · 4 prop · 5 stage). */
@@ -118,13 +112,8 @@ const ENTITY_RTYPE: Record<'characters' | 'props' | 'stages', number> = {
   stages: 5,
 };
 
-/** rtype 11 base_sheet resource_ids (ADR-046). Mirrors `BASE_SHEET_ID` (types/sketch.ts) — the
- *  resource key is just the sheet node prefixed with `base.`. */
-const SHEET_RESOURCE_ID: Record<SketchSheetResourceKey, string> = {
-  'base.character_sheet': 'character_sheet',
-  'base.prop_sheet': 'prop_sheet',
-  'base.alter_character_sheet': 'alter_character_sheet',
-};
+/** ⚡REV 2026-08-21 — the rtype-11 `resource_id` for a `base.<groupKey>` key IS the group key. */
+const sheetResourceId = (key: SketchSheetResourceKey): string => key.slice('base.'.length);
 
 /**
  * Build the LockTarget predicate for one degraded resource key.
@@ -144,8 +133,11 @@ const SHEET_RESOURCE_ID: Record<SketchSheetResourceKey, string> = {
 export function resourceKeyToLockPredicate(key: SketchResourceKey): (t: LockTarget) => boolean {
   if (key === 'sketch') return (t) => t.step === 1;
 
+  // Coarse base: every rtype-11 write (base blob unattributable to a specific group).
+  if (key === 'base') return (t) => t.step === 1 && t.resource_type === 11;
+
   if (isSheetResourceKey(key)) {
-    const rid = SHEET_RESOURCE_ID[key];
+    const rid = sheetResourceId(key);
     return (t) => t.step === 1 && t.resource_type === 11 && t.resource_id === rid;
   }
 
@@ -200,22 +192,11 @@ const KIND_LABEL: Record<'characters' | 'props' | 'stages', { one: string; many:
 
 /** Vietnamese display label for a resource (consent-modal row title). */
 export function describeResource(key: SketchResourceKey): string {
-  switch (key) {
-    case 'sketch':
-      return 'Toàn bộ dữ liệu sketch';
-    case 'base.character_sheet':
-      return 'Bộ style nhân vật (character sheet)';
-    case 'base.prop_sheet':
-      return 'Bộ style đạo cụ (prop sheet)';
-    case 'base.alter_character_sheet':
-      return 'Bộ style nhân vật thay thế (alter character sheet)';
-    case 'characters':
-    case 'props':
-    case 'stages':
-      return KIND_LABEL[key].many;
-    case 'spreads':
-      return 'Danh sách trang vẽ (spreads)';
-  }
+  if (key === 'sketch') return 'Toàn bộ dữ liệu sketch';
+  if (key === 'base') return 'Toàn bộ bộ style (base)';
+  if (isSheetResourceKey(key)) return `Bộ style nhóm "${sheetResourceId(key)}"`;
+  if (key === 'characters' || key === 'props' || key === 'stages') return KIND_LABEL[key].many;
+  if (key === 'spreads') return 'Danh sách trang vẽ (spreads)';
   const slash = key.indexOf('/');
   const kind = key.slice(0, slash);
   const id = key.slice(slash + 1);
@@ -226,24 +207,15 @@ export function describeResource(key: SketchResourceKey): string {
 /** Vietnamese "what a reset destroys" line for a resource (consent-modal row body — the user
  *  must see exactly WHAT is lost before agreeing, per the direct instruction). */
 export function describeResetImpact(key: SketchResourceKey): string {
-  switch (key) {
-    case 'sketch':
-      return 'Reset sẽ xoá TOÀN BỘ dữ liệu sketch của sách này (styles, nhân vật, đạo cụ, bối cảnh, trang vẽ).';
-    case 'base.character_sheet':
-      return 'Reset sẽ xoá toàn bộ style đã tạo của bộ style nhân vật.';
-    case 'base.prop_sheet':
-      return 'Reset sẽ xoá toàn bộ style đã tạo của bộ style đạo cụ.';
-    case 'base.alter_character_sheet':
-      return 'Reset sẽ xoá toàn bộ style đã tạo của bộ style nhân vật thay thế.';
-    case 'characters':
-      return 'Reset sẽ xoá toàn bộ danh sách nhân vật của sketch.';
-    case 'props':
-      return 'Reset sẽ xoá toàn bộ danh sách đạo cụ của sketch.';
-    case 'stages':
-      return 'Reset sẽ xoá toàn bộ danh sách bối cảnh của sketch.';
-    case 'spreads':
-      return 'Reset sẽ xoá toàn bộ danh sách trang vẽ của sketch.';
-  }
+  if (key === 'sketch')
+    return 'Reset sẽ xoá TOÀN BỘ dữ liệu sketch của sách này (styles, nhân vật, đạo cụ, bối cảnh, trang vẽ).';
+  if (key === 'base') return 'Reset sẽ xoá toàn bộ style đã tạo của mọi nhóm base.';
+  if (isSheetResourceKey(key))
+    return `Reset sẽ xoá toàn bộ style đã tạo của nhóm "${sheetResourceId(key)}".`;
+  if (key === 'characters') return 'Reset sẽ xoá toàn bộ danh sách nhân vật của sketch.';
+  if (key === 'props') return 'Reset sẽ xoá toàn bộ danh sách đạo cụ của sketch.';
+  if (key === 'stages') return 'Reset sẽ xoá toàn bộ danh sách bối cảnh của sketch.';
+  if (key === 'spreads') return 'Reset sẽ xoá toàn bộ danh sách trang vẽ của sketch.';
   const slash = key.indexOf('/');
   const kind = key.slice(0, slash);
   const id = key.slice(slash + 1);

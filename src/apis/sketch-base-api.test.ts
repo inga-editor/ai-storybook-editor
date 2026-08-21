@@ -1,11 +1,10 @@
-// sketch-base-api.test.ts — pins the `targetSheet` wiring (⚡2026-07-28, alter character).
+// sketch-base-api.test.ts — pins the group-based `targetGroup` wiring (⚡REV 2026-08-21).
 //
-// WHY this is worth its own test file: api 05 is STATELESS. It writes whatever entity rows it is
-// given into whatever `targetSheet` it is told, with NO server-side cross-check — so a mismatch
-// between "which entities" and "which sheet" is silent data corruption (the story cast overwriting
-// the alter sheet, or vice versa). The client removes the possibility by DERIVING `targetSheet`
-// from the same `kind` that selects the entity set; these tests pin that derivation, plus the
-// route-06 carve-out (props is `extra="forbid"` → sending the field 400s).
+// WHY this is worth its own test file: api 05/06 are STATELESS. Each writes whatever entity rows it
+// is given into whatever `targetGroup` it is told, with NO server-side cross-check — so a mismatch
+// between "which entities" and "which sheet node" is silent data corruption. The client selects the
+// route by the group's KIND and ALWAYS ships `targetGroup` (the group key); these tests pin that,
+// the client-side format guard, and the echo-mismatch alarm.
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { callGenerateBaseSheet } from './sketch-base-api';
@@ -26,16 +25,17 @@ const PARAMS = {
   artStyleId: 'style-1',
   stylePrompt: 'watercolor',
   referenceImages: [{ media_url: 'https://cdn/ref.png' }],
+  targetGroup: 'character_sheet',
 };
 
-const okResponse = (targetSheet?: string) => ({
+const okResponse = (targetGroup?: string) => ({
   success: true,
   data: {
     imageUrl: 'raw.png',
     storagePath: 'p/raw.png',
     cellOrder: ['hero'],
     grid: { cols: 1, rows: 1, cellWidth: 256, cellHeight: 256 },
-    ...(targetSheet ? { targetSheet } : {}),
+    ...(targetGroup ? { targetGroup } : {}),
   },
 });
 
@@ -50,40 +50,42 @@ beforeEach(() => {
   Object.values(mockedLog).forEach((fn) => fn.mockReset());
 });
 
-describe('callGenerateBaseSheet — endpoint + targetSheet dispatch', () => {
-  it('characters → route 05 with targetSheet "character_sheet"', async () => {
+describe('callGenerateBaseSheet — route dispatch + targetGroup', () => {
+  it('characters kind → route 05, always ships targetGroup', async () => {
     await callGenerateBaseSheet('characters', PARAMS);
     const [path, body] = lastCall();
     expect(path).toBe('/api/sketch/generate-base-character-sheet');
-    expect(body.targetSheet).toBe('character_sheet');
+    expect(body.targetGroup).toBe('character_sheet');
   });
 
-  it('alter_characters → the SAME route 05, but targetSheet "alter_character_sheet"', async () => {
+  it('an arbitrary character group key → still route 05, group echoed in the body', async () => {
     mockedCallImageApi.mockResolvedValue(okResponse('alter_character_sheet'));
-    await callGenerateBaseSheet('alter_characters', PARAMS);
+    await callGenerateBaseSheet('characters', { ...PARAMS, targetGroup: 'alter_character_sheet' });
     const [path, body] = lastCall();
-    // One endpoint, two sheets — the discriminator is the body field, NOT a separate route.
+    // The group key is a BODY field, NOT a separate route — one route per kind, N groups per kind.
     expect(path).toBe('/api/sketch/generate-base-character-sheet');
-    expect(body.targetSheet).toBe('alter_character_sheet');
+    expect(body.targetGroup).toBe('alter_character_sheet');
   });
 
-  it('props → route 06 and NO targetSheet key at all (route 06 is extra="forbid" → 400)', async () => {
-    mockedCallImageApi.mockResolvedValue(okResponse());
-    await callGenerateBaseSheet('props', PARAMS);
+  it('props kind → route 06, ships targetGroup', async () => {
+    mockedCallImageApi.mockResolvedValue(okResponse('prop_sheet'));
+    await callGenerateBaseSheet('props', { ...PARAMS, targetGroup: 'prop_sheet' });
     const [path, body] = lastCall();
     expect(path).toBe('/api/sketch/generate-base-prop-sheet');
-    expect('targetSheet' in body).toBe(false); // absent, not undefined
+    expect(body.targetGroup).toBe('prop_sheet');
   });
 
-  it('body is otherwise unchanged for props (no accidental extra fields)', async () => {
-    mockedCallImageApi.mockResolvedValue(okResponse());
-    await callGenerateBaseSheet('props', PARAMS);
+  it('the base body carries exactly the required fields (+targetGroup, no stray keys)', async () => {
+    mockedCallImageApi.mockResolvedValue(okResponse('character_sheet'));
+    await callGenerateBaseSheet('characters', PARAMS);
     const [, body] = lastCall();
-    expect(Object.keys(body).sort()).toEqual(['artStyleId', 'entities', 'referenceImages', 'stylePrompt']);
+    expect(Object.keys(body).sort()).toEqual(
+      ['artStyleId', 'entities', 'referenceImages', 'stylePrompt', 'targetGroup'].sort(),
+    );
   });
 
   it('optional fields still attach only when present (modelParams · snapshotId · saveResource)', async () => {
-    await callGenerateBaseSheet('alter_characters', {
+    await callGenerateBaseSheet('characters', {
       ...PARAMS,
       snapshotId: 'snap-1',
       modelParams: { model: 'm', params: { temperature: 0.5 } },
@@ -94,19 +96,19 @@ describe('callGenerateBaseSheet — endpoint + targetSheet dispatch', () => {
     expect('saveResource' in body).toBe(false);
   });
 
-  it('returns the result verbatim, including the targetSheet echo', async () => {
+  it('returns the result verbatim, including the targetGroup echo', async () => {
     mockedCallImageApi.mockResolvedValue(okResponse('alter_character_sheet'));
-    const res = await callGenerateBaseSheet('alter_characters', PARAMS);
-    expect(res).toMatchObject({ success: true, data: { targetSheet: 'alter_character_sheet' } });
+    const res = await callGenerateBaseSheet('characters', { ...PARAMS, targetGroup: 'alter_character_sheet' });
+    expect(res).toMatchObject({ success: true, data: { targetGroup: 'alter_character_sheet' } });
   });
 
   it('an echo that disagrees with the request is logged as an error, not swallowed', async () => {
     // Stateless endpoint → a wrong echo means the sheet landed in the wrong node server-side.
     mockedCallImageApi.mockResolvedValue(okResponse('character_sheet'));
-    const res = await callGenerateBaseSheet('alter_characters', PARAMS);
+    const res = await callGenerateBaseSheet('characters', { ...PARAMS, targetGroup: 'alter_character_sheet' });
 
-    expect(mockedLog.error).toHaveBeenCalledWith('callGenerateBaseSheet', 'targetSheet echo mismatch', {
-      kind: 'alter_characters',
+    expect(mockedLog.error).toHaveBeenCalledWith('callGenerateBaseSheet', 'targetGroup echo mismatch', {
+      group: 'alter_character_sheet',
       requested: 'alter_character_sheet',
       echoed: 'character_sheet',
     });
@@ -115,14 +117,25 @@ describe('callGenerateBaseSheet — endpoint + targetSheet dispatch', () => {
   });
 
   it('a MATCHING echo logs no error (the guard does not cry wolf)', async () => {
-    mockedCallImageApi.mockResolvedValue(okResponse('alter_character_sheet'));
-    await callGenerateBaseSheet('alter_characters', PARAMS);
+    mockedCallImageApi.mockResolvedValue(okResponse('character_sheet'));
+    await callGenerateBaseSheet('characters', PARAMS);
     expect(mockedLog.error).not.toHaveBeenCalled();
   });
 
-  it('props gets no echo back and that is NOT reported as a mismatch', async () => {
+  it('no echo back is NOT reported as a mismatch', async () => {
     mockedCallImageApi.mockResolvedValue(okResponse());
-    await callGenerateBaseSheet('props', PARAMS);
+    await callGenerateBaseSheet('characters', PARAMS);
     expect(mockedLog.error).not.toHaveBeenCalled();
+  });
+
+  it('a malformed targetGroup short-circuits to a synthetic failure — request never sent', async () => {
+    const res = await callGenerateBaseSheet('characters', { ...PARAMS, targetGroup: 'Bad Group!' });
+    expect(mockedCallImageApi).not.toHaveBeenCalled();
+    expect(res).toMatchObject({ success: false, errorCode: 'INVALID_TARGET_GROUP' });
+    expect(mockedLog.error).toHaveBeenCalledWith(
+      'callGenerateBaseSheet',
+      'invalid targetGroup format — request not sent',
+      { kind: 'characters', targetGroup: 'Bad Group!' },
+    );
   });
 });

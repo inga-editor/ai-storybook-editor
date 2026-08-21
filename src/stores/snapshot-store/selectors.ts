@@ -15,8 +15,8 @@ import type {
   SketchStage,
   SketchStageStyle,
   SketchStageVariant,
-  BaseKind,
-  BaseEntityCollection,
+  SheetKind,
+  BaseGroup,
   BaseEntityText,
   VariantRef,
   LineupEntry,
@@ -24,11 +24,9 @@ import type {
 } from '@/types/sketch';
 import {
   sheetOf,
-  sketchEntitiesOfKind,
-  filterEntitiesOfKind,
   lineupEntryRef,
-  BASE_SHEET_ID,
-  KIND_ENTITY_SOURCE,
+  resolveEntityGroup,
+  deriveSheetKindFromKey,
 } from '@/types/sketch';
 import type { ManuscriptDummy, DummySpread } from '@/types/dummy';
 import type { IllustrationData, Section, Branch, BranchSetting } from '@/types/illustration-types';
@@ -71,6 +69,7 @@ const EMPTY_PROPS: Prop[] = [];
 const EMPTY_CHARACTERS: Character[] = [];
 const EMPTY_STAGES: Stage[] = [];
 const EMPTY_SKETCH_ENTITIES: SketchEntity[] = [];
+const EMPTY_BASE_STYLES: SketchBaseStyle[] = [];
 const EMPTY_LINEUP_TABS: SketchLineupTab[] = [];
 const EMPTY_SKETCH_STAGES: SketchStage[] = [];
 const EMPTY_STAGE_STYLES: SketchStageStyle[] = [];
@@ -120,11 +119,12 @@ export const useDocByType = (type: DocType) =>
 export const useAnySketchDegraded = (): boolean =>
   useSnapshotStore((s) => s.sketchDegraded.length > 0);
 
-/** Is this base sheet (or the whole sketch root) degraded? Drives the base-space banner. */
-export const useSketchSheetDegraded = (kind: BaseKind): boolean =>
+/** Is this base GROUP (or the coarse base / sketch root) degraded? Drives the base-space banner. */
+export const useSketchSheetDegraded = (group: string): boolean =>
   useSnapshotStore((s) =>
     s.sketchDegraded.some(
-      (d) => d.resource === 'sketch' || d.resource === `base.${BASE_SHEET_ID[kind]}`,
+      (d) =>
+        d.resource === 'sketch' || d.resource === 'base' || d.resource === `base.${group}`,
     ),
   );
 
@@ -141,30 +141,27 @@ export const useSketchEntityDegraded = (kind: SketchEntityKind, entityKey: strin
 // Sketch selector (whole-object ref; replaced only on load/setSketch/clearSketch)
 export const useSketch = (): Sketch => useSnapshotStore((s) => s.sketch);
 
-// Base workspace selectors (char + prop sheets). useShallow footgun: only wrap STABLE RAW
-// refs (`.styles`) or shallow string[] maps — never freshly-projected objects/arrays.
+// Base workspace selectors — ⚡REV 2026-08-21 keyed by GROUP KEY (`base[group]`). useShallow
+// footgun: only wrap STABLE RAW refs (`.styles`) or shallow string[] maps — never fresh arrays.
 export const useSketchBase = (): SketchBase => useSnapshotStore((s) => s.sketch.base);
-export const useSketchBaseStyles = (kind: BaseKind): SketchBaseStyle[] =>
-  useSnapshotStore(useShallow((s) => sheetOf(s.sketch.base, kind).styles)); // raw ref, no .map()
-export const useSketchBaseSelectedStyleIndex = (kind: BaseKind): number =>
-  useSnapshotStore((s) => sheetOf(s.sketch.base, kind).styles.findIndex((st) => st.is_selected));
-export const useSketchBaseEntityKeys = (kind: BaseKind): string[] =>
+export const useSketchBaseStyles = (group: string): SketchBaseStyle[] =>
+  useSnapshotStore(useShallow((s) => sheetOf(s.sketch.base, group)?.styles ?? EMPTY_BASE_STYLES)); // raw ref, no .map()
+export const useSketchBaseSelectedStyleIndex = (group: string): number =>
+  useSnapshotStore((s) => (sheetOf(s.sketch.base, group)?.styles ?? EMPTY_BASE_STYLES).findIndex((st) => st.is_selected));
+export const useSketchBaseEntityKeys = (group: string): string[] =>
   useSnapshotStore(
-    // Flat string[] under useShallow = the proven pattern; the extra role filter (via
-    // KIND_ENTITY_SOURCE) does not change that — the result is still a shallow-comparable string[].
+    // Flat string[] under useShallow = the proven pattern (still a shallow-comparable string[]).
     useShallow((s) =>
-      sketchEntitiesOfKind(s.sketch, kind)
+      groupEntitiesOf(s.sketch, group)
         .filter((e) => e.variants.some((v) => v.key === 'base'))
         .map((e) => e.key),
     ),
   );
 // Object-of-primitives → useShallow is safe (shallow-eq on strings, never on nested arrays).
-export const useSketchBaseEntityText = (kind: BaseKind, key: string): BaseEntityText | undefined =>
+export const useSketchBaseEntityText = (group: string, key: string): BaseEntityText | undefined =>
   useSnapshotStore(
     useShallow((s) => {
-      // Entity keys are unique across the WHOLE collection, but the role guard keeps the kinds
-      // honest: asking `characters` for an alter key must miss, not silently return the alter.
-      const base = sketchEntitiesOfKind(s.sketch, kind)
+      const base = groupEntitiesOf(s.sketch, group)
         .find((e) => e.key === key)
         ?.variants.find((v) => v.key === 'base');
       if (!base) return undefined;
@@ -178,66 +175,84 @@ export const useSketchBaseEntityText = (kind: BaseKind, key: string): BaseEntity
     }),
   );
 
-// ── Sketch entity selectors — keyed by BaseKind (characters | props | alter_characters) ───────
-// ⚡ 2026-07-18: stages left the shared entity shape — see the stage selectors below.
-// ⚡ 2026-07-28 (alter characters): `alter_characters` has NO array of its own — every read here
-// resolves through KIND_ENTITY_SOURCE (`sketchEntitiesOfKind`). Indexing `sketch[kind]` again
-// would hand back `undefined` for alter: an empty group with no type or runtime error.
-//
-// Ref-stability: the role split builds a FRESH array, so it NEVER goes through useShallow with an
-// inline arrow (that loops). Subscribe the STABLE raw collection ref with a plain selector
-// (Object.is), then project in useMemo — the same discipline as useSketchVariantRefs below.
+// ── Group descriptors + group entities (⚡REV 2026-08-21 — the base/variant/lineup seam) ────────
 
-/** Entities of one base kind. THE valid seam for kind-driven reads (sidebars, generate payloads). */
-export const useSketchKindEntities = (kind: BaseKind): SketchEntity[] => {
-  const collection = useSnapshotStore(
-    (s) => s.sketch[KIND_ENTITY_SOURCE[kind].collection] ?? EMPTY_SKETCH_ENTITIES, // stable raw ref
-  );
-  return useMemo(() => filterEntitiesOfKind(collection, kind), [collection, kind]);
+/** Pure: the entities of one group (its kind's array filtered by `resolveEntityGroup`). */
+function groupEntitiesOf(sketch: Sketch, group: string): SketchEntity[] {
+  const kind = deriveSheetKindFromKey(group);
+  const src = kind === 'props' ? sketch.props ?? EMPTY_SKETCH_ENTITIES : sketch.characters ?? EMPTY_SKETCH_ENTITIES;
+  return src.filter((e) => resolveEntityGroup(e, kind) === group);
+}
+
+/** Pure: all base groups = union of `base` keys ∪ distinct entity groups. Character groups sort
+ *  before prop groups; within a kind, by each node's explicit `order` (Excel tab position seeded by
+ *  `setSketchBaseEntities`). Legacy / entity-only groups lack `order` and sort last. */
+function buildBaseGroups(
+  base: SketchBase,
+  characters: SketchEntity[],
+  props: SketchEntity[],
+): BaseGroup[] {
+  const map = new Map<string, BaseGroup>();
+  for (const gk of Object.keys(base)) {
+    const node = base[gk];
+    map.set(gk, {
+      group_key: gk,
+      kind: node.kind ?? deriveSheetKindFromKey(gk),
+      name: node.name ?? gk,
+      order: node.order,
+    });
+  }
+  for (const e of characters) {
+    const gk = resolveEntityGroup(e, 'characters');
+    if (!map.has(gk)) map.set(gk, { group_key: gk, kind: 'characters', name: gk });
+  }
+  for (const e of props) {
+    const gk = resolveEntityGroup(e, 'props');
+    if (!map.has(gk)) map.set(gk, { group_key: gk, kind: 'props', name: gk });
+  }
+  // Characters before props, then by explicit `order` (Excel tab position — survives the jsonb
+  // persist round-trip, unlike object key insertion order). Legacy / entity-only groups have no
+  // `order` → sort last; the stable sort keeps their relative map order as a tiebreak.
+  return [...map.values()].sort((a, b) => {
+    if (a.kind !== b.kind) return a.kind === 'characters' ? -1 : 1;
+    return (a.order ?? Number.MAX_SAFE_INTEGER) - (b.order ?? Number.MAX_SAFE_INTEGER);
+  });
+}
+
+/** All base group descriptors. useMemo on the STABLE raw refs (never a fresh array to useShallow). */
+export const useSketchBaseGroups = (): BaseGroup[] => {
+  const base = useSnapshotStore((s) => s.sketch.base);
+  const characters = useSnapshotStore((s) => s.sketch.characters ?? EMPTY_SKETCH_ENTITIES);
+  const props = useSnapshotStore((s) => s.sketch.props ?? EMPTY_SKETCH_ENTITIES);
+  return useMemo(() => buildBaseGroups(base, characters, props), [base, characters, props]);
 };
 
-/** STORY cast only (`actor_role` absent|0) — what goes into the book. Use this everywhere a
- *  character can reach the manuscript / spreads / lineup of the real story. */
-export const useStoryCharacters = (): SketchEntity[] => useSketchKindEntities('characters');
+/** Entities of one group (base / variant / lineup space). useMemo on the stable raw refs — the
+ *  filter builds a FRESH array, so NEVER a useShallow inline arrow (memory: nested-array footgun). */
+export const useSketchGroupEntities = (group: string): SketchEntity[] => {
+  const characters = useSnapshotStore((s) => s.sketch.characters ?? EMPTY_SKETCH_ENTITIES);
+  const props = useSnapshotStore((s) => s.sketch.props ?? EMPTY_SKETCH_ENTITIES);
+  return useMemo(() => {
+    const kind = deriveSheetKindFromKey(group);
+    const src = kind === 'props' ? props : characters;
+    return src.filter((e) => resolveEntityGroup(e, kind) === group);
+  }, [characters, props, group]);
+};
 
-/** ALTER cast only (`actor_role === 1`) — casting-time replacements, never in the story path. */
-export const useAlterCharacters = (): SketchEntity[] => useSketchKindEntities('alter_characters');
+// ── Sketch entity selectors — keyed by kind (char/prop). ⚡REV 2026-08-21: every character is
+// equal (no alter split); `sketch[kind]` is indexed directly. Stages have their own selectors.
 
-// Pure counterparts (imperative callers: job slices, collab save helpers, `getState()` reads).
-// ⚠️ NEVER pass these to `useSnapshotStore(...)`: the role split builds a FRESH array per call, so
-// a subscription on them re-renders forever. Inside React use the hooks above (memoized).
-export const selectSketchKindEntities = (
-  state: Pick<SnapshotStore, 'sketch'>,
-  kind: BaseKind,
-): SketchEntity[] => sketchEntitiesOfKind(state.sketch, kind);
-export const selectStoryCharacters = (state: Pick<SnapshotStore, 'sketch'>): SketchEntity[] =>
-  selectSketchKindEntities(state, 'characters');
-export const selectAlterCharacters = (state: Pick<SnapshotStore, 'sketch'>): SketchEntity[] =>
-  selectSketchKindEntities(state, 'alter_characters');
+/** Entities of one kind — the raw array (Object.is-stable, no split). */
+export const useSketchKindEntities = (kind: SheetKind): SketchEntity[] =>
+  useSnapshotStore((s) => s.sketch[kind] ?? EMPTY_SKETCH_ENTITIES);
 
-/**
- * @deprecated RAW collection — returns BOTH story characters and alter characters mixed together
- * (`characters[]` holds both since 2026-07-28). FORBIDDEN in any story-facing call-site: an alter
- * leaking into the manuscript/spread path produces NO type error, NO runtime error and NO server
- * error — the book just ships the wrong cast.
- *
- * Use instead: {@link useStoryCharacters} (story path) · {@link useAlterCharacters} (casting) ·
- * {@link useSketchKindEntities} (kind-driven UI). Keep this one ONLY when you genuinely need the
- * unsplit array (e.g. key-uniqueness checks across the whole collection).
- */
-export const useSketchCollectionEntitiesIncludingAlters = (
-  collection: BaseEntityCollection,
-): SketchEntity[] => useSnapshotStore((s) => s.sketch[collection] ?? EMPTY_SKETCH_ENTITIES);
-
-// useSketchEntityKeys mirrors useCharacterKeys: single .map() under useShallow is the
-// proven flat-string[] pattern (NOT the object-of-arrays anti-pattern that loops).
 export const useSketchEntityByKey = (
-  kind: BaseKind,
-  key: string
+  kind: SketchEntityKind,
+  key: string,
 ): SketchEntity | undefined =>
-  useSnapshotStore((s) => sketchEntitiesOfKind(s.sketch, kind).find((e) => e.key === key));
-export const useSketchEntityKeys = (kind: BaseKind): string[] =>
-  useSnapshotStore(useShallow((s) => sketchEntitiesOfKind(s.sketch, kind).map((e) => e.key)));
+  useSnapshotStore((s) => (kind === 'props' ? s.sketch.props : s.sketch.characters).find((e) => e.key === key));
+export const useSketchEntityKeys = (kind: SketchEntityKind): string[] =>
+  useSnapshotStore(useShallow((s) => (kind === 'props' ? s.sketch.props : s.sketch.characters).map((e) => e.key)));
 
 // ── Stage selectors (2026-07-18 model — per-stage base.styles[] + 2-cell variant sheets) ──────
 // Ref-stability discipline: whole-object store refs / find() results are Object.is-stable — no
@@ -270,31 +285,29 @@ export const useSketchStageVariantByKey = (
 // Targeted variant read (whole-object store ref → Object.is-stable; no useShallow). Used by the
 // variant creative space content area + gate. Returns undefined until the variant exists.
 export const useSketchVariantByKey = (
-  kind: BaseKind,
+  kind: SketchEntityKind,
   entityKey: string,
   variantKey: string,
 ): SketchVariant | undefined =>
   useSnapshotStore((s) =>
-    sketchEntitiesOfKind(s.sketch, kind)
+    (kind === 'props' ? s.sketch.props : s.sketch.characters)
       .find((e) => e.key === entityKey)
       ?.variants.find((v) => v.key === variantKey),
   );
 
-// Non-base variant refs across a kind (char/prop). useShallow FOOTGUN AVOIDED
-// (memory: zustand useShallow nested arrays): subscribe to the STABLE raw entities ref via a
-// plain selector (Object.is), then project to VariantRef[] with useMemo keyed on that ref — never
-// return a freshly-.map()-ed object array from the store selector (that loops under useShallow).
-export const useSketchVariantRefs = (kind: BaseKind): VariantRef[] => {
-  const entities = useSketchKindEntities(kind); // KIND_ENTITY_SOURCE-routed, memo-stable
-  return useMemo(
-    () =>
-      entities.flatMap((e) =>
-        e.variants
-          .filter((v) => v.key !== 'base')
-          .map((v) => ({ kind, entityKey: e.key, variantKey: v.key })),
-      ),
-    [entities, kind],
-  );
+// Non-base variant refs of ONE GROUP (char/prop). useShallow FOOTGUN AVOIDED (memory: zustand
+// useShallow nested arrays): subscribe the STABLE raw entities ref, project to VariantRef[] with
+// useMemo — never return a freshly-.map()-ed object array from the store selector.
+export const useSketchVariantRefs = (group: string): VariantRef[] => {
+  const entities = useSketchGroupEntities(group);
+  return useMemo(() => {
+    const kind = deriveSheetKindFromKey(group);
+    return entities.flatMap((e) =>
+      e.variants
+        .filter((v) => v.key !== 'base')
+        .map((v) => ({ group, kind, entityKey: e.key, variantKey: v.key })),
+    );
+  }, [entities, group]);
 };
 
 /**
@@ -321,29 +334,26 @@ export const effectiveCropUrl = (variant: SketchVariant): string | null => {
  * FRESH object array, which never shallow-compares equal → useShallow would loop forever. Subscribe
  * the STABLE raw entities ref via a plain selector (Object.is), then project in useMemo keyed on it.
  *
- * ⚡2026-07-28 alter: `kind` here is the UI kind (3 values — it decides which sidebar GROUP the row
- * belongs to), while `ref` is minted in the 2-value PERSIST vocabulary (`lineupEntryRef`). Calling
- * this with `'characters'` yields the STORY cast only (KIND_ENTITY_SOURCE filters `actor_role`), so
- * an alter is listed exactly once — in its own group.
+ * ⚡REV 2026-08-21 — sourced by GROUP (`useSketchGroupEntities`); `kind` (the group's kind) drives
+ * both the sidebar grouping and the persist-vocabulary `ref`.
  */
-export const useSketchLineupEntries = (kind: BaseKind): LineupEntry[] => {
-  const entities = useSketchKindEntities(kind); // KIND_ENTITY_SOURCE-routed, memo-stable
-  return useMemo(
-    () =>
-      entities.flatMap((e) =>
-        e.variants.map((v) => ({
-          kind,
-          entityKey: e.key,
-          variantKey: v.key,
-          // Prefix REQUIRED (2026-07-25): entity keys are only unique WITHIN a collection —
-          // character `armor/base` must not collide with prop `armor/base` in checkedRefs.
-          ref: lineupEntryRef(kind, e.key, v.key),
-          imageUrl: effectiveCropUrl(v),
-          heightCm: v.height ?? null,
-        })),
-      ),
-    [entities, kind],
-  );
+export const useSketchLineupEntries = (group: string): LineupEntry[] => {
+  const entities = useSketchGroupEntities(group);
+  return useMemo(() => {
+    const kind = deriveSheetKindFromKey(group);
+    return entities.flatMap((e) =>
+      e.variants.map((v) => ({
+        kind,
+        entityKey: e.key,
+        variantKey: v.key,
+        // Prefix REQUIRED (2026-07-25): entity keys are only unique WITHIN a collection —
+        // character `armor/base` must not collide with prop `armor/base` in checkedRefs.
+        ref: lineupEntryRef(kind, e.key, v.key),
+        imageUrl: effectiveCropUrl(v),
+        heightCm: v.height ?? null,
+      })),
+    );
+  }, [entities, group]);
 };
 
 /**
@@ -398,26 +408,26 @@ export const useSketchSpreadLastErrors = (): SketchSpreadFailedEntry[] =>
 export const useSketchSpreadErrorModalOpen = (): boolean =>
   useSnapshotStore((s) => s.sketchSpreadErrorModalOpen);
 
-// Sketch BASE-sheet generate-op selectors (ephemeral, per-KIND map: characters ∥ props). Same
+// Sketch BASE-sheet generate-op selectors (ephemeral, per-GROUP map — groups run in parallel). Same
 // ref-stability discipline: stable ref / boolean → no useShallow; fresh object of PRIMITIVES →
 // useShallow safe. The map itself is a stable store ref → no useShallow either.
-export const useBaseSheetGenerateOps = (): Partial<Record<BaseKind, BaseSheetGenerateOp>> =>
+export const useBaseSheetGenerateOps = (): Record<string, BaseSheetGenerateOp | undefined> =>
   useSnapshotStore((s) => s.baseSheetGenerateOps);
 
-/** Is THIS kind generating? The gate for the per-kind Generate button/modal — a busy `characters`
- *  must NOT block `props`. */
-export const useIsBaseKindGenerating = (kind: BaseKind): boolean =>
-  useSnapshotStore((s) => s.baseSheetGenerateOps[kind] != null);
+/** ⚡REV 2026-08-21 — is THIS group generating? The gate for the per-group Generate button/modal —
+ *  a busy group must NOT block another group. */
+export const useIsBaseGroupGenerating = (group: string): boolean =>
+  useSnapshotStore((s) => s.baseSheetGenerateOps[group] != null);
 
-/** Is ANY base kind generating? Cross-space guard input (see `useIsAnySketchGenerating`). */
+/** Is ANY base group generating? Cross-space guard input (see `useIsAnySketchGenerating`). */
 export const useIsAnyBaseSheetGenerating = (): boolean =>
   useSnapshotStore((s) => Object.keys(s.baseSheetGenerateOps).length > 0);
 
 // Per-style status — covers BOTH phases (generate + crop): a style is "generating" until crops land.
-export const useBaseSheetGenerateStatus = (kind: BaseKind, styleIndex: number) =>
+export const useBaseSheetGenerateStatus = (group: string, styleIndex: number) =>
   useSnapshotStore(
     useShallow((s) => {
-      const op = s.baseSheetGenerateOps[kind];
+      const op = s.baseSheetGenerateOps[group];
       const match = !!op && op.styleIndex === styleIndex;
       return {
         isGenerating: match,
@@ -448,7 +458,7 @@ export const useIsVariantGenerateCapReached = (): boolean =>
 
 // Per-ref status keyed {kind, entityKey, variantKey}. Busy = matching op with no error yet.
 export const useVariantSheetGenerateStatus = (
-  kind: BaseKind,
+  kind: SheetKind,
   entityKey: string,
   variantKey: string,
 ): { isBusy: boolean; phase?: VariantGeneratePhase; error?: string } =>
@@ -490,9 +500,9 @@ export function stageTargetsEqual(a: StageSelection, b: StageSelection): boolean
 // by the stage modal, the stage import and the spread content-area, so those spaces stay mutually
 // exclusive. Boolean → no useShallow.
 // NOTE: variant ops are deliberately NOT in this guard (pre-existing semantics — the variant space
-// self-guards per variant). The BASE space must not use this one either: it would block `props`
-// while `characters` generates and kill the per-kind parallelism — it uses
-// `useIsBaseKindGenerating` + `useIsSpreadOrStageGenerating` instead.
+// self-guards per variant). The BASE space must not use this one either: it would block one group
+// while another group generates and kill the per-group parallelism — it uses
+// `useIsBaseGroupGenerating` + `useIsSpreadOrStageGenerating` instead.
 export const useIsAnySketchGenerating = (): boolean =>
   useSnapshotStore(
     (s) =>

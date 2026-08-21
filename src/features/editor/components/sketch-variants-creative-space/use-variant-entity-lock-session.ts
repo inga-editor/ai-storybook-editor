@@ -28,14 +28,14 @@ import { toastSketchSaveOutcome } from '@/stores/snapshot-store/slices/sketch-sa
 import { useRegisterEditCommit } from '@/stores/edit-session-status-store';
 import { useSaveSession } from '@/features/editor/hooks/use-save-session';
 import { deriveSaveTarget } from '@/stores/save-session-store';
-import type { BaseKind } from '@/types/sketch';
+import type { SheetKind } from '@/types/sketch';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('Editor', 'useVariantEntityLockSession');
 
 /** The entity whose session is held — the SELECTED entity (null = nothing selected). */
 export interface ActiveLockEntity {
-  kind: BaseKind;
+  kind: SheetKind;
   entityKey: string;
 }
 

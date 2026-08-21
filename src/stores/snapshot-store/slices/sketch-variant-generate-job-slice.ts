@@ -45,7 +45,6 @@ import type {
 // single source, see sketch-op-keys.ts.
 import { variantOpKey, hasOpForEntity, countActiveVariantOps } from '../sketch-op-keys';
 import type { VariantRef, SketchVariant } from '@/types/sketch';
-import { KIND_ENTITY_SOURCE, sketchEntitiesOfKind } from '@/types/sketch';
 import type { Illustration } from '@/types/prop-types';
 import {
   callGenerateVariantSheet,
@@ -134,9 +133,11 @@ export const createSketchVariantGenerateJobSlice: StateCreator<
     return get().variantSheetGenerateOps[variantOpKey(ref)] == null;
   }
 
-  /** Resolve the live variant node (or undefined) for reading its current raw_sheet versions. */
+  /** Resolve the live variant node (or undefined) for reading its current raw_sheet versions.
+   *  ⚡REV 2026-08-21 — `ref.kind` IS the collection name (characters | props); no actor_role split. */
   function variantOf(ref: VariantRef): SketchVariant | undefined {
-    return sketchEntitiesOfKind(get().sketch, ref.kind)
+    const source = ref.kind === 'props' ? get().sketch.props : get().sketch.characters;
+    return (source ?? [])
       .find((e) => e.key === ref.entityKey)
       ?.variants.find((v) => v.key === ref.variantKey);
   }
@@ -185,12 +186,9 @@ export const createSketchVariantGenerateJobSlice: StateCreator<
 
   // ── auto-cut (phase 2) — throws on failure so the caller's catch records the error. Reads NO DB. ─
   async function runCut(ref: VariantRef, rawImageUrl: string): Promise<void> {
-    // Storage layout is keyed by the REAL COLLECTION ('characters' | 'props' — the endpoint's
-    // documented `pathPrefix` shape), NOT the UI kind: an alter's assets live under
-    // `sketches/variants/characters/…` next to the rest of that array, mirroring the Base space's
-    // `sketches/base/characters` decision (Phase 06).
-    const collection = KIND_ENTITY_SOURCE[ref.kind].collection;
-    const pathPrefix = `sketches/variants/${collection}/${ref.entityKey}/${ref.variantKey}`;
+    // Storage layout is keyed by the COLLECTION ('characters' | 'props'). ⚡REV 2026-08-21 —
+    // `ref.kind` IS the collection name now (no alter split), so it is used directly.
+    const pathPrefix = `sketches/variants/${ref.kind}/${ref.entityKey}/${ref.variantKey}`;
     const result = await callCropSheetRow({
       imageUrl: rawImageUrl,
       cellCount: VARIANT_CELL_COUNT,
@@ -269,10 +267,9 @@ export const createSketchVariantGenerateJobSlice: StateCreator<
         // Opt-in auto-persist (BE-first double-write): prepend the raw sheet version into
         // variants[variantKey].raw_sheet.illustrations[] — the SAME node
         // setSketchVariantRawSheetIllustrations writes below. snapshotId is non-null here (guarded above).
-        // ⚡ Path segment = the REAL COLLECTION, never the UI kind: `alter_characters` is not a
-        // snapshot key, so it would anchor at a node that does not exist (silent no-op / 404).
+        // ⚡REV 2026-08-21 — `ref.kind` IS the snapshot collection key (characters | props).
         saveResource: buildImageVersionSaveResource(
-          `col:sketch/key:${KIND_ENTITY_SOURCE[ref.kind].collection}/find:key=${ref.entityKey}/key:variants/find:key=${ref.variantKey}/key:raw_sheet`,
+          `col:sketch/key:${ref.kind}/find:key=${ref.entityKey}/key:variants/find:key=${ref.variantKey}/key:raw_sheet`,
           snapshotId,
           'create',
         ),
@@ -395,7 +392,7 @@ export const createSketchVariantGenerateJobSlice: StateCreator<
         };
       });
 
-      void runGenerate({ kind: ref.kind, entityKey: ref.entityKey, variantKey: ref.variantKey });
+      void runGenerate(ref);
     },
 
     recropVariantSheet: (ref: VariantRef) => {
@@ -445,10 +442,12 @@ export const createSketchVariantGenerateJobSlice: StateCreator<
         };
       });
 
-      void runRecrop({ kind: ref.kind, entityKey: ref.entityKey, variantKey: ref.variantKey }, rawUrl);
+      void runRecrop(ref, rawUrl);
     },
 
-    dismissVariantSheetGenerateError: (ref: VariantRef) =>
+    dismissVariantSheetGenerateError: (
+      ref: Pick<VariantRef, 'kind' | 'entityKey' | 'variantKey'>,
+    ) =>
       set((state) => {
         const key = variantOpKey(ref);
         const op = state.variantSheetGenerateOps[key];

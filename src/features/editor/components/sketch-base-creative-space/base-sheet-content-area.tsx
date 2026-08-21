@@ -75,7 +75,7 @@ export function BaseSheetContentArea({
     <section
       className="flex flex-1 flex-col overflow-hidden"
       role="region"
-      aria-label={`${selectedStyle.kind} base ${activeTab}${editable ? ' (editing)' : ''}`}
+      aria-label={`${selectedStyle.group} base ${activeTab}${editable ? ' (editing)' : ''}`}
     >
       {/* Toolbar: Raw/Crop tabs (left) + zoom (right) */}
       <div className="flex h-11 shrink-0 items-center justify-between gap-2 border-b px-3">

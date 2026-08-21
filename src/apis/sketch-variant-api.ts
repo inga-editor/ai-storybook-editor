@@ -18,20 +18,19 @@
 // aspectRatio+cellCount, references is an audit object, crop geometry uses w/h — see note in report).
 
 import { callImageApi, type ImageApiFailure } from './image-api-client';
-import type { BaseKind } from '@/types/sketch';
+import type { SheetKind } from '@/types/sketch';
 import { createLogger } from '@/utils/logger';
 import type { SaveResourceDirective, SaveResourceOutcomeFields } from '@/types/save-resource';
 import { warnIfSaveResourceFailed } from '@/utils/save-resource-path';
 
 const log = createLogger('API', 'SketchVariantApi');
 
-/** Per-kind variant-sheet generate route (08 = character, 09 = prop). Path preserved verbatim.
- *  ⚡ 2026-07-28: alter characters reuse the CHARACTER route (08) — a variant sheet is anchored on
- *  the entity's own locked base image, so no sheet discriminator is needed here. */
-const VARIANT_SHEET_ENDPOINT: Record<BaseKind, string> = {
+/** ⚡REV 2026-08-21 — per-KIND variant-sheet generate route (08 = character, 09 = prop). Every
+ *  character group routes to 08 regardless of its group key; a variant sheet is anchored on the
+ *  entity's own locked base image, so no group/sheet discriminator is needed here. */
+export const VARIANT_SHEET_ENDPOINT: Record<SheetKind, string> = {
   characters: '/api/sketch/generate-character-variant-sheet',
   props: '/api/sketch/generate-prop-variant-sheet',
-  alter_characters: '/api/sketch/generate-character-variant-sheet',
 };
 
 /** Crop (10) is kind-agnostic — single route; the sheet + cellCount + pathPrefix travel in the body. */
@@ -144,7 +143,7 @@ export interface CropSheetRowResult {
  * GenerateVariantSheetResult | ImageApiFailure (errorCode preserved).
  */
 export async function callGenerateVariantSheet(
-  kind: BaseKind,
+  kind: SheetKind,
   { snapshotId, entityKey, variantKey, modelParams, saveResource }: GenerateVariantSheetParams,
 ): Promise<GenerateVariantSheetResult | ImageApiFailure> {
   const path = VARIANT_SHEET_ENDPOINT[kind];

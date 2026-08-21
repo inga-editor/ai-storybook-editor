@@ -3,9 +3,8 @@
 // entity's variants[base].raw_sheet (dual-write, live-follow); the sheet held-session release-save
 // only covers grain A (rtype 11), so the changed entity collection (rtype 14) must persist explicitly
 // here or the clone silently never saves in collab. ⚡ ADR-044 addendum 2: the whole entity collection
-// is saved in ONE column-root call (`saveEntityCollection` → engine `ensureSaved`: held → save; else
-// one-shot lock-exempt; solo → whole-snapshot flush). Peer-degraded collection → `blocked` → the
-// CALLER toasts (the seam no longer self-toasts).
+// is saved in ONE column-root call (`saveEntityCollection` → engine `ensureSaved`). ⚡REV 2026-08-21:
+// addressed by GROUP KEY — the group's kind (self-describing node, else derived) picks the collection.
 
 import { useSnapshotStore } from '@/stores/snapshot-store';
 import {
@@ -14,39 +13,57 @@ import {
   resolveEntityCollectionLockTarget,
 } from '@/stores/snapshot-store/slices/collab-sketch-base-entities-save-helper';
 import { toastSketchSaveOutcome } from '@/stores/snapshot-store/slices/sketch-save-outcome-toast';
-import { sheetOf, sketchEntitiesOfKind, type BaseKind } from '@/types/sketch';
+import {
+  sheetOf,
+  deriveSheetKindFromKey,
+  resolveEntityGroup,
+  type SheetKind,
+  type SketchEntity,
+} from '@/types/sketch';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('Editor', 'PersistBaseEntityClone');
 
+/** A group's kind: self-describing base node → else derived from the key. */
+function groupKind(group: string): SheetKind {
+  return useSnapshotStore.getState().sketch.base[group]?.kind ?? deriveSheetKindFromKey(group);
+}
+
+/** The entity of `group` with `entityKey` (its kind array filtered by `resolveEntityGroup`). */
+function findGroupEntity(group: string, kind: SheetKind, entityKey: string): SketchEntity | undefined {
+  const sketch = useSnapshotStore.getState().sketch;
+  const src = kind === 'props' ? sketch.props ?? [] : sketch.characters ?? [];
+  return src.find((e) => e.key === entityKey && resolveEntityGroup(e, kind) === group);
+}
+
 /**
  * Persist the WHOLE entity collection after a single-crop write, IF the written style is the locked
  * one (otherwise the entity clone was untouched — the sheet release-save covers it). The whole array
- * is written in one rtype-14 column-root save (`alter_characters` shares the `characters` collection).
+ * is written in one rtype-14 column-root save (the group's kind → characters | props).
  */
 export async function persistBaseEntityCloneIfLocked(
-  kind: BaseKind,
+  group: string,
   styleIndex: number,
   entityKey: string,
 ): Promise<void> {
-  const st = useSnapshotStore.getState();
-  const style = sheetOf(st.sketch.base, kind).styles[styleIndex];
+  const style = sheetOf(useSnapshotStore.getState().sketch.base, group)?.styles[styleIndex];
   if (!style?.is_selected) {
     log.debug('persistBaseEntityCloneIfLocked', 'style not locked — clone untouched, skip', {
-      kind,
+      group,
       styleIndex,
       entityKey,
     });
     return;
   }
-  const entity = sketchEntitiesOfKind(st.sketch, kind).find((e) => e.key === entityKey);
+  const kind = groupKind(group);
+  const entity = findGroupEntity(group, kind, entityKey);
   if (!entity) {
-    log.warn('persistBaseEntityCloneIfLocked', 'entity missing — skip', { kind, entityKey });
+    log.warn('persistBaseEntityCloneIfLocked', 'entity missing — skip', { group, entityKey });
     return;
   }
   const collection = BASE_KIND_TO_COLLECTION[kind];
   log.info('persistBaseEntityCloneIfLocked', 'save entity collection (clone landed)', {
-    kind,
+    group,
     styleIndex,
     entityKey,
     collection,

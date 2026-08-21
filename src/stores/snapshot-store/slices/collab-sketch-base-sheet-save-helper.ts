@@ -1,9 +1,9 @@
 // collab-sketch-base-sheet-save-helper.ts — per-resource collab save seam for the SKETCH
-// BASE creative space (ADR-043 / sketch-base collab, the 8th collab space). Its GRAIN A is the
-// WHOLE per-kind base SHEET node at STEP 1 (rtype 11 base_sheet), which the gateway resolver maps
-// to `sketch.base.{kind}_sheet` (resource_id `character_sheet` / `prop_sheet`). This is a NEW
-// rtype (11) because the sheet node is NOT under an entity node — it is a kind-level node, so the
-// variant space's rtype-3/4 entity trick cannot address it (see Phase 01 backend).
+// BASE creative space (ADR-043 / sketch-base collab, the 8th collab space). ⚡REV 2026-08-21 — its
+// GRAIN A is the WHOLE per-GROUP base SHEET node at STEP 1 (rtype 11 base_sheet), addressed by the
+// GROUP KEY as `resource_id` (`base[group_key]`). This is a NEW rtype (11) because the sheet node
+// is NOT under an entity node — it is a group-level node, so the variant space's rtype-3/4 entity
+// trick cannot address it (see Phase 01 backend).
 //
 // Mirror of `collab-sketch-variant-save-helper.ts` (grain A instead of the entity grain). Grain B
 // (per-entity text: EditBaseEntityModal + import + lock-clone base variant) REUSES the variant
@@ -24,22 +24,12 @@
 // `useSaveSessionStore` is imported dynamically at call time (cycle break).
 
 import { type LockTarget, type ResourceType } from '@/stores/resource-lock-store';
-import type { BaseKind } from '@/types/sketch';
-import { BASE_SHEET_ID } from '@/types/sketch';
 import type { SaveOutcome } from '@/stores/save-session-store/types';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('Store', 'CollabSketchBaseSheetSaveHelper');
 
-/** step-1 rtype-11 `resource_id` per kind → the whole `sketch.base.{kind}_sheet` node the gateway
- *  resolver writes (character_sheet → `characters` grant · prop_sheet → `props` grant ·
- *  ⚡ alter_character_sheet → `characters` grant, 2026-07-28). Stage (5) has NO base sheet, so only
- *  the base kinds are addressable here. COPIED from `BASE_SHEET_ID` (the one kind→sheet mapping)
- *  rather than aliased: exporting the SAME object under two public names would let a mutation
- *  through either name silently rewrite lock routing everywhere. */
-export const SKETCH_KIND_TO_SHEET_RESOURCE_ID: Record<BaseKind, string> = { ...BASE_SHEET_ID };
-
-/** rtype 11 = base_sheet (kind-level sheet node). */
+/** rtype 11 = base_sheet (group-level sheet node). */
 const RESOURCE_TYPE_BASE_SHEET = 11 satisfies ResourceType;
 
 /** crud audit enum for a base-sheet save: 3 = edit — the ONLY action this space ever sends.
@@ -50,15 +40,19 @@ const RESOURCE_TYPE_BASE_SHEET = 11 satisfies ResourceType;
  *  not reintroduce it, and see `api/resource/04-save.md` §rtype 11 before changing the contract. */
 const ACTION_TYPE_EDIT = 3 as const;
 
+/** crud audit enum for a base-sheet DELETE (whole group node removal): 4 = delete. */
+const ACTION_TYPE_DELETE = 4 as const;
+
 /**
- * Build the STEP-1 / rtype-11 LockTarget for a per-kind base sheet node (whole-sheet grain).
- * `locale` is null (the sheet node is not locale-scoped, unlike a textbox).
+ * Build the STEP-1 / rtype-11 LockTarget for a base sheet node. ⚡REV 2026-08-21 — the `resource_id`
+ * IS the GROUP KEY (`base[group_key]`); the gateway derives the authz grant from the node's `kind`
+ * (owner bypass). `locale` is null (the sheet node is not locale-scoped, unlike a textbox).
  */
-export function resolveSketchBaseSheetLockTarget(kind: BaseKind): LockTarget {
+export function resolveSketchBaseSheetLockTarget(group: string): LockTarget {
   return {
     step: 1,
     resource_type: RESOURCE_TYPE_BASE_SHEET,
-    resource_id: SKETCH_KIND_TO_SHEET_RESOURCE_ID[kind],
+    resource_id: group,
     locale: null,
   };
 }
@@ -66,7 +60,9 @@ export function resolveSketchBaseSheetLockTarget(kind: BaseKind): LockTarget {
 /**
  * Whole-node payload for the held-session `buildPayload`. The gateway contract for the sheet node
  * is `{ action_type: 3, patch: <whole sheet node>, log: true }` — `log:true` emits the
- * `scope:'node'` content-sync event + one audit row (peers refetch the fresh sheet).
+ * `scope:'node'` content-sync event + one audit row (peers refetch the fresh sheet). The whole
+ * node ALWAYS carries the current `kind` (BE: missing kind → 422 BASE_SHEET_KIND_REQUIRED; a
+ * changed kind → 422 BASE_SHEET_KIND_IMMUTABLE) — the flush never changes kind.
  */
 export function buildSketchBaseSheetPayload(node: unknown): {
   action_type: 3;
@@ -92,13 +88,50 @@ export interface FlushSketchBaseSheetOptions {
  * @returns the engine `SaveOutcome` — the CALLER maps it to a toast (this helper no longer self-toasts).
  */
 export async function flushSketchBaseSheetUnderLock(
-  kind: BaseKind,
+  group: string,
   _node?: unknown,
   _opts?: FlushSketchBaseSheetOptions,
 ): Promise<SaveOutcome> {
   const { useSaveSessionStore } = await import('@/stores/save-session-store');
-  log.debug('flushSketchBaseSheetUnderLock', 'ensureSaved (engine)', { kind });
-  return useSaveSessionStore
-    .getState()
-    .ensureSaved('sketch-base-sheet', SKETCH_KIND_TO_SHEET_RESOURCE_ID[kind]);
+  log.debug('flushSketchBaseSheetUnderLock', 'ensureSaved (engine)', { group });
+  return useSaveSessionStore.getState().ensureSaved('sketch-base-sheet', group);
+}
+
+/**
+ * Delete the WHOLE base sheet node for a group (rtype 11, `action_type:4`) UNDER a one-shot lock:
+ * acquire → optimistic local `removeSketchBaseSheet` → gateway `save(delete)` → release.
+ *
+ * ⚠️ DELETE is OWNER-ONLY server-side (collaborator 403 even with the right grant) — the CALLER
+ * (Phase 3 orphan cleanup / Phase 4 import) gates the UI to the book owner. A lock-403 (peer holds
+ * the node) is NOT a write-permission signal: it toasts the holder and aborts without deleting.
+ */
+export async function deleteSketchBaseSheetViaGateway(group: string): Promise<void> {
+  const [{ useResourceLockStore, FALLBACK_HOLDER_NAME }, { useSnapshotStore }, { toast }] =
+    await Promise.all([
+      import('@/stores/resource-lock-store'),
+      import('@/stores/snapshot-store'),
+      import('sonner'),
+    ]);
+  const target = resolveSketchBaseSheetLockTarget(group);
+  const lock = useResourceLockStore.getState();
+
+  const acq = await lock.acquire(target);
+  if (!acq.ok) {
+    const name = acq.holder ? lock.holderNames.get(acq.holder) ?? FALLBACK_HOLDER_NAME : FALLBACK_HOLDER_NAME;
+    log.info('deleteSketchBaseSheetViaGateway', 'blocked on acquire — peer holds the group', { group });
+    toast.info(`${name} đang chỉnh sửa — vui lòng thử lại sau.`);
+    return;
+  }
+  try {
+    useSnapshotStore.getState().removeSketchBaseSheet(group);
+    const res = await lock.save(target, { action_type: ACTION_TYPE_DELETE, patch: null, target_ref: { group }, log: true });
+    if (!res.ok) {
+      log.warn('deleteSketchBaseSheetViaGateway', 'delete save failed', { group, forbidden: res.forbidden, lost: res.lost });
+      toast.error('Không xoá được nhóm — vui lòng tải lại trang.');
+    } else {
+      log.info('deleteSketchBaseSheetViaGateway', 'deleted group node', { group });
+    }
+  } finally {
+    await lock.release(target);
+  }
 }

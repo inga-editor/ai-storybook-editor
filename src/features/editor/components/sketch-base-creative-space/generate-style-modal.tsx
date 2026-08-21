@@ -7,7 +7,8 @@
 // Style experimentation (2026-07-15): the caller can pick ANY sketch art-style (type=0), defaulting
 // to book.sketchstyle_id, and choose 1–3 of that style's `image_references` as the STYLE anchors for
 // this attempt. Those refs are already hosted in Storage, so the slice forwards them straight as
-// media_url refs (no upload). Generate is gated on prompt + a chosen style + ≥1 selected reference.
+// media_url refs (no upload). Generate is gated on a chosen style + ≥1 selected reference; the
+// prompt is OPTIONAL (the aesthetic is carried by the style + refs).
 //
 // Collab (ADR-043): the reference images steer the aesthetic (API MODE A — artStyleId → description
 // only, style from the refs). The generate runs UNDER the per-kind sheet lock (rtype 11) that the
@@ -30,7 +31,7 @@ import { Label } from '@/components/ui/label';
 import {
   useSketchBaseStyles,
   useSnapshotActions,
-  useIsBaseKindGenerating,
+  useIsBaseGroupGenerating,
   useIsSpreadOrStageGenerating,
 } from '@/stores/snapshot-store/selectors';
 import { useSketchStyleId } from '@/stores/book-store';
@@ -38,7 +39,6 @@ import { useArtStyles } from '@/stores/art-styles-store';
 import { ArtStyleSelect } from '@/features/books';
 import type { ArtStyleOption } from '@/features/books/types';
 import { useInteractionLayer } from '@/features/editor/contexts';
-import type { BaseKind } from '@/types/sketch';
 import { cn } from '@/utils/utils';
 import { createLogger } from '@/utils/logger';
 
@@ -53,28 +53,28 @@ function defaultRefSelection(refCount: number): number[] {
 }
 
 export interface GenerateStyleModalProps {
-  kind: BaseKind;
+  group: string;
   mode: 'add' | 'regenerate';
   /** Required for `regenerate` — the style being overwritten (seeds the prompt). */
   styleIndex?: number;
   /** Fired right after the job is enqueued with the target style index → lets the root select it
    *  (add appends to the end) so the content-area "Generating…" overlay shows the new style. */
-  onEnqueued?: (kind: BaseKind, styleIndex: number) => void;
+  onEnqueued?: (group: string, styleIndex: number) => void;
   onClose: () => void;
 }
 
-export function GenerateStyleModal({ kind, mode, styleIndex, onEnqueued, onClose }: GenerateStyleModalProps) {
-  const styles = useSketchBaseStyles(kind);
+export function GenerateStyleModal({ group, mode, styleIndex, onEnqueued, onClose }: GenerateStyleModalProps) {
+  const styles = useSketchBaseStyles(group);
   // book.sketchstyle_id (art_styles.type=0) — the DEFAULT selection; the picker below can override it
   // per-attempt (style experimentation, not persisted to the book).
   const sketchStyleId = useSketchStyleId();
   const { startBaseSheetGenerate } = useSnapshotActions();
   // Gate mirrors the slice's own guards so the modal can never close as if it worked (no silent
-  // drop): per-KIND (this kind already has an op — the OTHER kind generating is fine, that is the
+  // drop): per-GROUP (this group already has an op — ANOTHER group generating is fine, that is the
   // parallelism) + cross-FAMILY (base stays mutually exclusive with the spread and stage spaces).
-  const isThisKindGenerating = useIsBaseKindGenerating(kind);
+  const isThisGroupGenerating = useIsBaseGroupGenerating(group);
   const isSpreadOrStageGenerating = useIsSpreadOrStageGenerating();
-  const isAnyGenerating = isThisKindGenerating || isSpreadOrStageGenerating;
+  const isAnyGenerating = isThisGroupGenerating || isSpreadOrStageGenerating;
 
   // All art styles are fetched app-wide on auth (App.tsx) → filter the sketch pipeline (type=0). No
   // extra query. Options feed the ArtStyleSelect combobox; the full ArtStyle drives the ref grid.
@@ -134,9 +134,10 @@ export function GenerateStyleModal({ kind, mode, styleIndex, onEnqueued, onClose
     });
   }, []);
 
+  // Prompt is OPTIONAL — the aesthetic comes from the chosen style + reference images (the style
+  // refs are the anchor). Gate on a style + ≥1 reference only.
   const canGenerate =
     !isSubmitting &&
-    prompt.trim().length > 0 &&
     !!selectedStyleId &&
     selectedRefs.length >= 1 &&
     !isAnyGenerating;
@@ -144,7 +145,6 @@ export function GenerateStyleModal({ kind, mode, styleIndex, onEnqueued, onClose
   const handleGenerate = useCallback(() => {
     if (!canGenerate || !selectedStyleId) {
       log.debug('handleGenerate', 'blocked — gate not met', {
-        hasPrompt: prompt.trim().length > 0,
         hasArtStyle: !!selectedStyleId,
         refCount: selectedRefs.length,
         isAnyGenerating,
@@ -156,7 +156,7 @@ export function GenerateStyleModal({ kind, mode, styleIndex, onEnqueued, onClose
     // add appends to the end (new index = current length); regenerate overwrites styleIndex.
     const targetIndex = mode === 'add' ? styles.length : (styleIndex ?? 0);
     log.info('handleGenerate', 'enqueue base sheet generate', {
-      kind,
+      group,
       mode,
       styleIndex: targetIndex,
       artStyleId: selectedStyleId,
@@ -164,7 +164,7 @@ export function GenerateStyleModal({ kind, mode, styleIndex, onEnqueued, onClose
     });
     setIsSubmitting(true);
     startBaseSheetGenerate({
-      kind,
+      group,
       mode,
       styleIndex: mode === 'regenerate' ? styleIndex : undefined,
       stylePrompt: prompt.trim(),
@@ -172,10 +172,10 @@ export function GenerateStyleModal({ kind, mode, styleIndex, onEnqueued, onClose
       artStyleId: selectedStyleId,
     });
     // Select the (just-enqueued) style so the content-area overlay shows it generating.
-    onEnqueued?.(kind, targetIndex);
+    onEnqueued?.(group, targetIndex);
     // Close immediately after enqueue — results stream into the style via the store.
     onClose();
-  }, [canGenerate, selectedStyleId, selectedRefs, isAnyGenerating, styles.length, kind, mode, styleIndex, prompt, startBaseSheetGenerate, onEnqueued, onClose]);
+  }, [canGenerate, selectedStyleId, selectedRefs, isAnyGenerating, styles.length, group, mode, styleIndex, prompt, startBaseSheetGenerate, onEnqueued, onClose]);
 
   const handleRequestClose = useCallback(() => {
     if (isSubmitting) return; // Escape / click-outside inert while the enqueue is in flight
@@ -209,7 +209,7 @@ export function GenerateStyleModal({ kind, mode, styleIndex, onEnqueued, onClose
         <DialogHeader>
           <DialogTitle>Generate: Style {styleNumber}</DialogTitle>
           <DialogDescription className="sr-only">
-            Pick an art style and reference images, enter a prompt, then generate the base sheet.
+            Pick an art style and reference images, optionally enter a prompt, then generate the base sheet.
           </DialogDescription>
         </DialogHeader>
 
@@ -283,7 +283,7 @@ export function GenerateStyleModal({ kind, mode, styleIndex, onEnqueued, onClose
 
         {/* Prompt */}
         <div className="space-y-2">
-          <Label htmlFor="style-prompt">Prompt</Label>
+          <Label htmlFor="style-prompt">Prompt <span className="font-normal text-muted-foreground">(optional)</span></Label>
           <Textarea
             id="style-prompt"
             value={prompt}

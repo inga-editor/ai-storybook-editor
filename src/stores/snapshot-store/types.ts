@@ -2,9 +2,11 @@ import type { ManuscriptDoc, SnapshotMeta, SyncState, DocType, TypographyStep, T
 import type {
   Sketch,
   SketchEntity,
+  SketchEntityKind,
   SketchVariant,
   SketchVariantCrop,
-  BaseKind,
+  SheetKind,
+  BaseGroup,
   SketchBaseStyle,
   SketchBaseCrop,
   BaseEntityText,
@@ -225,42 +227,45 @@ export interface SketchSlice {
   setSketch: (sketch: Sketch) => void;
   clearSketch: () => void;
 
-  // ── Base workspace (char + prop sheets) — pure setters ─────────────────────
+  // ── Base workspace (per-GROUP sheets) — pure setters ⚡REV 2026-08-21 ─────────
   // (generate orchestration lives in the base-generate job slice; these are the write sinks)
+  // Every base writer takes a GROUP KEY and seeds `base[group]` on first write.
   setSketchBaseEntities: (entities: {
     characters: SketchEntity[];
     props: SketchEntity[];
-    /** Base sheets to reset ({styles: []}) in the SAME atomic update — an import replaces the cast,
-     *  so the kinds' sheets (raw lineup images + locked pick) picture entities that no longer exist. */
-    resetSheetKinds?: BaseKind[];
+    /** ⚡REV 2026-08-21 — the COMPLETE new set of base groups (import 05). Each group node is reset
+     *  ({kind, name, styles:[]}); any existing base key NOT listed is DELETED locally. Omit to leave
+     *  every base node untouched (cast-only replace). */
+    sheetGroups?: BaseGroup[];
   }) => void; // bulk Excel import
-  addSketchBaseStyle: (kind: BaseKind, style: SketchBaseStyle) => void;                 // append a style attempt
-  removeSketchBaseStyle: (kind: BaseKind, styleIndex: number) => void;                  // drop a style (is_selected clears with it)
-  setSketchBaseStyleSelected: (kind: BaseKind, styleIndex: number) => void;             // 🔒 lock: exclusive is_selected + CLONE crops → variants[base].raw_sheet.crops[0]
-  addSketchBaseStyleIllustration: (kind: BaseKind, styleIndex: number, mediaUrl: string, aiRequestId?: string) => void;           // raw generate result: prepend 'created' + select (+ ai_request_id provenance)
-  setSketchBaseStyleIllustrations: (kind: BaseKind, styleIndex: number, illustrations: Illustration[]) => void;                   // raw sheet whole-set (edit-image-modal onUpdate)
-  setSketchBaseStyleCrops: (kind: BaseKind, styleIndex: number, crops: SketchBaseCrop[]) => void;                                 // crop result: replace styles[i].crops[]
-  setSketchBaseCropIllustrations: (kind: BaseKind, styleIndex: number, entityKey: string, illustrations: Illustration[]) => void; // one crop whole-set (edit-image-modal onUpdate)
-  setSketchBaseStyleImageReferences: (kind: BaseKind, styleIndex: number, refs: ImageReference[]) => void;                        // persist uploaded style reference images (title + media_url)
-  updateSketchBaseEntityText: (kind: BaseKind, entityKey: string, updates: Pick<Partial<BaseEntityText>, 'description' | 'height' | 'visual_design' | 'art_language'>) => void; // variants[base] text (all 4 fields editable via the merged Edit modal)
+  removeSketchBaseSheet: (group: string) => void;                                       // ⚡REV — drop ONE base group node locally (orphan cleanup / import)
+  addSketchBaseStyle: (group: string, style: SketchBaseStyle) => void;                  // append a style attempt (seed-on-write)
+  removeSketchBaseStyle: (group: string, styleIndex: number) => void;                   // drop a style (is_selected clears with it)
+  setSketchBaseStyleSelected: (group: string, styleIndex: number) => void;             // 🔒 lock: exclusive is_selected + CLONE crops → variants[base].raw_sheet.crops[0]
+  addSketchBaseStyleIllustration: (group: string, styleIndex: number, mediaUrl: string, aiRequestId?: string) => void;           // raw generate result: prepend 'created' + select (+ ai_request_id provenance)
+  setSketchBaseStyleIllustrations: (group: string, styleIndex: number, illustrations: Illustration[]) => void;                   // raw sheet whole-set (edit-image-modal onUpdate)
+  setSketchBaseStyleCrops: (group: string, styleIndex: number, crops: SketchBaseCrop[]) => void;                                 // crop result: replace styles[i].crops[]
+  setSketchBaseCropIllustrations: (group: string, styleIndex: number, entityKey: string, illustrations: Illustration[]) => void; // one crop whole-set (edit-image-modal onUpdate)
+  setSketchBaseStyleImageReferences: (group: string, styleIndex: number, refs: ImageReference[]) => void;                        // persist uploaded style reference images (title + media_url)
+  updateSketchBaseEntityText: (group: string, entityKey: string, updates: Pick<Partial<BaseEntityText>, 'description' | 'height' | 'visual_design' | 'art_language'>) => void; // variants[base] text (all 4 fields editable via the merged Edit modal)
 
   // Entity-level CRUD — `kind` selects the array (sketch.characters | props). ⚡ 2026-07-18:
   // stages left the shared shape — every stage mutation lives on SketchStageSlice below.
-  setSketchEntities: (kind: BaseKind, entities: SketchEntity[]) => void;
-  upsertSketchEntity: (kind: BaseKind, entity: SketchEntity) => void;
-  removeSketchEntity: (kind: BaseKind, key: string) => void;
-  upsertSketchVariant: (kind: BaseKind, entityKey: string, variant: SketchVariant) => void;
+  setSketchEntities: (kind: SketchEntityKind, entities: SketchEntity[]) => void;
+  upsertSketchEntity: (kind: SketchEntityKind, entity: SketchEntity) => void;
+  removeSketchEntity: (kind: SketchEntityKind, key: string) => void;
+  upsertSketchVariant: (kind: SketchEntityKind, entityKey: string, variant: SketchVariant) => void;
   updateSketchVariantText: (
-    kind: BaseKind,
+    kind: SketchEntityKind,
     key: string,
     variantKey: string,
     updates: Partial<Pick<SketchVariant, 'description' | 'height' | 'visual_design' | 'art_language'>>,
   ) => void;
   // Per-variant imagery (char/prop raw_sheet.illustrations + raw_sheet.crops[]) — generate append / re-cut / edit-image-modal
-  setSketchVariantRawSheetIllustrations: (kind: BaseKind, entityKey: string, variantKey: string, illustrations: Illustration[]) => void;
-  setSketchVariantCrops: (kind: BaseKind, entityKey: string, variantKey: string, crops: SketchVariantCrop[]) => void;                     // ⚡ re-cut: replace raw_sheet.crops[] (base: 1 clone crop)
-  selectSketchVariantCrop: (kind: BaseKind, entityKey: string, variantKey: string, cropIndex: number) => void;                            // ⚡ lock: set crops[cropIndex].is_selected true, clear others (≤1)
-  setSketchVariantCropIllustrations: (kind: BaseKind, entityKey: string, variantKey: string, cropIndex: number, illustrations: Illustration[]) => void; // one cell whole-set (⚡ + cropIndex)
+  setSketchVariantRawSheetIllustrations: (kind: SheetKind, entityKey: string, variantKey: string, illustrations: Illustration[]) => void;
+  setSketchVariantCrops: (kind: SheetKind, entityKey: string, variantKey: string, crops: SketchVariantCrop[]) => void;                     // ⚡ re-cut: replace raw_sheet.crops[] (base: 1 clone crop)
+  selectSketchVariantCrop: (kind: SheetKind, entityKey: string, variantKey: string, cropIndex: number) => void;                            // ⚡ lock: set crops[cropIndex].is_selected true, clear others (≤1)
+  setSketchVariantCropIllustrations: (kind: SheetKind, entityKey: string, variantKey: string, cropIndex: number, illustrations: Illustration[]) => void; // one cell whole-set (⚡ + cropIndex)
   // Spread-level CRUD — ships with the sketch-spread creative space.
   // Art-direction is keyed by page `type` (SketchPage has no id); textbox content is per-language.
   setSketchSpreads: (spreads: SketchSpread[]) => void;
@@ -920,7 +925,7 @@ export interface SketchSpreadGenerateJobSlice {
 export type BaseGeneratePhase = 'generating' | 'cropping'; // generating = 05/06 (AI); cropping = 07 (CV)
 
 export interface BaseSheetGenerateOp {
-  kind: BaseKind;
+  group: string;               // ⚡REV 2026-08-21 — the target base group key (`base[group]`)
   styleIndex: number;          // resolved at start (mode 'add' → the just-appended style's index)
   phase: BaseGeneratePhase;
   /** classified friendly message; kept on the op until dismiss (content-area shows it inline). */
@@ -932,7 +937,7 @@ export interface BaseSheetGenerateOp {
 }
 
 export interface StartBaseSheetGenerateParams {
-  kind: BaseKind;
+  group: string;               // ⚡REV 2026-08-21 — the target base group key (`base[group]`)
   mode: 'add' | 'regenerate';
   styleIndex?: number;         // required for 'regenerate'; ignored for 'add' (job appends a style)
   stylePrompt: string;
@@ -942,14 +947,13 @@ export interface StartBaseSheetGenerateParams {
 }
 
 export interface SketchBaseGenerateJobSlice {
-  /** In-flight (or settled-with-error) ops keyed by KIND — `characters` and `props` generate in
-   *  parallel (separate rtype-11 sheet nodes); the same kind stays single-flight because both ops
-   *  would write that one sheet node. Empty object = idle. */
-  baseSheetGenerateOps: Partial<Record<BaseKind, BaseSheetGenerateOp>>;
+  /** ⚡REV 2026-08-21 — in-flight (or settled-with-error) ops keyed by GROUP KEY. Per-group
+   *  single-flight; distinct groups run in parallel (each its own rtype-11 lock). Empty = idle. */
+  baseSheetGenerateOps: Record<string, BaseSheetGenerateOp | undefined>;
   startBaseSheetGenerate: (params: StartBaseSheetGenerateParams) => void;
-  recropBaseSheet: (kind: BaseKind, styleIndex: number) => void;
-  cancelBaseSheetGenerate: (kind: BaseKind) => void;
-  dismissBaseSheetGenerateError: (kind: BaseKind) => void;
+  recropBaseSheet: (group: string, styleIndex: number) => void;
+  cancelBaseSheetGenerate: (group: string) => void;
+  dismissBaseSheetGenerateError: (group: string) => void;
 }
 
 // --- Sketch Variant Generate Op Types (ephemeral, not persisted to DB) ---
@@ -966,7 +970,7 @@ export interface SketchBaseGenerateJobSlice {
 export type VariantGeneratePhase = 'generate' | 'cut'; // generate = 08/09 (AI); cut = 10 (CV, auto)
 
 export interface VariantSheetGenerateOp {
-  kind: BaseKind;
+  kind: SheetKind;
   entityKey: string;
   variantKey: string; // non-base
   phase: VariantGeneratePhase;
@@ -991,7 +995,9 @@ export interface SketchVariantGenerateJobSlice {
   recropVariantSheet: (ref: VariantRef) => void;
   /** Clear the op for THIS variant when it settled with an error (the notifications hook toasts
    *  it once, then dismisses). */
-  dismissVariantSheetGenerateError: (ref: VariantRef) => void;
+  dismissVariantSheetGenerateError: (
+    ref: Pick<VariantRef, 'kind' | 'entityKey' | 'variantKey'>,
+  ) => void;
 }
 
 // --- Sketch Stage Generate Op Types (ephemeral, not persisted to DB) ---

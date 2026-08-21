@@ -75,7 +75,7 @@ const encodeActor = (actorType: ActorType, actorId: string) => `${actorType}:${a
 export interface AddActorModalProps {
   castingSlot: BookCastingSlot; // READ-ONLY
   actorPairs: ActorPair[]; // dup check (V1)
-  characters: Character[]; // includes alter (actor_role = 1)
+  characters: Character[]; // every character group (no alter split)
   props: Prop[];
   prefill?: Partial<AddActorInput>;
   onCreate: (input: AddActorInput) => Promise<void>;

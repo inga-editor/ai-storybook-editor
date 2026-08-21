@@ -10,24 +10,77 @@ import type { Geometry, Typography } from './spread-types';
 import type { Illustration, IllustrationType, ImageReference } from './prop-types';
 
 export type SketchEntityKind = 'characters' | 'props' | 'stages';
+
 /**
- * Base sheet workspace kinds: character + prop + alter character (stage generates directly, no
- * base sheet).
- *
- * ⚡ 2026-07-28 — `alter_characters` is a **VIRTUAL** kind: it owns NO top-level array. Its
- * entities are the `actor_role === 1` subset of `sketch.characters[]`, and its base sheet is
- * `base.alter_character_sheet`. The old invariant "kind IS a key of Sketch" is therefore DEAD:
- * `sketch['alter_characters']` is `undefined` (silently empty, no type/runtime error).
- * ⇒ NEVER index `sketch[kind]` with a `BaseKind`. Route every read through the two mappings
- * below: `KIND_ENTITY_SOURCE` (kind → entity set) and `BASE_SHEET_ID` (kind → sheet node).
+ * ⚡REV 2026-08-21 — the kind of ONE base sheet group: `characters` | `props` (stage generates
+ * directly, no base sheet). Replaces the old 3-value `BaseKind` enum (`alter_characters` is gone —
+ * every character is a plain character group now). `SheetKind` is self-describing on each base
+ * node (`base[group].kind`) so readers never guess a kind from the key. `BaseEntityCollection`
+ * kept as an alias for the many existing import sites.
  */
-export type BaseKind = 'characters' | 'props' | 'alter_characters';
-/** The REAL top-level entity arrays under `Sketch` sharing the char/prop variant shape. */
-export type BaseEntityCollection = 'characters' | 'props';
-/** Cast role of a sketch entity: 0 = primary (story cast), 1 = alter (casting only, NEVER in the
- *  story path). Absent ⇒ 0 — the contract is presence-gated, so `0` is never written explicitly. */
-export type ActorRole = 0 | 1;
+export type SheetKind = 'characters' | 'props';
+export type BaseEntityCollection = SheetKind;
+
+/**
+ * ⚡REV 2026-08-21 — SSOT descriptor for one base sheet group. Every space (base / variants /
+ * lineup) + the base-generate job slice import THIS, never redefine it.
+ *   - `group_key`: normalized Excel-tab key (see `normalizeGroupKey`); addresses `base[group_key]`.
+ *   - `kind`: whether the group holds characters or props.
+ *   - `name`: the original tab display name.
+ */
+export interface BaseGroup {
+  group_key: string;
+  kind: SheetKind;
+  name: string;
+  /** Excel tab position (0-based). Absent for legacy nodes / entity-only groups → sorted last. */
+  order?: number;
+}
+
 export type SketchPageType = 'left' | 'right' | 'full';
+
+/**
+ * Normalize an Excel tab name → a `sketch.base` group key: trim → lowercase → every run of
+ * non-alphanumerics → `_` → strip leading/trailing `_`.
+ *   "Character 1"      → "character_1"
+ *   "Alter Characters" → "alter_characters"
+ *   "Props 2"          → "props_2"
+ * (Two tabs that normalize to the same key are an import conflict — rejected upstream.)
+ */
+export function normalizeGroupKey(tabName: string): string {
+  return tabName
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
+/**
+ * Derive a group's `SheetKind` from its key when a base node carries no self-describing `kind`
+ * (legacy books, or an entity group with no base sheet yet). Mirrors the BE plan: a key mentioning
+ * "prop" is a prop group, everything else is a character group (`character_sheet`,
+ * `alter_character_sheet`, and any new character group all resolve to `characters`).
+ */
+export function deriveSheetKindFromKey(key: string): SheetKind {
+  return key.includes('prop') ? 'props' : 'characters';
+}
+
+/**
+ * The group an entity belongs to. ⚡REV 2026-08-21 — `entity.group` is authoritative; when absent
+ * (pre-group book, NO migration) it is derived (structure.md §Legacy tolerance):
+ *   - prop           → `prop_sheet`
+ *   - character      → `alter_character_sheet` when the legacy `actor_role === 1`, else `character_sheet`
+ * ⚠️ This is the ONLY place `actor_role` is read anywhere in the store.
+ */
+export function resolveEntityGroup(
+  entity: { group?: string; actor_role?: 0 | 1 },
+  kind: SheetKind,
+): string {
+  if (entity.group) return entity.group;
+  if (kind === 'characters') {
+    return entity.actor_role === 1 ? 'alter_character_sheet' : 'character_sheet';
+  }
+  return 'prop_sheet';
+}
 
 // ── Variant crop (positional — NO key; 2026-07-14) ───────────────────────────
 // One cell cut from the currently-selected raw sheet. Element order = read order of cells 1..4
@@ -56,10 +109,12 @@ export interface SketchVariant {
 // char/prop only — stages carry their own SketchStage shape (2026-07-18 BREAKING rework).
 export interface SketchEntity {
   key: string;
-  /** ⚡ 2026-07-28 — alter flag. ABSENT ⇒ 0 (primary). Only `characters[]` ever carries it: alter
-   *  characters live in the SAME array as primaries (no separate collection, no `alter_of` link).
-   *  Never auto-written on read (absent stays absent — keeps the JSONB + collab diffs quiet). */
-  actor_role?: ActorRole;
+  /** ⚡REV 2026-08-21 — normalized group key → `base[group]` (char/prop; stages have none). Set at
+   *  import from the tab name. Absent (pre-group book) → `resolveEntityGroup` fallback derives it. */
+  group?: string;
+  /** ⚠️ LEGACY — pre-group alter flag. Read ONLY by `resolveEntityGroup` when `group` is absent;
+   *  never written. @deprecated */
+  actor_role?: 0 | 1;
   variants: SketchVariant[];
 }
 
@@ -104,7 +159,9 @@ export type StageSelection =
 /** Lightweight reference to a non-base variant (variantKey ≠ 'base'). Lets the variant creative
  *  space enumerate variants across a kind without holding whole entity refs (reused by phase-05). */
 export interface VariantRef {
-  kind: BaseKind;
+  /** ⚡REV 2026-08-21 — the entity's base group (`base[group]`). */
+  group: string;
+  kind: SheetKind;
   entityKey: string;
   variantKey: string;
 }
@@ -114,7 +171,7 @@ export interface VariantRef {
  *  to VariantRef) because BOTH the store selector (`useSketchLineupEntries`) and the space consume
  *  it — a feature-owned type would invert the store → feature dependency. */
 export interface LineupEntry {
-  kind: BaseKind;
+  kind: SheetKind;
   entityKey: string;
   variantKey: string; // 'base' INCLUDED (unlike VariantRef consumers)
   /** "{persistKind}:@{entityKey}/{variantKey}" — unique id (key of checkedRefs). The prefix is
@@ -167,71 +224,26 @@ export interface SketchBaseStyle {
 }
 
 export interface SketchBaseSheet {
+  /** ⚡REV 2026-08-21 — self-describing group kind (authz gate rtype 11). Optional AT REST: legacy
+   *  nodes have none (derived via `deriveSheetKindFromKey` on read); the write paths fill it. */
+  kind?: SheetKind;
+  /** ⚡REV 2026-08-21 — the Excel tab display name. Optional at rest (legacy → shown from the key);
+   *  filled on write. */
+  name?: string;
+  /** Excel tab position (0-based) — the sidebar's stable sort key. Object key insertion order is
+   *  LOST across the jsonb persist round-trip (Postgres re-sorts keys by length/bytewise), so the
+   *  display order MUST ride an explicit scalar. Optional at rest (legacy nodes → sorted last). */
+  order?: number;
   styles: SketchBaseStyle[];                     // each element = one art-style attempt (parallel, pick one to lock)
 }
 
-export interface SketchBase {
-  character_sheet: SketchBaseSheet;              // all base characters (actor_role absent|0)
-  prop_sheet: SketchBaseSheet;                   // all base props — no stage_sheet
-  alter_character_sheet: SketchBaseSheet;        // ⚡ 2026-07-28 — all alter characters (actor_role 1)
-}
-
-// ── Kind resolution (SINGLE SOURCE — 2026-07-28) ─────────────────────────────
-// Two mappings, one per question. Everything that used to do `sketch[kind]` / `kind ===
-// 'characters' ? character_sheet : prop_sheet` MUST go through them — `alter_characters` has no
-// array of its own, so a raw index yields `undefined` (an empty group with NO error). Do NOT add
-// a third parallel mapping anywhere: extend these.
-
-/** kind → WHICH entity set. `collection` = the real `Sketch` array; `actorRole` (when defined)
- *  is the `actor_role` value an entity must match (absent on the entity ⇒ 0). */
-export const KIND_ENTITY_SOURCE: Record<
-  BaseKind,
-  { collection: BaseEntityCollection; actorRole?: ActorRole }
-> = {
-  characters: { collection: 'characters', actorRole: 0 }, // absent ⇒ 0
-  props: { collection: 'props' },                         // no role split
-  alter_characters: { collection: 'characters', actorRole: 1 },
-};
-
-/** kind → WHICH base sheet node under `sketch.base`. Also the rtype-11 `resource_id` and the
- *  saveResource path segment (`col:sketch/key:base/key:{BASE_SHEET_ID[kind]}/…`). */
-export const BASE_SHEET_ID: Record<BaseKind, keyof SketchBase> = {
-  characters: 'character_sheet',
-  props: 'prop_sheet',
-  alter_characters: 'alter_character_sheet',
-};
-
 /**
- * THE replacement for every legacy `sketch[kind]`: the entity set of `kind`, resolved through
- * `KIND_ENTITY_SOURCE`. Generic so immer `Draft<Sketch>` callers (slices) reuse it verbatim.
- * `characters`/`alter_characters` share one array and are split by `actor_role`. Pure.
+ * ⚡REV 2026-08-21 — base workspace = a DYNAMIC map keyed by group key (one sheet node per
+ * character/prop group). Legacy keys `character_sheet` / `prop_sheet` / `alter_character_sheet` are
+ * valid group keys under the new scheme (no migration). NEVER whitelist the keys — every key is a
+ * valid group (the normalize whitelist footgun, ADR-047 class bug).
  */
-export function sketchEntitiesOfKind<T extends { actor_role?: ActorRole }>(
-  sketch: { characters: T[]; props: T[] },
-  kind: BaseKind,
-): T[] {
-  return filterEntitiesOfKind(sketch[KIND_ENTITY_SOURCE[kind].collection] ?? [], kind);
-}
-
-/** Does this entity belong to `kind`? (`props` has no role split → always true.) Pure. */
-export function isEntityOfKind(entity: { actor_role?: ActorRole }, kind: BaseKind): boolean {
-  const { actorRole } = KIND_ENTITY_SOURCE[kind];
-  return actorRole === undefined || (entity.actor_role ?? 0) === actorRole;
-}
-
-/**
- * The subset of a raw collection belonging to `kind`. Returns the INPUT REF untouched when the
- * kind has no role split (`props`) — keeps selector/memo identity stable. Generic so immer
- * `Draft<SketchEntity>[]` callers (the slice) reuse it. Pure.
- */
-export function filterEntitiesOfKind<T extends { actor_role?: ActorRole }>(
-  entities: T[],
-  kind: BaseKind,
-): T[] {
-  const { actorRole } = KIND_ENTITY_SOURCE[kind];
-  if (actorRole === undefined) return entities;
-  return entities.filter((e) => (e.actor_role ?? 0) === actorRole);
-}
+export type SketchBase = Record<string, SketchBaseSheet>;
 
 // ── Lineup wire vocabulary (UI knows 3 kinds · the snapshot stores 2) ─────────────────────────
 // The rtype-12 `sketch.lineups[].entries[].kind` vocabulary is the two REAL collections
@@ -240,18 +252,17 @@ export function filterEntitiesOfKind<T extends { actor_role?: ActorRole }>(
 // where a UI `BaseKind` is narrowed to that vocabulary; both the selector that mints view rows
 // and `toTabEntry`/`refOf` (lineup-constants) go through them, so the two can never drift.
 
-/** kind → the `kind` value persisted in a lineup entry. An alter persists as `characters` (it IS
- *  a `characters[]` member); the alter/story split is re-derived from `actor_role` at read time,
- *  NEVER from the stored kind. */
-export function lineupPersistKind(kind: BaseKind): BaseEntityCollection {
-  return KIND_ENTITY_SOURCE[kind].collection;
+/** ⚡REV 2026-08-21 — the lineup persist vocabulary is now exactly `SheetKind` (identity). Kept for
+ *  the existing import sites. @deprecated pass a `SheetKind` straight to `lineupEntryRef`. */
+export function lineupPersistKind(kind: SheetKind): BaseEntityCollection {
+  return kind;
 }
 
-/** Canonical lineup ref (identity of a row AND of its persisted entry). Minted in the PERSIST
- *  vocabulary so a checked alter row still matches its stored entry after a reload — entity keys
- *  are unique across a whole collection, so an alter can never collide with a story character. */
-export function lineupEntryRef(kind: BaseKind, entityKey: string, variantKey: string): string {
-  return `${lineupPersistKind(kind)}:@${entityKey}/${variantKey}`;
+/** Canonical lineup ref (identity of a row AND of its persisted entry). Entity keys are unique
+ *  within a collection, so the `SheetKind` prefix keeps a character `armor/base` from colliding
+ *  with a prop `armor/base`. */
+export function lineupEntryRef(kind: SheetKind, entityKey: string, variantKey: string): string {
+  return `${kind}:@${entityKey}/${variantKey}`;
 }
 
 /** Projection of the 'base' variant text (EditBaseEntityModal + crop labels). */
@@ -263,10 +274,10 @@ export interface BaseEntityText {
   art_language: string;                         // editable
 }
 
-/** Sheet accessor for a base kind (single source — reused by slice + selectors). Reads
- *  `BASE_SHEET_ID` so there is exactly ONE kind→sheet mapping in the codebase. */
-export function sheetOf(base: SketchBase, kind: BaseKind): SketchBaseSheet {
-  return base[BASE_SHEET_ID[kind]];
+/** ⚡REV 2026-08-21 — sheet accessor by GROUP KEY (single source — reused by slice + selectors +
+ *  save policy). Returns `undefined` when the group has no base node yet (the write paths seed it). */
+export function sheetOf(base: SketchBase, groupKey: string): SketchBaseSheet | undefined {
+  return base[groupKey];
 }
 
 /** 7 fields, 1-1 with the real Storyboard template rows (2026-07-20). `action` merges the

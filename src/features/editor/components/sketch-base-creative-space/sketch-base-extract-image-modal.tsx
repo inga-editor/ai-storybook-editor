@@ -48,7 +48,7 @@ export interface SketchBaseExtractImageModalProps {
 }
 
 export function SketchBaseExtractImageModal({ target, onClose, saveResource }: SketchBaseExtractImageModalProps) {
-  const styles = useSketchBaseStyles(target.kind);
+  const styles = useSketchBaseStyles(target.group);
   const { setSketchBaseCropIllustrations } = useSnapshotActions();
   const presets = useCropPresetManager();
 
@@ -61,17 +61,17 @@ export function SketchBaseExtractImageModal({ target, onClose, saveResource }: S
     (results: ExtractResult[]) => {
       if (results.length === 0) return;
       log.info('handleCreate', 'append extracted base-crop versions', {
-        kind: target.kind,
+        group: target.group,
         styleIndex: target.styleIndex,
         entityKey: target.entityKey,
         count: results.length,
       });
       // Crop tab = CV cut (no AI provider call) → no ai_request_id provenance to carry.
       const next = appendMediaVersions(illustrations, results.map((r) => ({ media_url: r.media_url })));
-      setSketchBaseCropIllustrations(target.kind, target.styleIndex, target.entityKey, next);
+      setSketchBaseCropIllustrations(target.group, target.styleIndex, target.entityKey, next);
       // LOCKED style → the setter re-cloned this crop into the entity's base variant (grain B,
-      // rtype 3/4) — flush that entity now; the sheet release-save only covers grain A.
-      void persistBaseEntityCloneIfLocked(target.kind, target.styleIndex, target.entityKey);
+      // rtype 14) — flush that entity collection now; the sheet release-save only covers grain A.
+      void persistBaseEntityCloneIfLocked(target.group, target.styleIndex, target.entityKey);
     },
     [illustrations, target, setSketchBaseCropIllustrations],
   );
@@ -80,7 +80,7 @@ export function SketchBaseExtractImageModal({ target, onClose, saveResource }: S
   if (!crop) return null;
 
   const image: SpreadImage = {
-    id: `sketch-base-crop-${target.kind}-${target.styleIndex}-${target.entityKey}`,
+    id: `sketch-base-crop-${target.group}-${target.styleIndex}-${target.entityKey}`,
     title: titleCase(target.entityKey),
     geometry: FULL_FRAME,
     media_url: effectiveUrl(illustrations),

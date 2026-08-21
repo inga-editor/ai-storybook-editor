@@ -1,7 +1,8 @@
 // generate-stage-style-modal.tsx — Compact "Generate: Style N — @{stageKey}" dialog (design 03).
 // Art-style picker (type=0, default book.sketchstyle_id) + that style's reference-image grid
-// (pick 1..3 STYLE anchors) + prompt textarea → enqueues a stage base-sheet generate (API 11 →
-// auto-cut 10), then closes IMMEDIATELY. Used for `add` (append a style attempt) and `regenerate`.
+// (pick 1..3 STYLE anchors) + an OPTIONAL prompt textarea → enqueues a stage base-sheet generate
+// (API 11 → auto-cut 10), then closes IMMEDIATELY. Used for `add` (append a style attempt) and
+// `regenerate`. Generate is gated on a style + ≥1 reference + base text ready (NOT the prompt).
 //
 // Mirror of the base space's generate-style-modal with TWO stage deltas:
 //   • scope = ONE stage (not a whole kind) — the sheet is 2 cells of THIS stage;
@@ -125,9 +126,10 @@ export function GenerateStageStyleModal({
     });
   }, []);
 
+  // Prompt is OPTIONAL — the aesthetic comes from the chosen style + reference images. Gate on a
+  // style + ≥1 reference + the stage's base text being ready.
   const canGenerate =
     !isSubmitting &&
-    prompt.trim().length > 0 &&
     !!selectedStyleId &&
     selectedRefs.length >= 1 &&
     baseTextReady &&
@@ -137,7 +139,6 @@ export function GenerateStageStyleModal({
     if (!canGenerate || !selectedStyleId) {
       log.debug('handleGenerate', 'blocked — gate not met', {
         stageKey,
-        hasPrompt: prompt.trim().length > 0,
         hasArtStyle: !!selectedStyleId,
         refCount: selectedRefs.length,
         baseTextReady,
@@ -199,7 +200,7 @@ export function GenerateStageStyleModal({
             Generate: Style {styleNumber} — @{stageKey}
           </DialogTitle>
           <DialogDescription className="sr-only">
-            Pick an art style and reference images, enter a prompt, then generate the 2-option stage sheet.
+            Pick an art style and reference images, optionally enter a prompt, then generate the 2-option stage sheet.
           </DialogDescription>
         </DialogHeader>
 
@@ -270,7 +271,7 @@ export function GenerateStageStyleModal({
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor="stage-style-prompt">Prompt</Label>
+          <Label htmlFor="stage-style-prompt">Prompt <span className="font-normal text-muted-foreground">(optional)</span></Label>
           <Textarea
             id="stage-style-prompt"
             value={prompt}

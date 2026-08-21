@@ -1,7 +1,7 @@
 // sketch-variants-creative-space.tsx — root of the Variant creative space (design README §2). ONE
-// space for ALL kinds (character + prop + alter-character non-base variants) — NO `kind` prop. An
-// alter is a `characters[]` entity (`actor_role === 1`), so it reuses the rtype-3 entity lock and
-// the `characters` grant; only its sidebar GROUP is separate. Owns the local UI
+// space for ALL base groups (every character/prop group's non-base variants) — NO `kind` prop. An
+// entity's group comes from `entity.group` (resolveEntityGroup); a character-kind group reuses the
+// rtype-3 entity lock and the `characters` grant; only its sidebar GROUP is separate. Owns the local UI
 // state (selected variant, active tab, zoom, expanded groups, the two overlay-modal states, the
 // regenerate-confirm target) and DERIVES the effective selection in RENDER (React 19: NO
 // useEffect+setState, NO ref read/write in render body).
@@ -34,8 +34,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import { useSnapshotStore } from '@/stores/snapshot-store';
 import {
-  useStoryCharacters,
-  useAlterCharacters,
+  useSketchBaseGroups,
   useSketchKindEntities,
   useSketchVariantByKey,
   useVariantSheetGenerateOps,
@@ -63,18 +62,17 @@ import {
   type ActiveLockEntity,
 } from './use-variant-entity-lock-session';
 import { CANVAS_CONFIRM_DIALOG_Z } from '@/constants/spread-constants';
-import type { BaseKind, SketchEntity, VariantRef } from '@/types/sketch';
-import { KIND_ENTITY_SOURCE } from '@/types/sketch';
+import type { BaseGroup, SketchEntity, VariantRef } from '@/types/sketch';
+import { resolveEntityGroup } from '@/types/sketch';
 import type { SaveResourceDirective } from '@/types/save-resource';
 import { buildImageVersionSaveResource } from '@/utils/save-resource-path';
 import { createLogger } from '@/utils/logger';
-import { VariantKindSidebar } from './variant-kind-sidebar';
+import { VariantGroupSidebar } from './variant-group-sidebar';
 import { VariantSheetContentArea } from './variant-sheet-content-area';
 import { EditVariantModal } from './edit-variant-modal';
 import { VariantEditImageModal } from './variant-edit-image-modal';
 import { VariantExtractImageModal } from './variant-extract-image-modal';
 import {
-  KIND_GROUPS,
   ZOOM,
   isBlank,
   isVariantPicked,
@@ -87,10 +85,13 @@ import {
 
 const log = createLogger('Editor', 'SketchVariantsCreativeSpace');
 
-/** Every non-base variant of a kind's entities → VariantRef[] (DRY: refs + gate share the source). */
-function nonBaseRefs(kind: BaseKind, entities: SketchEntity[]): VariantRef[] {
+/** Every non-base variant of a group's entities → VariantRef[] (DRY: refs + gate share the source).
+ *  The ref carries the group's `group_key` + `kind` (the group's kind — also the collection). */
+function nonBaseRefs(group: BaseGroup, entities: SketchEntity[]): VariantRef[] {
   return entities.flatMap((e) =>
-    e.variants.filter((v) => v.key !== 'base').map((v) => ({ kind, entityKey: e.key, variantKey: v.key })),
+    e.variants
+      .filter((v) => v.key !== 'base')
+      .map((v) => ({ group: group.group_key, kind: group.kind, entityKey: e.key, variantKey: v.key })),
   );
 }
 
@@ -100,12 +101,11 @@ export function SketchVariantsCreativeSpace() {
   useCollabPersistSession(bookId);
   useContentSyncSession(bookId);
 
-  // Full entities per KIND — the source for BOTH the row refs AND the reactive gate.
-  // ⚡ 2026-07-28: `characters` is the STORY cast only; alters are their own kind (they share
-  // `characters[]` but must never be mixed into the story rows) and render in their own group.
-  const charEntities = useStoryCharacters();
+  // ⚡REV 2026-08-21 — DYNAMIC base groups (character groups first, then prop groups). The sidebar,
+  // the per-group ref lists AND the reactive gate all derive from these + the two raw entity arrays.
+  const groups = useSketchBaseGroups();
+  const charEntities = useSketchKindEntities('characters');
   const propEntities = useSketchKindEntities('props');
-  const alterEntities = useAlterCharacters();
   // In-flight ops keyed by variant — drives the per-row spinners (many rows can be busy at once,
   // across both kinds) + the content-area busy state.
   const ops = useVariantSheetGenerateOps();
@@ -117,11 +117,9 @@ export function SketchVariantsCreativeSpace() {
   const [selectedVariant, setSelectedVariant] = useState<VariantRef | null>(null);
   const [activeTab, setActiveTab] = useState<'raw' | 'crop'>('raw');
   const [zoom, setZoom] = useState<number>(ZOOM.default);
-  const [expandedGroups, setExpandedGroups] = useState<Record<BaseKind, boolean>>({
-    characters: true,
-    props: true,
-    alter_characters: true,
-  });
+  // Collapse state keyed by group_key. A group with no entry defaults to EXPANDED in the sidebar
+  // (`?? true`), so new/legacy groups appear open without pre-seeding every key here.
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
   const [editingVariant, setEditingVariant] = useState<VariantRef | null>(null);
   const [editImageTarget, setEditImageTarget] = useState<EditImageTarget | null>(null);
   const [extractImageTarget, setExtractImageTarget] = useState<ExtractImageTarget | null>(null);
@@ -129,28 +127,32 @@ export function SketchVariantsCreativeSpace() {
   // already has crops (user-locked: confirm every time, guards losing the pick + per-cell edits).
   const [pendingRegenerate, setPendingRegenerate] = useState<VariantRef | null>(null);
 
-  /** Entities by kind — the ONLY way to go from a ref's `kind` to its entity set (a
-   *  `kind === 'characters' ? … : …` ternary would send alter refs to the props list). */
-  const entitiesByKind = useMemo<Record<BaseKind, SketchEntity[]>>(
-    () => ({ characters: charEntities, props: propEntities, alter_characters: alterEntities }),
-    [charEntities, propEntities, alterEntities],
-  );
+  /** Entities per GROUP — the ONLY way to go from a ref's `group` to its entity set. Built once from
+   *  the two raw arrays + the group descriptors (each entity filtered to its `group_key`). */
+  const entitiesByGroup = useMemo<Record<string, SketchEntity[]>>(() => {
+    const map: Record<string, SketchEntity[]> = {};
+    for (const g of groups) {
+      const src = g.kind === 'props' ? propEntities : charEntities;
+      map[g.group_key] = src.filter((e) => resolveEntityGroup(e, g.kind) === g.group_key);
+    }
+    return map;
+  }, [groups, charEntities, propEntities]);
 
-  // Row refs per kind (non-base), derived from the subscribed entities.
-  const refsByKind = useMemo<Record<BaseKind, VariantRef[]>>(
-    () => ({
-      characters: nonBaseRefs('characters', charEntities),
-      props: nonBaseRefs('props', propEntities),
-      alter_characters: nonBaseRefs('alter_characters', alterEntities),
-    }),
-    [charEntities, propEntities, alterEntities],
-  );
-  // DERIVED from KIND_GROUPS (never a hand-written concat): selection falls back to `allRefs[0]`,
+  // Row refs per GROUP (non-base), derived from the per-group entity sets.
+  const refsByGroup = useMemo<Record<string, VariantRef[]>>(() => {
+    const map: Record<string, VariantRef[]> = {};
+    for (const g of groups) {
+      map[g.group_key] = nonBaseRefs(g, entitiesByGroup[g.group_key] ?? []);
+    }
+    return map;
+  }, [groups, entitiesByGroup]);
+
+  // DERIVED from the group order (never a hand-written concat): selection falls back to `allRefs[0]`,
   // so a row present here but absent from the sidebar would select something the user cannot see —
   // and a row in the sidebar but absent here could never be selected at all.
   const allRefs = useMemo(
-    () => KIND_GROUPS.flatMap((g) => refsByKind[g.kind]),
-    [refsByKind],
+    () => groups.flatMap((g) => refsByGroup[g.group_key] ?? []),
+    [groups, refsByGroup],
   );
 
   // Derive the effective selection in RENDER (React 19: never set state in render): keep the user's
@@ -189,7 +191,7 @@ export function SketchVariantsCreativeSpace() {
   // from the BASE_VARIANT; backend dropped artStyleId) → gate = BASE_NOT_READY + EMPTY_VARIANT_DESCRIPTION.
   const gateByRef = useCallback(
     (ref: VariantRef): VariantGate => {
-      const entities = entitiesByKind[ref.kind];
+      const entities = entitiesByGroup[ref.group] ?? [];
       const entity = entities.find((e) => e.key === ref.entityKey);
       const base = entity?.variants.find((v) => v.key === 'base');
       if (!base?.raw_sheet?.crops?.some((c) => c.is_selected)) {
@@ -203,20 +205,20 @@ export function SketchVariantsCreativeSpace() {
       }
       return { canGenerate: true };
     },
-    [entitiesByKind],
+    [entitiesByGroup],
   );
 
   // "Chốt" (finalized) status per row — reactive off the subscribed entities, same as gateByRef.
   // Drives the sidebar 🔒/🔓 glyph; read-only (the pick itself lives in the content-area crop tab).
   const pickedByRef = useCallback(
     (ref: VariantRef): boolean => {
-      const entities = entitiesByKind[ref.kind];
+      const entities = entitiesByGroup[ref.group] ?? [];
       const variant = entities
         .find((e) => e.key === ref.entityKey)
         ?.variants.find((v) => v.key === ref.variantKey);
       return isVariantPicked(variant);
     },
-    [entitiesByKind],
+    [entitiesByGroup],
   );
 
   // ── Per-entity save session (lockless) — binds to the SELECTED entity; the hook begins it 'held'
@@ -236,8 +238,9 @@ export function SketchVariantsCreativeSpace() {
     setActiveTab('raw');
   }, []);
 
-  const handleToggleGroup = useCallback((kind: BaseKind) => {
-    setExpandedGroups((prev) => ({ ...prev, [kind]: !prev[kind] }));
+  const handleToggleGroup = useCallback((group: string) => {
+    // Missing entry ⇒ currently expanded (sidebar `?? true`) → toggling first collapses it.
+    setExpandedGroups((prev) => ({ ...prev, [group]: prev[group] === undefined ? false : !prev[group] }));
   }, []);
 
   // Edit text: select the entity (→ session target) + open the modal.
@@ -293,7 +296,7 @@ export function SketchVariantsCreativeSpace() {
   // ✨ entry: variant already has crops → confirm EVERY time (guards pick/edit); empty → straight.
   const handleGenerate = useCallback(
     (ref: VariantRef) => {
-      const entities = entitiesByKind[ref.kind];
+      const entities = entitiesByGroup[ref.group] ?? [];
       const variant = entities
         .find((e) => e.key === ref.entityKey)
         ?.variants.find((v) => v.key === ref.variantKey);
@@ -309,7 +312,7 @@ export function SketchVariantsCreativeSpace() {
       }
       doGenerate(ref);
     },
-    [entitiesByKind, doGenerate],
+    [entitiesByGroup, doGenerate],
   );
 
   const confirmRegenerate = useCallback(() => {
@@ -346,6 +349,7 @@ export function SketchVariantsCreativeSpace() {
         cropIndex,
       });
       setEditImageTarget({
+        group: selected.group,
         kind: selected.kind,
         entityKey: selected.entityKey,
         variantKey: selected.variantKey,
@@ -386,6 +390,7 @@ export function SketchVariantsCreativeSpace() {
       variantKey: selected.variantKey,
     });
     setEditImageTarget({
+      group: selected.group,
       kind: selected.kind,
       entityKey: selected.entityKey,
       variantKey: selected.variantKey,
@@ -396,15 +401,13 @@ export function SketchVariantsCreativeSpace() {
   // === Phase 04: opt-in saveResource for the Edit path (Raw sheet | one positional crop) ===
   // Anchor = the variant node under its entity: raw → `key:raw_sheet` (char/prop wrap the sheet);
   // crop → that variant's positional crop (`key:crops/idx`).
-  // ⚡ The path segment is the REAL COLLECTION, not the UI kind: `alter_characters` is not a
-  // snapshot key, so interpolating `kind` would anchor at a node that does not exist (the save
-  // would no-op / 404 while the UI reported success).
+  // ⚡REV 2026-08-21 — the path segment is the REAL COLLECTION, which for a variant IS its `kind`
+  // (`characters` | `props`); no UI-only kind remains to remap.
   // Undefined snapshot ⇒ omit. (Extract crop = RESERVED — see the modal mount below.)
   const editImageSaveResource = useMemo<SaveResourceDirective | undefined>(() => {
     if (!snapshotId || !editImageTarget) return undefined;
     const t = editImageTarget;
-    const collection = KIND_ENTITY_SOURCE[t.kind].collection;
-    const variantRoot = `col:sketch/key:${collection}/find:key=${t.entityKey}/key:variants/find:key=${t.variantKey}`;
+    const variantRoot = `col:sketch/key:${t.kind}/find:key=${t.entityKey}/key:variants/find:key=${t.variantKey}`;
     const path =
       t.scope === 'raw'
         ? `${variantRoot}/key:raw_sheet`
@@ -418,9 +421,9 @@ export function SketchVariantsCreativeSpace() {
 
   return (
     <main className="flex h-full" role="main" aria-label="Sketch variant creative space">
-      <VariantKindSidebar
-        groups={KIND_GROUPS}
-        refsByKind={refsByKind}
+      <VariantGroupSidebar
+        groups={groups}
+        refsByGroup={refsByGroup}
         selectedVariant={selected}
         expandedGroups={expandedGroups}
         genStatusByRef={genStatusByRef}

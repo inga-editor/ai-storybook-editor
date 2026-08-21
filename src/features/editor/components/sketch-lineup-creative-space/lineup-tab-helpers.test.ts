@@ -1,13 +1,15 @@
 // Pure multi-tab helpers (2026-07-25): ref minting, payload builders (the exact entries[] each
 // write hands the store), and the deterministic default tab name. No React/jsdom needed.
+//
+// ⚡REV 2026-08-21 — DYNAMIC GROUPS: the sidebar is N groups (useSketchBaseGroups), not a fixed
+// 3-kind list. The old `KIND_GROUPS`/`LINEUP_WIRED_KINDS`/`ALL_KINDS` seams and the
+// alter→characters narrowing are gone. A group's `kind` (`characters` | `props`) IS the persist
+// vocabulary, so these tests pin that the grant key is the kind itself AND that the rtype-12 wire
+// vocabulary is STILL the two real collections (never widened).
 import { describe, it, expect } from 'vitest';
-import type { BaseKind, LineupEntry, SketchLineupEntry, SketchLineupTab } from '@/types/sketch';
-import { lineupEntryRef, lineupPersistKind } from '@/types/sketch';
+import type { LineupEntry, SheetKind, SketchLineupEntry, SketchLineupTab } from '@/types/sketch';
+import { lineupEntryRef } from '@/types/sketch';
 import {
-  ALL_KINDS,
-  DEFAULT_EXPANDED_GROUPS,
-  KIND_GROUPS,
-  LINEUP_WIRED_KINDS,
   buildCleanupEntries,
   buildToggleAllEntries,
   buildToggleEntries,
@@ -16,59 +18,31 @@ import {
   refOf,
   toTabEntry,
 } from './lineup-constants';
-import { KIND_GROUPS as BASE_KIND_GROUPS } from '../sketch-base-creative-space/sketch-base-constants';
 import { LINEUP_ENTRY_KINDS } from '@/stores/snapshot-store/slices/sketch-coerce-helpers';
 import { STEP_RESOURCES } from '../collaborators-creative-space/collaboration-space-types';
 
-// The lineup sidebar used to re-export the BASE space's KIND_GROUPS verbatim, so adding the third
-// base group (Alter Character, 2026-07-28) silently rendered an alter group HERE too — ungranted
-// even for the book owner, and excluded from `allEntries`, i.e. a group that shows a false "no edit
-// rights" message and silently drops whatever is checked in it. Phase 07 wired the kind for real:
-// these tests now pin that EVERY seam moved together, and that the wire vocabulary did NOT.
-describe('lineup KIND_GROUPS — only kinds this space has fully wired', () => {
-  it('renders exactly the wired kinds, alter INCLUDED and LAST (base-space order)', () => {
-    expect(LINEUP_WIRED_KINDS).toContain('alter_characters');
-    expect(KIND_GROUPS.map((g) => g.kind)).toEqual(['characters', 'props', 'alter_characters']);
-    // Derived from the base groups (not a second hand-written list) → order can never drift.
-    expect(KIND_GROUPS.map((g) => g.kind)).toEqual(
-      BASE_KIND_GROUPS.filter((g) => LINEUP_WIRED_KINDS.includes(g.kind)).map((g) => g.kind),
-    );
+const LINEUP_KINDS: SheetKind[] = ['characters', 'props'];
+
+describe('lineup grant keys + wire vocabulary (dynamic groups)', () => {
+  it('grantKeyOf is the kind itself — a REAL collaborator grant key (STEP_RESOURCES.sketch)', () => {
+    // The grant key is a key of `access_rights.steps.sketch.resources`. An unknown key silently
+    // reads `undefined` → the group greys out for every collaborator.
+    for (const kind of LINEUP_KINDS) {
+      expect(grantKeyOf(kind)).toBe(kind);
+      expect(STEP_RESOURCES.sketch).toContain(grantKeyOf(kind));
+    }
   });
 
-  it('ALL_KINDS (what the OWNER may edit) covers every rendered group', () => {
-    // A group missing here renders "You do not have edit rights" TO THE BOOK OWNER.
-    for (const g of KIND_GROUPS) expect(ALL_KINDS.has(g.kind)).toBe(true);
-    expect(ALL_KINDS.size).toBe(KIND_GROUPS.length);
-  });
-
-  it('every rendered group PERSISTS as a kind the entry coercer keeps on reload', () => {
-    // A group whose PERSIST kind is missing from LINEUP_ENTRY_KINDS would let the user check rows
-    // that vanish on the next snapshot load. Note the asymmetry: the UI knows 3 kinds, the wire
-    // vocabulary stays 2 — so this is asserted through `lineupPersistKind`, not on `g.kind`.
-    for (const g of KIND_GROUPS) expect(LINEUP_ENTRY_KINDS).toContain(lineupPersistKind(g.kind));
+  it('the rtype-12 wire vocabulary is the two real collections — NOT widened', () => {
+    // Every group PERSISTS its kind verbatim; that kind must be one the entry coercer keeps on
+    // reload, or checked rows would vanish on the next snapshot load.
+    for (const kind of LINEUP_KINDS) expect(LINEUP_ENTRY_KINDS).toContain(kind);
     expect(LINEUP_ENTRY_KINDS).toEqual(['characters', 'props']); // NOT widened
     expect(LINEUP_ENTRY_KINDS).not.toContain('alter_characters');
   });
-
-  it('every rendered group has an expand-state key and a REAL collaborator grant key', () => {
-    // The grant key is a key of `access_rights.steps.sketch.resources` — a DIFFERENT vocabulary
-    // from LINEUP_ENTRY_KINDS (they only happen to overlap). An unknown key silently reads
-    // `undefined` → the group greys out for every collaborator.
-    for (const g of KIND_GROUPS) {
-      expect(DEFAULT_EXPANDED_GROUPS[g.kind]).toBe(true);
-      expect(STEP_RESOURCES.sketch).toContain(grantKeyOf(g.kind));
-    }
-    expect(grantKeyOf('alter_characters')).toBe('characters'); // alter rides the characters grant
-  });
-
-  it('reuses the base labels (no drift between the two sidebars)', () => {
-    for (const g of KIND_GROUPS) {
-      expect(g).toEqual(BASE_KIND_GROUPS.find((b) => b.kind === g.kind));
-    }
-  });
 });
 
-const view = (kind: BaseKind, entityKey: string, variantKey = 'base', over: Partial<LineupEntry> = {}): LineupEntry => ({
+const view = (kind: SheetKind, entityKey: string, variantKey = 'base', over: Partial<LineupEntry> = {}): LineupEntry => ({
   kind,
   entityKey,
   variantKey,
@@ -78,7 +52,7 @@ const view = (kind: BaseKind, entityKey: string, variantKey = 'base', over: Part
   ...over,
 });
 
-const persisted = (kind: 'characters' | 'props', entity_key: string, variant_key = 'base'): SketchLineupEntry => ({
+const persisted = (kind: SheetKind, entity_key: string, variant_key = 'base'): SketchLineupEntry => ({
   kind,
   entity_key,
   variant_key,
@@ -92,63 +66,28 @@ describe('refOf / toTabEntry', () => {
     expect(refOf(toTabEntry(v))).toBe(v.ref);
   });
 
-  it('kind qualifies the ref — same entity/variant key across kinds never collides', () => {
-    expect(refOf(persisted('characters', 'armor'))).not.toBe(refOf(persisted('props', 'armor')));
-  });
-});
-
-// ── UI knows 3 kinds · the snapshot stores 2 ────────────────────────────────────────────────────
-// The rtype-12 vocabulary is `LINEUP_ENTRY_KINDS` = ['characters','props']. Writing the UI kind
-// would make the coercer DROP the entry on the next load (silent data loss); minting the ref from
-// the UI kind would make a checked alter row stop matching its own persisted entry after reload.
-describe('alter characters — persist as `characters`, still group as alter', () => {
-  it('toTabEntry narrows alter_characters → characters (wire vocabulary)', () => {
-    expect(toTabEntry(view('alter_characters', 'elara_alt', 'fairy'))).toEqual({
+  it('toTabEntry carries the group kind straight through (no narrowing)', () => {
+    expect(toTabEntry(view('props', 'wand', 'lit'))).toEqual({
+      kind: 'props',
+      entity_key: 'wand',
+      variant_key: 'lit',
+    });
+    expect(toTabEntry(view('characters', 'elara'))).toEqual({
       kind: 'characters',
-      entity_key: 'elara_alt',
-      variant_key: 'fairy',
+      entity_key: 'elara',
+      variant_key: 'base',
     });
   });
 
-  it('every kind the UI can render persists to a value the coercer keeps', () => {
-    for (const kind of LINEUP_WIRED_KINDS) {
-      expect(LINEUP_ENTRY_KINDS).toContain(toTabEntry(view(kind, 'e')).kind);
-    }
+  it('kind qualifies the ref — same entity/variant key across kinds never collides', () => {
+    expect(refOf(persisted('characters', 'armor'))).not.toBe(refOf(persisted('props', 'armor')));
+    expect(view('characters', 'armor').ref).not.toBe(view('props', 'armor').ref);
   });
 
-  it('an alter ROW and its PERSISTED entry resolve to the SAME ref (survives a reload)', () => {
-    const row = view('alter_characters', 'elara_alt', 'fairy');
-    expect(row.ref).toBe('characters:@elara_alt/fairy'); // minted in the PERSIST vocabulary
+  it('a checked row and its persisted entry resolve to the SAME ref (survives a reload)', () => {
+    const row = view('characters', 'elara', 'fairy');
+    expect(row.ref).toBe('characters:@elara/fairy');
     expect(refOf(toTabEntry(row))).toBe(row.ref);
-  });
-
-  it('unchecking an alter row removes it (ref match), instead of appending a duplicate', () => {
-    const row = view('alter_characters', 'elara_alt');
-    const base = buildToggleEntries([], row, true);
-    expect(base).toEqual([{ kind: 'characters', entity_key: 'elara_alt', variant_key: 'base' }]);
-    expect(buildToggleEntries(base, row, false)).toEqual([]);
-  });
-
-  it('select-all does not re-add an already-checked alter row (no duplicate member)', () => {
-    const alter = view('alter_characters', 'elara_alt');
-    const prop = view('props', 'wand');
-    const base = [toTabEntry(alter)];
-    expect(buildToggleAllEntries(base, [alter, prop], true)).toEqual([
-      toTabEntry(alter),
-      toTabEntry(prop),
-    ]);
-  });
-
-  it('cleanup keeps an alter member that still resolves to a selectable row', () => {
-    const alter = view('alter_characters', 'elara_alt');
-    expect(buildCleanupEntries([toTabEntry(alter)], [alter])).toEqual([toTabEntry(alter)]);
-  });
-
-  it('a story character and an alter never share a ref (entity keys are unique in the array)', () => {
-    expect(view('characters', 'elara').ref).not.toBe(view('alter_characters', 'elara_alt').ref);
-    // …but the two kinds DO share the prefix — that is the point: the wire cannot tell them apart,
-    // the entity key can, and the alter/story split is re-derived from `actor_role` on read.
-    expect(view('alter_characters', 'x').ref.startsWith('characters:')).toBe(true);
   });
 });
 

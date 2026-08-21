@@ -15,6 +15,7 @@
 
 import { createLogger } from '@/utils/logger';
 import { useSnapshotStore } from '@/stores/snapshot-store';
+import { deriveSheetKindFromKey } from '@/types/sketch';
 import { useEditSessionStatusStore } from '@/stores/edit-session-status-store';
 import { isSketchWriteBlocked } from '@/stores/resource-lock-store';
 import { SAVE_POLICIES } from './save-policies';
@@ -32,16 +33,22 @@ export const IDLE_SWEEP_TICK_MS = 15_000;
  * itself at the end of its chain). If the idle sweep fired the rtype-14 session's whole-array save
  * WHILE that job is mid-flight, it could race the job's in-progress clone writes (last-writer-wins on
  * the WHOLE array). So the sweep SKIPS a `sketch-base-entities` session whose collection has a base
- * generate op running. The flag source is the job slice's running-state read DIRECTLY (no new state
- * in the save-session-store). Collection → base kinds: `characters` covers both `characters` and the
- * `alter_characters` kind (both persist into `sketch.characters[]`); `props` covers `props`; `stages`
- * has no base generate op (its rtype-14 session is import-only, one-shot — never a mounted session).
+ * generate op running.
+ *
+ * ⚡REV 2026-08-21 (group model): base generate ops are keyed by GROUP KEY, N groups per collection.
+ * A collection is "busy" iff ANY running op belongs to a group of that collection's kind — read from
+ * the op's `group` (`base[group].kind`, else derived from the key). `characters` covers every
+ * character group (whatever its key); `props` covers every prop group; `stages` has no base generate.
  */
 function baseGenerateRunningForCollection(collection: string): boolean {
-  const ops = useSnapshotStore.getState().baseSheetGenerateOps;
-  if (collection === 'characters') return ops.characters != null || ops.alter_characters != null;
-  if (collection === 'props') return ops.props != null;
-  return false;
+  if (collection !== 'characters' && collection !== 'props') return false;
+  const state = useSnapshotStore.getState();
+  const base = state.sketch.base;
+  return Object.keys(state.baseSheetGenerateOps).some((group) => {
+    if (state.baseSheetGenerateOps[group] == null) return false;
+    const kind = base[group]?.kind ?? deriveSheetKindFromKey(group);
+    return kind === collection;
+  });
 }
 
 type GetState = () => SaveSessionState;

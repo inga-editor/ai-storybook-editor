@@ -67,27 +67,16 @@ export type {
 
 const log = createLogger('Store', 'SketchNormalize');
 
-/** Fresh empty base workspace (3 sheets: character + prop + alter character, no styles).
- *  ⚡ 2026-07-28: a snapshot written before the alter feature has NO `alter_character_sheet` —
- *  it defaults here (ABSENT, not an anomaly), so the base space never reads `undefined.styles`. */
+/** ⚡REV 2026-08-21 — an empty base workspace is an EMPTY MAP (dynamic group keys; no fixed sheets).
+ *  A new book simply has no groups yet — the base space never reads `undefined.styles` because
+ *  every access seeds a node on write. */
 export function emptyBase(): SketchBase {
-  return {
-    character_sheet: { styles: [] },
-    prop_sheet: { styles: [] },
-    alter_character_sheet: { styles: [] },
-  };
+  return {};
 }
 
-/** The 3 base sheets, in the order they are reported/reset. Single source for the loops below. */
-const SHEET_RESOURCES = [
-  'base.character_sheet',
-  'base.prop_sheet',
-  'base.alter_character_sheet',
-] as const;
-type SheetResource = (typeof SHEET_RESOURCES)[number];
-/** `base.character_sheet` → `character_sheet` (the `SketchBase` member it normalizes into). */
-const sheetMemberOf = (resource: SheetResource) =>
-  resource.slice('base.'.length) as keyof SketchBase;
+/** The `base.<groupKey>` resource key for one group (dynamic — every key is a valid group). */
+const sheetResourceOf = (groupKey: string): SketchResourceKey =>
+  `base.${groupKey}` as SketchResourceKey;
 
 export const DEFAULT_SKETCH: Sketch = {
   id: null,
@@ -135,6 +124,18 @@ function safeResource<T>(
   }
 }
 
+/** Build a sheet node from a raw object, carrying `kind`/`name` PRESENCE-GATED (legacy nodes have
+ *  neither → derived on read; new nodes keep them). Never invents kind/name (no JSONB churn). */
+function sheetNode(
+  raw: Record<string, unknown>,
+  styles: SketchBaseSheet['styles'],
+): SketchBaseSheet {
+  const node: SketchBaseSheet = { styles };
+  if (raw.kind === 'characters' || raw.kind === 'props') node.kind = raw.kind;
+  if (typeof raw.name === 'string') node.name = raw.name;
+  return node;
+}
+
 /**
  * A raw sheet blob → SketchBaseSheet.
  *
@@ -151,7 +152,7 @@ function safeResource<T>(
  */
 function normalizeSheet(
   raw: unknown,
-  resource: SheetResource,
+  resource: SketchResourceKey,
   onAnomaly: SketchAnomalyReporter,
 ): SketchBaseSheet {
   if (raw == null) return { styles: [] }; // legitimately new — no anomaly
@@ -180,8 +181,8 @@ function normalizeSheet(
   }
 
   const styles = raw.styles;
-  if (Array.isArray(styles)) return { styles: styles as SketchBaseSheet['styles'] }; // keep as-is
-  if (styles == null) return { styles: [] }; // sheet exists but has no style yet — legitimate
+  if (Array.isArray(styles)) return sheetNode(raw, styles as SketchBaseSheet['styles']); // keep as-is
+  if (styles == null) return sheetNode(raw, []); // sheet exists but has no style yet — legitimate
 
   // An object-map of styles (`{"0":{…},"1":{…}}`) is a REAL risk here, not a hypothetical: sketch
   // subtrees are written positionally through the collab gateway (`resolve_snapshot_path`), and a
@@ -196,7 +197,7 @@ function normalizeSheet(
         path: `${resource}.styles`,
         message: `${resource}.styles là object-map thay vì array (đã giữ nguyên ${values.length} style)`,
       });
-      return { styles: values.map(coerceStyle) };
+      return sheetNode(raw, values.map(coerceStyle));
     }
   }
 
@@ -213,28 +214,29 @@ function normalizeSheet(
   return { styles: [] };
 }
 
-/** The base workspace (2 sheets). Absent → 2 empty sheets (new book); non-object → BOTH sheets
- *  reset (the blob cannot be attributed narrower); otherwise each sheet normalizes ISOLATED. */
+/**
+ * The base workspace — ⚡REV 2026-08-21 a DYNAMIC group map. Absent → `{}` (new book); non-object →
+ * ONE coarse `base` reset (unattributable to a group); otherwise EVERY key normalizes ISOLATED and
+ * is KEPT (never whitelisted — the ADR-047 data-loss footgun: an unknown key is a valid group).
+ */
 function normalizeBase(raw: unknown, onAnomaly: SketchAnomalyReporter): SketchBase {
   if (raw == null) return emptyBase(); // legitimately new — no anomaly
   if (!isPlainObject(raw)) {
-    for (const resource of SHEET_RESOURCES) {
-      onAnomaly({
-        resource,
-        cls: 'reset',
-        path: 'base',
-        message: `base có kiểu "${typeNameOf(raw)}" thay vì object`,
-        raw,
-      });
-    }
+    onAnomaly({
+      resource: 'base',
+      cls: 'reset',
+      path: 'base',
+      message: `base có kiểu "${typeNameOf(raw)}" thay vì object`,
+      raw,
+    });
     return emptyBase();
   }
-  const base = emptyBase();
-  for (const resource of SHEET_RESOURCES) {
-    const member = sheetMemberOf(resource);
-    base[member] = safeResource(
+  const base: SketchBase = {};
+  for (const groupKey of Object.keys(raw)) {
+    const resource = sheetResourceOf(groupKey);
+    base[groupKey] = safeResource(
       resource,
-      () => normalizeSheet(raw[member], resource, onAnomaly),
+      () => normalizeSheet(raw[groupKey], resource, onAnomaly),
       { styles: [] },
       onAnomaly,
     );
@@ -416,14 +418,12 @@ export function normalizeSketch(
     try {
       rawBase = raw.base;
     } catch (err) {
-      for (const resource of SHEET_RESOURCES) {
-        report({
-          resource,
-          cls: 'reset',
-          path: 'base',
-          message: `base — dữ liệu gây lỗi khi đọc (${err instanceof Error ? err.message : String(err)})`,
-        });
-      }
+      report({
+        resource: 'base',
+        cls: 'reset',
+        path: 'base',
+        message: `base — dữ liệu gây lỗi khi đọc (${err instanceof Error ? err.message : String(err)})`,
+      });
       return emptyBase();
     }
     return normalizeBase(rawBase, report);
@@ -526,11 +526,8 @@ export function coerceSketchNode(
 
   if (head === 'base') {
     if (path.length === 1) return normalizeBase(value, onAnomaly);
-    if (path.length === 2) {
-      // rtype-11 node grain: one sheet (character_sheet | prop_sheet | alter_character_sheet).
-      const resource = SHEET_RESOURCES.find((r) => sheetMemberOf(r) === path[1]);
-      if (resource) return normalizeSheet(value, resource, onAnomaly);
-    }
+    // rtype-11 node grain: one group sheet (dynamic key — `base.<groupKey>`).
+    if (path.length === 2) return normalizeSheet(value, sheetResourceOf(path[1]), onAnomaly);
     return value;
   }
 

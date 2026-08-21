@@ -1,10 +1,11 @@
-// variant-kind-sidebar.tsx — left sidebar of SketchVariantsSpace (design 01). Header "Variants"
+// variant-group-sidebar.tsx — left sidebar of SketchVariantsSpace (design 01). Header "Variants"
 // (title only — NO Excel import, per the design doc; the stale variant-sidebar.png mock shows an
-// import ⬆, which belongs to the Base space only). One collapsible group per KIND_GROUPS entry
-// (Character / Prop / Alter Character), each listing every NON-BASE variant as a FLAT row: mention
-// label (select) + ✏ (edit text) + ✨ (generate raw sheet) / spinner while busy. Rows are read-only
-// (no add/delete). An EMPTY group still renders, with a hint instead of rows — never filtered out
-// (memory: never-hide-disabled-ui).
+// import ⬆, which belongs to the Base space only). ⚡REV 2026-08-21 — ONE collapsible group per
+// DYNAMIC base group (`useSketchBaseGroups()` — character groups first, then prop groups), labelled
+// by the group's display name; each lists every NON-BASE variant of its entities as a FLAT row:
+// mention label (select) + ✏ (edit text) + ✨ (generate raw sheet) / spinner while busy. Rows are
+// read-only (no add/delete). An EMPTY group still renders, with a hint instead of rows — never
+// filtered out (memory: never-hide-disabled-ui).
 //
 // Generate is GATED (gateByRef → reasons). Gated-off ✨ renders DISABLED + tooltip, never hidden
 // (memory: never-hide-disabled-ui). While the row's op is busy, ✨ becomes an inert spinner.
@@ -15,36 +16,34 @@
 
 import { AlertTriangle, ChevronDown, ChevronRight, Loader2, Lock, LockOpen, Pencil, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import type { BaseKind, VariantRef } from '@/types/sketch';
-import { KIND_ENTITY_SOURCE } from '@/types/sketch';
+import type { BaseGroup, VariantRef } from '@/types/sketch';
 import { cn } from '@/utils/utils';
 import { useSketchEntityDegraded } from '@/stores/snapshot-store';
 import { useIsVariantGenerateCapReached } from '@/stores/snapshot-store/selectors';
 import {
   GATE_TOOLTIP,
   sameRef,
-  type KindGroupConfig,
   type VariantGate,
   type VariantGenStatus,
 } from './sketch-variants-constants';
 
-interface VariantKindSidebarProps {
-  groups: KindGroupConfig[];
-  refsByKind: Record<BaseKind, VariantRef[]>;
+interface VariantGroupSidebarProps {
+  groups: BaseGroup[];
+  refsByGroup: Record<string, VariantRef[]>;
   selectedVariant: VariantRef | null;
-  expandedGroups: Record<BaseKind, boolean>;
+  expandedGroups: Record<string, boolean>;
   genStatusByRef: (ref: VariantRef) => VariantGenStatus;
   gateByRef: (ref: VariantRef) => VariantGate;
   pickedByRef: (ref: VariantRef) => boolean;
   onSelect: (ref: VariantRef) => void;
-  onToggleGroup: (kind: BaseKind) => void;
+  onToggleGroup: (group: string) => void;
   onEditVariant: (ref: VariantRef) => void;
   onGenerate: (ref: VariantRef) => void;
 }
 
-export function VariantKindSidebar({
+export function VariantGroupSidebar({
   groups,
-  refsByKind,
+  refsByGroup,
   selectedVariant,
   expandedGroups,
   genStatusByRef,
@@ -54,7 +53,7 @@ export function VariantKindSidebar({
   onToggleGroup,
   onEditVariant,
   onGenerate,
-}: VariantKindSidebarProps) {
+}: VariantGroupSidebarProps) {
   return (
     <aside
       className="flex h-full w-1/4 min-w-[260px] max-w-[340px] flex-col border-r"
@@ -70,10 +69,11 @@ export function VariantKindSidebar({
       <div className="flex-1 overflow-y-auto p-2" role="tree" aria-label="Variants">
         {groups.map((group) => (
           <VariantGroup
-            key={group.kind}
+            key={group.group_key}
             group={group}
-            refs={refsByKind[group.kind]}
-            expanded={expandedGroups[group.kind]}
+            refs={refsByGroup[group.group_key] ?? EMPTY_REFS}
+            // New groups default to expanded (undefined ⇒ open) — never hidden.
+            expanded={expandedGroups[group.group_key] ?? true}
             selectedVariant={selectedVariant}
             genStatusByRef={genStatusByRef}
             gateByRef={gateByRef}
@@ -89,6 +89,9 @@ export function VariantKindSidebar({
   );
 }
 
+/** Stable empty fallback so a group with no refs entry doesn't churn the row list. */
+const EMPTY_REFS: VariantRef[] = [];
+
 function VariantGroup({
   group,
   refs,
@@ -102,7 +105,7 @@ function VariantGroup({
   onEditVariant,
   onGenerate,
 }: {
-  group: KindGroupConfig;
+  group: BaseGroup;
   refs: VariantRef[];
   expanded: boolean;
   selectedVariant: VariantRef | null;
@@ -110,38 +113,38 @@ function VariantGroup({
   gateByRef: (ref: VariantRef) => VariantGate;
   pickedByRef: (ref: VariantRef) => boolean;
   onSelect: (ref: VariantRef) => void;
-  onToggleGroup: (kind: BaseKind) => void;
+  onToggleGroup: (group: string) => void;
   onEditVariant: (ref: VariantRef) => void;
   onGenerate: (ref: VariantRef) => void;
 }) {
-  const { kind, title, noun } = group;
+  const { group_key: groupKey, name } = group;
 
   return (
     <div className="mb-1" role="group">
-      {/* Group header: chevron + title toggle (aria-expanded). */}
+      {/* Group header: chevron + name toggle (aria-expanded). */}
       <div className="flex items-center gap-1 rounded-md px-1 hover:bg-muted/50">
         <button
           type="button"
           className="flex min-w-0 flex-1 items-center gap-1.5 py-1.5 text-left text-sm font-medium"
           aria-expanded={expanded}
-          onClick={() => onToggleGroup(kind)}
+          onClick={() => onToggleGroup(groupKey)}
         >
           {expanded ? (
             <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
           ) : (
             <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
           )}
-          <span className="truncate">{title}</span>
+          <span className="truncate">{name}</span>
         </button>
       </div>
 
       {expanded && (
         <div className="mt-0.5 space-y-0.5 pl-4">
           {refs.length === 0 ? (
-            // Empty group RENDERS with a per-kind hint (never hidden): the alter group is empty
-            // until an alter cast exists, and saying which group is empty is the whole point.
+            // Empty group RENDERS with a hint (never hidden): a group with only base sheets and no
+            // non-base variants shows why it is empty rather than vanishing.
             <p className="px-2 py-1.5 text-xs text-muted-foreground">
-              No {noun} variant — add it in the Base space
+              No variant — add it in the Base space
             </p>
           ) : (
             refs.map((ref) => (
@@ -188,12 +191,9 @@ function VariantRow({
 
   // ADR-047: entity data unreadable (degraded) → row greyed (NOT hidden) + edit/generate refused;
   // browse/select stays enabled (D5 — persist is blocked, interaction is not).
-  // `useSketchEntityDegraded` keys by the REAL collection ('characters' | 'props'): an alter
-  // entity is degraded under `characters/{key}` like any other member of that array.
-  const degraded = useSketchEntityDegraded(
-    KIND_ENTITY_SOURCE[variantRef.kind].collection,
-    variantRef.entityKey,
-  );
+  // ⚡REV 2026-08-21: `variantRef.kind` IS the real collection ('characters' | 'props') — an entity
+  // is degraded under `{kind}/{key}` regardless of which group it belongs to.
+  const degraded = useSketchEntityDegraded(variantRef.kind, variantRef.entityKey);
   const DEGRADED_TOOLTIP = 'Dữ liệu không đọc được — chỉ xem, không thể lưu. Mở hộp thoại kiểm tra dữ liệu để xử lý.';
 
   // Client fan-out cap: refuse by GREYING the row's ✨ with a reason, like every other refusal here
@@ -300,7 +300,7 @@ function VariantRow({
           // aria-disabled (NOT the real `disabled` attr): shadcn's `disabled:pointer-events-none`
           // would make a real-disabled button transparent to hover → the gate-reason tooltip would
           // never surface. Mirror edit-image-modal-header — greyed via explicit classes + click-guard
-          // so the WHY (peer-lock / base-not-ready / empty-text) stays discoverable (never-hide-ui).
+          // so the WHY (base-not-ready / empty-text / cap) stays discoverable (never-hide-ui).
           className={cn(
             'h-6 w-6 text-muted-foreground',
             generateDisabled && 'cursor-not-allowed opacity-40',
