@@ -13,7 +13,7 @@
 // The generate runs UNDER the stage lock (rtype 5) the PARENT adopted before opening this modal.
 
 import { useCallback, useMemo, useRef, useState } from 'react';
-import { Loader2, Check } from 'lucide-react';
+import { Loader2, Check, Lock } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -29,6 +29,7 @@ import {
   useSketchStageByKey,
   useSnapshotActions,
   useIsAnySketchGenerating,
+  useSketchBaseFirstConfirmedAnchor,
 } from '@/stores/snapshot-store/selectors';
 import { useSketchStyleId } from '@/stores/book-store';
 import { useArtStyles } from '@/stores/art-styles-store';
@@ -41,11 +42,13 @@ import { createLogger } from '@/utils/logger';
 
 const log = createLogger('Editor', 'GenerateStageStyleModal');
 
-/** Stage sheets take 1..3 STYLE reference images (API 11 MAX_STYLE_REFERENCES). */
+/** Stage sheets take 1..3 STYLE reference images (API 11 MAX_STYLE_REFERENCES). A confirmed
+ *  character/prop group's locked sheet is injected as a mandatory anchor and eats ONE slot (so the
+ *  art-style picker can add at most 2 more) to keep stages on the same aesthetic. */
 const MAX_REFS = 3;
 
-function defaultRefSelection(refCount: number): number[] {
-  return Array.from({ length: Math.min(MAX_REFS, refCount) }, (_, i) => i);
+function defaultRefSelection(refCount: number, max: number): number[] {
+  return Array.from({ length: Math.min(max, refCount) }, (_, i) => i);
 }
 
 export interface GenerateStageStyleModalProps {
@@ -84,10 +87,16 @@ export function GenerateStageStyleModal({
     [sketchStyles],
   );
 
+  // Style anchor: the first confirmed character/prop group's locked sheet — a MANDATORY,
+  // non-deselectable reference that eats one slot so stages inherit the established aesthetic
+  // (prevents style drift between the cast and the stages). Null until a char/prop group is locked.
+  const anchor = useSketchBaseFirstConfirmedAnchor();
+  const maxArtStyleRefs = anchor ? MAX_REFS - 1 : MAX_REFS;
+
   const [selectedStyleId, setSelectedStyleId] = useState<string | null>(sketchStyleId);
   const [selectedRefIdxs, setSelectedRefIdxs] = useState<number[]>(() => {
     const style = artStyles.find((s) => s.id === sketchStyleId && s.type === 0);
-    return defaultRefSelection(style?.imageReferences?.length ?? 0);
+    return defaultRefSelection(style?.imageReferences?.length ?? 0, maxArtStyleRefs);
   });
 
   const selectedStyle = useMemo(
@@ -99,6 +108,8 @@ export function GenerateStageStyleModal({
     () => selectedRefIdxs.map((i) => refImages[i]).filter(Boolean),
     [selectedRefIdxs, refImages],
   );
+  // Total refs sent = the locked anchor (if any) + the picked art-style refs, capped at MAX_REFS.
+  const totalRefCount = selectedRefs.length + (anchor ? 1 : 0);
 
   const styleNumber = mode === 'add' ? styles.length + 1 : (styleIndex ?? 0) + 1;
 
@@ -113,25 +124,25 @@ export function GenerateStageStyleModal({
       log.debug('handleStyleChange', 'style picked', { id });
       setSelectedStyleId(id);
       const style = sketchStyles.find((s) => s.id === id);
-      setSelectedRefIdxs(defaultRefSelection(style?.imageReferences?.length ?? 0));
+      setSelectedRefIdxs(defaultRefSelection(style?.imageReferences?.length ?? 0, maxArtStyleRefs));
     },
-    [sketchStyles],
+    [sketchStyles, maxArtStyleRefs],
   );
 
   const toggleRef = useCallback((idx: number) => {
     setSelectedRefIdxs((prev) => {
       if (prev.includes(idx)) return prev.filter((i) => i !== idx);
-      if (prev.length >= MAX_REFS) return prev;
+      if (prev.length >= maxArtStyleRefs) return prev; // cap — the anchor (if any) already took a slot
       return [...prev, idx].sort((a, b) => a - b);
     });
-  }, []);
+  }, [maxArtStyleRefs]);
 
   // Prompt is OPTIONAL — the aesthetic comes from the chosen style + reference images. Gate on a
   // style + ≥1 reference + the stage's base text being ready.
   const canGenerate =
     !isSubmitting &&
     !!selectedStyleId &&
-    selectedRefs.length >= 1 &&
+    totalRefCount >= 1 &&
     baseTextReady &&
     !isAnyGenerating;
 
@@ -140,7 +151,7 @@ export function GenerateStageStyleModal({
       log.debug('handleGenerate', 'blocked — gate not met', {
         stageKey,
         hasArtStyle: !!selectedStyleId,
-        refCount: selectedRefs.length,
+        refCount: totalRefCount,
         baseTextReady,
         isAnyGenerating,
       });
@@ -152,20 +163,25 @@ export function GenerateStageStyleModal({
       mode,
       styleIndex: targetIndex,
       artStyleId: selectedStyleId,
-      refCount: selectedRefs.length,
+      refCount: totalRefCount,
+      anchorGroup: anchor?.groupKey ?? null,
     });
     setIsSubmitting(true);
+    // The locked char/prop anchor leads the list (ref[0] = primary style anchor), then the picks.
     startStageBaseSheetGenerate({
       stageKey,
       mode,
       styleIndex: mode === 'regenerate' ? styleIndex : undefined,
       stylePrompt: prompt.trim(),
-      referenceImages: selectedRefs.map((r) => ({ title: r.title, media_url: r.mediaUrl })),
+      referenceImages: [
+        ...(anchor ? [{ title: `Style anchor · @${anchor.name}`, media_url: anchor.mediaUrl }] : []),
+        ...selectedRefs.map((r) => ({ title: r.title, media_url: r.mediaUrl })),
+      ],
       artStyleId: selectedStyleId,
     });
     onEnqueued?.(stageKey, targetIndex);
     onClose(); // close immediately after enqueue — results stream into the style via the store
-  }, [canGenerate, selectedStyleId, selectedRefs, isAnyGenerating, baseTextReady, styles.length, stageKey, mode, styleIndex, prompt, startStageBaseSheetGenerate, onEnqueued, onClose]);
+  }, [canGenerate, selectedStyleId, selectedRefs, totalRefCount, anchor, isAnyGenerating, baseTextReady, styles.length, stageKey, mode, styleIndex, prompt, startStageBaseSheetGenerate, onEnqueued, onClose]);
 
   const handleRequestClose = useCallback(() => {
     if (isSubmitting) return;
@@ -218,24 +234,44 @@ export function GenerateStageStyleModal({
         <div className="space-y-2">
           <div className="flex items-baseline justify-between">
             <Label>Reference images</Label>
-            {refImages.length > 0 && (
+            {(refImages.length > 0 || anchor) && (
               <span className="text-xs text-muted-foreground">
-                {selectedRefs.length}/{MAX_REFS} selected
+                {totalRefCount}/{MAX_REFS} selected
               </span>
             )}
           </div>
 
+          {/* Locked style anchor from the first confirmed char/prop group — always sent, never deselectable. */}
+          {anchor && (
+            <div className="flex items-center gap-2">
+              <div
+                className="relative h-16 w-16 shrink-0 overflow-hidden rounded-md border-2 border-primary"
+                title={`Style anchor · @${anchor.name} (locked)`}
+              >
+                <img src={anchor.mediaUrl} alt={`Style anchor from ${anchor.name}`} className="h-full w-full object-cover" loading="lazy" />
+                <span className="absolute right-0.5 top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-primary text-primary-foreground">
+                  <Lock className="h-2.5 w-2.5" />
+                </span>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Style anchor from <span className="font-medium">@{anchor.name}</span> is locked to keep the aesthetic consistent — pick up to {maxArtStyleRefs} more.
+              </p>
+            </div>
+          )}
+
           {refImages.length === 0 ? (
             <p className="text-xs text-muted-foreground">
-              {selectedStyleId
-                ? 'This art style has no reference images — pick another style to generate.'
-                : 'Select an art style to choose reference images.'}
+              {!selectedStyleId
+                ? 'Select an art style to choose reference images.'
+                : anchor
+                  ? 'This art style has no reference images — the locked anchor above will be used.'
+                  : 'This art style has no reference images — pick another style to generate.'}
             </p>
           ) : (
             <div className="flex flex-wrap gap-2" role="group" aria-label="Style reference images">
               {refImages.map((ref, idx) => {
                 const isSelected = selectedRefIdxs.includes(idx);
-                const atCap = !isSelected && selectedRefIdxs.length >= MAX_REFS;
+                const atCap = !isSelected && selectedRefIdxs.length >= maxArtStyleRefs;
                 return (
                   <button
                     key={`${ref.mediaUrl}-${idx}`}
@@ -263,7 +299,7 @@ export function GenerateStageStyleModal({
               })}
             </div>
           )}
-          {refImages.length > 0 && selectedRefs.length === 0 && (
+          {!anchor && refImages.length > 0 && selectedRefs.length === 0 && (
             <p className="text-xs text-destructive" role="status">
               Select at least 1 reference image.
             </p>

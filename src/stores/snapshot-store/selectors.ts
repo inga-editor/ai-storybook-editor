@@ -21,12 +21,14 @@ import type {
   VariantRef,
   LineupEntry,
   SketchLineupTab,
+  SketchBaseAnchorRef,
 } from '@/types/sketch';
 import {
   sheetOf,
   lineupEntryRef,
   resolveEntityGroup,
   deriveSheetKindFromKey,
+  firstConfirmedBaseAnchor,
 } from '@/types/sketch';
 import type { ManuscriptDummy, DummySpread } from '@/types/dummy';
 import type { IllustrationData, Section, Branch, BranchSetting } from '@/types/illustration-types';
@@ -225,6 +227,19 @@ export const useSketchBaseGroups = (): BaseGroup[] => {
   const characters = useSnapshotStore((s) => s.sketch.characters ?? EMPTY_SKETCH_ENTITIES);
   const props = useSnapshotStore((s) => s.sketch.props ?? EMPTY_SKETCH_ENTITIES);
   return useMemo(() => buildBaseGroups(base, characters, props), [base, characters, props]);
+};
+
+/** First earlier-confirmed base group surfaced as a mandatory style anchor (chars-before-props, by
+ *  Excel order). `excludeGroupKey` skips the group currently being (re)generated so it never anchors
+ *  to itself. Null until some other group has a locked style with a raw sheet. useMemo on the stable
+ *  raw refs (base + the memoized groups array). */
+export const useSketchBaseFirstConfirmedAnchor = (excludeGroupKey?: string): SketchBaseAnchorRef | null => {
+  const groups = useSketchBaseGroups();
+  const base = useSnapshotStore((s) => s.sketch.base);
+  return useMemo(
+    () => firstConfirmedBaseAnchor(groups, base, excludeGroupKey),
+    [groups, base, excludeGroupKey],
+  );
 };
 
 /** Entities of one group (base / variant / lineup space). useMemo on the stable raw refs — the

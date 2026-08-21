@@ -430,6 +430,35 @@ export function effectiveStageVariantUrl(variant: SketchStageVariant): string | 
   return effectiveStageCropUrl(variant.crops);
 }
 
+/** A confirmed base group's raw sheet, surfaced as a MANDATORY style-anchor reference. */
+export interface SketchBaseAnchorRef {
+  groupKey: string;
+  name: string;    // the group's tab display name (for the tile label)
+  mediaUrl: string; // effective raw-sheet illustration of the locked style
+}
+
+/**
+ * First base GROUP (in `buildBaseGroups` order — characters before props, then by Excel `order`)
+ * whose LOCKED style has a usable raw-sheet illustration → returned as a style anchor. Injected as a
+ * mandatory reference when generating a LATER group's (or a stage's) base sheet so the established
+ * aesthetic can't drift across groups. `excludeGroupKey` skips self-anchoring the group currently
+ * being (re)generated. Returns null when no earlier group is confirmed yet.
+ */
+export function firstConfirmedBaseAnchor(
+  groups: BaseGroup[],
+  base: SketchBase,
+  excludeGroupKey?: string,
+): SketchBaseAnchorRef | null {
+  for (const g of groups) {
+    if (g.group_key === excludeGroupKey) continue;
+    const style = sheetOf(base, g.group_key)?.styles.find((st) => st.is_selected);
+    if (!style) continue;
+    const url = effectiveIllustrationUrl(style.illustrations);
+    if (url) return { groupKey: g.group_key, name: g.name, mediaUrl: url };
+  }
+  return null;
+}
+
 export interface Sketch {
   id: string | null;
   base: SketchBase;                             // ⚡ NEW — base sheet workspace (char + prop)
