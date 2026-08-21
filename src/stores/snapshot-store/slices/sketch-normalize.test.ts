@@ -141,6 +141,16 @@ describe('normalizeSketch (shape mapping)', () => {
     };
     expect(normalizeSketch({ id: 'sk1', base }).base).toEqual(base);
   });
+
+  it('carries self-describing kind/name/order through the read boundary (order = sidebar sort key)', () => {
+    const base = {
+      character_family: { kind: 'characters', name: 'Character Family', order: 0, styles: [] },
+      character_pet: { kind: 'characters', name: 'Character Pet', order: 1, styles: [style('s')] },
+    };
+    const out = normalizeSketch({ id: 'sk1', base }).base;
+    expect(out.character_family).toEqual({ kind: 'characters', name: 'Character Family', order: 0, styles: [] });
+    expect(out.character_pet.order).toBe(1);
+  });
 });
 
 // REGRESSION NET for the 2026-07-17 silent-data-loss incident. Core rule: an unexpected shape

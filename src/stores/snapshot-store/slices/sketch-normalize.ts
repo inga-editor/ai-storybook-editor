@@ -124,8 +124,10 @@ function safeResource<T>(
   }
 }
 
-/** Build a sheet node from a raw object, carrying `kind`/`name` PRESENCE-GATED (legacy nodes have
- *  neither → derived on read; new nodes keep them). Never invents kind/name (no JSONB churn). */
+/** Build a sheet node from a raw object, carrying `kind`/`name`/`order` PRESENCE-GATED (legacy nodes
+ *  lack them → kind/name derived on read, order → sorted last; new nodes keep them). Never invents
+ *  fields (no JSONB churn). `order` MUST be carried: it is the sidebar sort key, and dropping it here
+ *  collapses group order back to jsonb key order on every reload/collab-merge. */
 function sheetNode(
   raw: Record<string, unknown>,
   styles: SketchBaseSheet['styles'],
@@ -133,6 +135,7 @@ function sheetNode(
   const node: SketchBaseSheet = { styles };
   if (raw.kind === 'characters' || raw.kind === 'props') node.kind = raw.kind;
   if (typeof raw.name === 'string') node.name = raw.name;
+  if (typeof raw.order === 'number') node.order = raw.order;
   return node;
 }
 
@@ -147,8 +150,8 @@ function sheetNode(
  *  - MALFORMED → `cls:'reset'`: `{ styles: [] }` placeholder + the raw slot quarantined + the
  *    sheet degraded, so the empty can never reach the DB without consent.
  *
- * NOTE: only the `styles` key is carried — `SketchBaseSheet` has no other field (types/sketch.ts),
- * so an unknown sibling key IS dropped here (silently: it is unreadable by any current code).
+ * NOTE: `styles` plus the self-describing `kind`/`name`/`order` fields are carried (see `sheetNode`);
+ * any OTHER unknown sibling key is dropped here (silently — unreadable by any current code).
  */
 function normalizeSheet(
   raw: unknown,
