@@ -93,6 +93,8 @@ export function mapEditError(err: unknown, opts?: { actionLabel?: string }): str
         return 'Không tải được ảnh nguồn.';
       case 'INPUT_TOO_LARGE_FOR_MODEL':
         return 'Ảnh quá lớn để upscale — giảm scale hoặc chọn ảnh nhỏ hơn.';
+      case 'IMAGE_TOO_SMALL_FOR_MODEL':
+        return 'Ảnh quá nhỏ cho model này (tối thiểu 256px mỗi chiều) — chọn model khác hoặc ảnh lớn hơn.';
       case 'OUTPUT_FETCH_ERROR':
         return 'Ảnh kết quả quá lớn — giảm scale.';
       case 'REPLICATE_RATE_LIMIT':
@@ -116,6 +118,13 @@ export function mapEditError(err: unknown, opts?: { actionLabel?: string }): str
         return 'Ảnh quá lớn để inpaint — chọn version nhỏ hơn.';
       case 'VALIDATION_ERROR':
         return 'Ảnh vùng khoanh không hợp lệ.';
+      // ── flux-fill-pro binary-mask codes (design §3 — defensive: FE gates strokes + sets kind) ──
+      case 'REGION_REQUIRED':
+        return 'Model này cần khoanh vùng — hãy tô vùng cần sửa.';
+      case 'MASK_SIZE_MISMATCH':
+        return 'Kích thước vùng mask không khớp ảnh nguồn.';
+      case 'REGION_KIND_MISMATCH':
+        return 'Loại vùng khoanh không phù hợp với model.';
       case 'STORAGE_UPLOAD_ERROR':
         return 'Lưu ảnh thất bại, vui lòng thử lại.';
       // ── Outpaint / outpaint-image source-decode failure (05-outpaint-tab.md §3) ──
@@ -294,6 +303,94 @@ export function compositeMark(
 
   // toDataURL throws on a CORS-tainted canvas — surfaced by mapEditError's CORS branch.
   const dataUrl = base.toDataURL('image/png');
+  return dataUrl.split(',')[1] ?? '';
+}
+
+/** Flood-fill the enclosed interior of a stroke outline in-place → a solid binary mask.
+ *  `data` is RGBA (from `getImageData`); a pixel is a STROKE when its red channel > 127 (the fg
+ *  color is white). Marks every NON-stroke pixel reachable from the canvas border ("outside") via
+ *  4-connectivity, then rewrites the buffer to a HARD binary: outside → pure `bg` (black, keep),
+ *  everything else (the strokes AND the interior they enclose) → pure `fg` (white, inpaint). An open
+ *  scribble that encloses nothing keeps just its footprint; a closed loop fills its interior — which
+ *  is what "khoanh vùng" means (the whole area inside the loop is edited). A gap in the outline lets
+ *  the flood leak in (interior won't fill) — same limitation as any lasso mask; a thick brush seals it.
+ *  Exported PURE (no canvas) so the fill logic is unit-testable without a real 2d context. */
+export function fillEnclosedMask(data: Uint8ClampedArray, w: number, h: number): void {
+  const n = w * h;
+  const outside = new Uint8Array(n);
+  const stack: number[] = [];
+  const isStroke = (i: number): boolean => data[i * 4] > 127;
+  const seed = (i: number): void => {
+    if (!outside[i] && !isStroke(i)) {
+      outside[i] = 1;
+      stack.push(i);
+    }
+  };
+  for (let x = 0; x < w; x++) {
+    seed(x); // top row
+    seed((h - 1) * w + x); // bottom row
+  }
+  for (let y = 0; y < h; y++) {
+    seed(y * w); // left col
+    seed(y * w + (w - 1)); // right col
+  }
+  while (stack.length) {
+    const i = stack.pop() as number;
+    const x = i % w;
+    const y = (i / w) | 0;
+    if (x > 0) seed(i - 1);
+    if (x < w - 1) seed(i + 1);
+    if (y > 0) seed(i - w);
+    if (y < h - 1) seed(i + w);
+  }
+  for (let i = 0; i < n; i++) {
+    const p = i * 4;
+    const v = outside[i] ? 0 : 255; // outside → black (keep); enclosed+stroke → white (inpaint)
+    data[p] = v;
+    data[p + 1] = v;
+    data[p + 2] = v;
+    data[p + 3] = 255;
+  }
+}
+
+/** Natural-res binary mask for flux-fill-pro: fill the whole canvas with `bgColor` (black = KEEP)
+ *  then paint strokes in `fgColor` (white), FLOOD-FILL the enclosed interior (so a traced loop masks
+ *  its whole inside, not just the outline — `fillEnclosedMask`), and emit a HARD binary PNG base64
+ *  WITHOUT the `data:` prefix. NO source blit — the mask is content-independent, so it also never
+ *  CORS-taints the canvas (toDataURL can't throw). `brushScale` rescales the display-px brush radius
+ *  up to natural-res (same as compositeMark). Manual-smoke only (jsdom has no real 2d context). */
+export function compositeMask(
+  strokes: Stroke[],
+  bgColor: string,
+  fgColor: string,
+  naturalW: number,
+  naturalH: number,
+  displayW: number,
+  displayH: number,
+): string {
+  const c = document.createElement('canvas');
+  c.width = naturalW;
+  c.height = naturalH;
+  const ctx = c.getContext('2d');
+  if (!ctx) throw new Error('Could not get 2D context');
+  ctx.fillStyle = bgColor;
+  ctx.fillRect(0, 0, naturalW, naturalH);
+
+  // Force fg color + paint mode regardless of stroke provenance (mask owns the look). White at
+  // FULL alpha (no globalAlpha reduction) → an opaque outline before the enclosed-region fill.
+  // ⚠️ clearFirst=FALSE: paint white strokes ON TOP of the black fillRect above (unlike compositeMark,
+  // which paints onto a SEPARATE offscreen canvas). Passing true would clearRect the black background
+  // away → a transparent-bg PNG, breaking the "black = KEEP" binary-mask contract.
+  const maskStrokes: Stroke[] = strokes.map((s) => ({ ...s, color: fgColor, mode: 'paint' }));
+  const brushScale = (naturalW / displayW + naturalH / displayH) / 2;
+  paintStrokesOnCtx(ctx, maskStrokes, null, naturalW, naturalH, brushScale, false);
+
+  // Fill the interior enclosed by the strokes → the whole "khoanh vùng" region becomes inpaint-white.
+  const img = ctx.getImageData(0, 0, naturalW, naturalH);
+  fillEnclosedMask(img.data, naturalW, naturalH);
+  ctx.putImageData(img, 0, 0);
+
+  const dataUrl = c.toDataURL('image/png');
   return dataUrl.split(',')[1] ?? '';
 }
 

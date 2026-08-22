@@ -99,11 +99,27 @@ export const COMMIT_HINTS: Partial<Record<EditToolKey, string>> = {
 };
 
 // ── Inpaint tab (04-inpaint-tab.md §2) ───────────────────────────────────────
-/** Model allowlist (group `edit-object` — v1 Gemini-only; out-of-allowlist → 422
- *  UNSUPPORTED_MODEL). Select renders even at 1 option (ready for allowlist growth). */
-export const INPAINT_MODEL_OPTIONS = ['google/nano-banana-pro'] as const;
+/** Model allowlist (group `edit-object`) — now multi-provider (2 options; out-of-allowlist → 422
+ *  UNSUPPORTED_MODEL). `nano-banana-pro` = Gemini set-of-mark (default); `flux-fill-pro` = Replicate
+ *  true binary-mask inpaint. Per-model region behavior lives in REGION_KIND_BY_MODEL below. */
+export const INPAINT_MODEL_OPTIONS = ['google/nano-banana-pro', 'black-forest-labs/flux-fill-pro'] as const;
 export type InpaintModel = (typeof INPAINT_MODEL_OPTIONS)[number];
 export const INPAINT_DEFAULT_MODEL: InpaintModel = 'google/nano-banana-pro';
+
+/** flux-fill-pro public id (Replicate binary-mask inpaint) — the 2nd allowlist entry. */
+export const FLUX_FILL_MODEL: InpaintModel = 'black-forest-labs/flux-fill-pro';
+export const isFluxModel = (m: string): boolean => m === FLUX_FILL_MODEL;
+
+/** Region flatten kind per model (design §4). Gemini → set-of-mark overlay; flux → binary mask. */
+export const REGION_KIND_BY_MODEL: Record<string, 'marked_source' | 'binary_mask'> = {
+  'google/nano-banana-pro': 'marked_source',
+  'black-forest-labs/flux-fill-pro': 'binary_mask',
+};
+
+/** flux binary-mask colors: black = KEEP (byte-exact), white = INPAINT (opaque). */
+export const INPAINT_MASK_BG = '#000000';
+export const INPAINT_MASK_FG = '#ffffff';
+
 /** Mark = set-of-mark soft hint (NOT a binary mask). Translucent so the model still "sees"
  *  the content under the mark — bright accent so the marked region stands out. */
 export const INPAINT_MARK_COLOR = '#3b6cf6';

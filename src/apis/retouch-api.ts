@@ -31,9 +31,12 @@ export interface LayeringImageResult {
 export interface EditObjectImageParams {
   prompt: string;
   imageUrl: string;
-  /** Set-of-mark region (Inpaint tab): composite source + translucent mark at natural-res,
-   *  PNG base64 WITHOUT the `data:` URI prefix. Omit for prompt-only full-image edit. */
-  regionAnnotation?: { base64Data: string; mimeType: string };
+  /** Region annotation (Inpaint tab), PNG base64 WITHOUT the `data:` URI prefix. `kind` selects
+   *  the flatten style per model: `marked_source` = source + translucent set-of-mark (Gemini,
+   *  nano-banana-pro); `binary_mask` = black-KEEP / white-INPAINT mask (flux-fill-pro). Omit `kind`
+   *  → server treats as `marked_source` (backward-compat). Omit the whole field for a prompt-only
+   *  full-image edit (Gemini only; flux requires a mask). */
+  regionAnnotation?: { base64Data: string; mimeType: string; kind?: 'marked_source' | 'binary_mask' };
   /** Reference images (identity/material anchors for content named in `prompt`). Max 5,
    *  base64 WITHOUT the `data:` prefix. ⚡2026-07-25: the Inpaint tab NEVER sets `description` for
    *  ANY item (04-inpaint-tab.md §8.1) — a provenance ref only carries a POSITIONAL label of the OLD

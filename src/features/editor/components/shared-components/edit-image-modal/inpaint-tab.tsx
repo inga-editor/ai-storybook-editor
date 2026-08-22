@@ -29,7 +29,11 @@ import {
   INPAINT_MARK_COLOR,
   INPAINT_MARK_ALPHA,
   INPAINT_IMAGE_SIZE,
+  INPAINT_MASK_BG,
+  INPAINT_MASK_FG,
   INPAINT_REF_MAX,
+  REGION_KIND_BY_MODEL,
+  isFluxModel,
   type InpaintModel,
   type EditImageAttribution,
   type EditCommitResult,
@@ -38,6 +42,7 @@ import { computeFrameSize, fitNaturalToFrame } from './edit-image-modal-fit';
 import {
   EditApiError,
   compositeMark,
+  compositeMask,
   nearestAspectRatio,
   exceedsRegionSizeCap,
   type ReferenceImageCandidate,
@@ -116,7 +121,8 @@ export function useInpaintTabState({
   // Mirror of activeStroke — read in event handlers without stale closures.
   const activeStrokeRef = useRef<Stroke | null>(null);
 
-  const canCommit = prompt.trim().length > 0;
+  // Gemini: prompt-only is valid (region optional). flux binary-mask: a mask is REQUIRED → also gate ≥1 stroke.
+  const canCommit = prompt.trim().length > 0 && (!isFluxModel(model) || strokes.length > 0);
 
   // ── Image load → size canvas to fit, trigger redraw (event handler — no set-state-in-effect) ──
   const handleImageLoad = useCallback(() => {
@@ -291,27 +297,23 @@ export function useInpaintTabState({
         ...(saveResource ? { saveResource } : {}),
       };
 
+      // Region flatten kind per model: Gemini → set-of-mark overlay; flux → black/white binary mask.
+      const kind = REGION_KIND_BY_MODEL[model];
       if (strokes.length > 0 && canvas) {
-        const regionB64 = compositeMark(
-          img,
-          strokes,
-          INPAINT_MARK_COLOR,
-          INPAINT_MARK_ALPHA,
-          naturalW,
-          naturalH,
-          canvas.width,
-          canvas.height,
-        );
+        const regionB64 = isFluxModel(model)
+          ? compositeMask(strokes, INPAINT_MASK_BG, INPAINT_MASK_FG, naturalW, naturalH, canvas.width, canvas.height)
+          : compositeMark(img, strokes, INPAINT_MARK_COLOR, INPAINT_MARK_ALPHA, naturalW, naturalH, canvas.width, canvas.height);
         // Pre-flight size guard — abort BEFORE the API call (no 400 round-trip).
         if (exceedsRegionSizeCap(regionB64)) {
           throw new EditApiError('Region too large', { errorCode: 'REGION_TOO_LARGE' });
         }
-        payload.regionAnnotation = { base64Data: regionB64, mimeType: 'image/png' };
+        payload.regionAnnotation = { base64Data: regionB64, mimeType: 'image/png', kind };
       }
 
-      // Reference images (picked provenance refs + upload GỘP). Only sent when non-empty. NO item
-      // carries `description` today (§8.1); the spread stays for upstream ReferenceImage compat.
-      if (refs.images.length > 0) {
+      // Reference images (picked provenance refs + upload GỘP). Gemini-only — flux ignores them
+      // server-side, so never send under flux. NO item carries `description` today (§8.1); the
+      // spread stays for upstream ReferenceImage compat.
+      if (kind === 'marked_source' && refs.images.length > 0) {
         payload.referenceImages = refs.images.map((i) => ({
           base64Data: i.base64Data,
           mimeType: i.mimeType,
@@ -378,6 +380,7 @@ export function useInpaintTabState({
         onBrushSizeChange={setBrushSize}
         prompt={prompt}
         onPromptChange={setPrompt}
+        showReferences={!isFluxModel(model)}
         picker={{
           images: refs.images,
           max: INPAINT_REF_MAX,

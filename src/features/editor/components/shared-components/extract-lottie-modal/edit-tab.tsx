@@ -23,6 +23,7 @@ import type { ImageApiFailure } from '@/apis/image-api-client';
 import { useReferenceImagePicker } from '@/features/editor/hooks/use-reference-image-picker';
 import {
   compositeMark,
+  compositeMask,
   nearestAspectRatio,
   exceedsRegionSizeCap,
   mapEditError,
@@ -37,8 +38,12 @@ import {
   INPAINT_MARK_COLOR,
   INPAINT_MARK_ALPHA,
   INPAINT_IMAGE_SIZE,
+  INPAINT_MASK_BG,
+  INPAINT_MASK_FG,
   INPAINT_MODEL_OPTIONS,
   INPAINT_REF_MAX,
+  REGION_KIND_BY_MODEL,
+  isFluxModel,
   SWAP_MODAL_TOKENS,
   Z_INDEX,
 } from './extract-lottie-modal-constants';
@@ -135,7 +140,10 @@ export function useLottieEditTab({
 
   const selectedVersion = activePart ? selectedVersionOf(activePart) : null;
   const hasAsset = activePart?.kind !== 'null' && !!activePart && !!selectedVersion;
-  const canSend = hasAsset && prompt.trim().length > 0 && !isProcessing;
+  // flux binary-mask requires a per-part mask stroke; Gemini region is optional.
+  const maskCount = activePart?.maskStrokes?.length ?? 0;
+  const canSend =
+    hasAsset && prompt.trim().length > 0 && !isProcessing && (!isFluxModel(model) || maskCount > 0);
 
   // Session references: Ảnh gốc + other cropped normal parts' selected version (exclude active).
   const sessionSources = useMemo<LottieRefSource[]>(() => {
@@ -170,26 +178,22 @@ export function useLottieEditTab({
         ...(attribution ?? {}),
       };
 
+      // Region flatten kind per model: Gemini → set-of-mark overlay; flux → black/white binary mask.
+      const kind = REGION_KIND_BY_MODEL[model];
       if (strokes.length > 0) {
-        const regionB64 = compositeMark(
-          assetImg,
-          strokes,
-          INPAINT_MARK_COLOR,
-          INPAINT_MARK_ALPHA,
-          assetW,
-          assetH,
-          assetW,
-          assetH,
-        );
+        const regionB64 = isFluxModel(model)
+          ? compositeMask(strokes, INPAINT_MASK_BG, INPAINT_MASK_FG, assetW, assetH, assetW, assetH)
+          : compositeMark(assetImg, strokes, INPAINT_MARK_COLOR, INPAINT_MARK_ALPHA, assetW, assetH, assetW, assetH);
         if (exceedsRegionSizeCap(regionB64)) {
           toast.error('Ảnh quá lớn để inpaint — chọn version nhỏ hơn.');
           setProcessing(false);
           return;
         }
-        payload.regionAnnotation = { base64Data: regionB64, mimeType: 'image/png' };
+        payload.regionAnnotation = { base64Data: regionB64, mimeType: 'image/png', kind };
       }
 
-      if (refs.images.length > 0) {
+      // Reference images Gemini-only — flux ignores them server-side.
+      if (kind === 'marked_source' && refs.images.length > 0) {
         payload.referenceImages = refs.images.map((i) => ({
           base64Data: i.base64Data,
           mimeType: i.mimeType,
@@ -298,16 +302,20 @@ export function useLottieEditTab({
           />
         </section>
 
-        <LottieReferencePicker
-          images={refs.images}
-          max={INPAINT_REF_MAX}
-          fileInputRef={refs.inputRef}
-          onOpenUpload={refs.openPicker}
-          onFilesSelected={refs.handleFilesSelected}
-          onRemove={refs.removeImage}
-          sessionSources={sessionSources}
-          onPickSession={onPickSession}
-        />
+        {/* REFERENCE IMAGES is Gemini-only — hidden under flux (binary-mask ignores refs). Refs
+            state persists across a model switch; only the section visibility changes. */}
+        {!isFluxModel(model) && (
+          <LottieReferencePicker
+            images={refs.images}
+            max={INPAINT_REF_MAX}
+            fileInputRef={refs.inputRef}
+            onOpenUpload={refs.openPicker}
+            onFilesSelected={refs.handleFilesSelected}
+            onRemove={refs.removeImage}
+            sessionSources={sessionSources}
+            onPickSession={onPickSession}
+          />
+        )}
 
         <section>
           <p className={SECTION_LABEL_CLASS}>Prompt</p>

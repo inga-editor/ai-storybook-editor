@@ -18,6 +18,11 @@ export {
   INPAINT_IMAGE_SIZE,
   INPAINT_REF_MAX,
   REGION_MAX_DECODED_BYTES,
+  FLUX_FILL_MODEL,
+  isFluxModel,
+  REGION_KIND_BY_MODEL,
+  INPAINT_MASK_BG,
+  INPAINT_MASK_FG,
   BRUSH,
   SWAP_MODAL_OUTLINE_BUTTON_CLASS,
 } from '../edit-image-modal/edit-image-modal-constants';

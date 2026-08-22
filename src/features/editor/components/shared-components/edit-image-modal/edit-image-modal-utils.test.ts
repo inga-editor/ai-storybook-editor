@@ -4,6 +4,14 @@
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import type { Illustration } from '@/types/prop-types';
+
+// Mock the stroke engine so compositeMask can be asserted without a real 2d context (jsdom has
+// none). paintStrokesOnCtx becomes a spy; every other export (Stroke, norm) is kept actual.
+vi.mock('./erase-stroke-engine', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./erase-stroke-engine')>();
+  return { ...actual, paintStrokesOnCtx: vi.fn() };
+});
+
 import {
   EditApiError,
   prependVersion,
@@ -12,6 +20,8 @@ import {
   buildUpscalePayload,
   nearestAspectRatio,
   exceedsRegionSizeCap,
+  compositeMask,
+  fillEnclosedMask,
   DIRECTION_EDGES,
   outpaintFrameInset,
   buildOutpaintPayload,
@@ -19,6 +29,7 @@ import {
   urlToBase64,
   MAX_REF_BYTES,
 } from './edit-image-modal-utils';
+import { paintStrokesOnCtx, type Stroke } from './erase-stroke-engine';
 import { INPAINT_PROV_MAX_HOPS, REGION_MAX_DECODED_BYTES } from './edit-image-modal-constants';
 
 const baseVersions: Illustration[] = [
@@ -82,6 +93,7 @@ describe('mapEditError', () => {
     ['UNSUPPORTED_MODEL', 'Model không hỗ trợ.'],
     ['IMAGE_FETCH_ERROR', 'Không tải được ảnh nguồn.'],
     ['INPUT_TOO_LARGE_FOR_MODEL', 'Ảnh quá lớn để upscale — giảm scale hoặc chọn ảnh nhỏ hơn.'],
+    ['IMAGE_TOO_SMALL_FOR_MODEL', 'Ảnh quá nhỏ cho model này (tối thiểu 256px mỗi chiều) — chọn model khác hoặc ảnh lớn hơn.'],
     ['OUTPUT_FETCH_ERROR', 'Ảnh kết quả quá lớn — giảm scale.'],
     ['REPLICATE_RATE_LIMIT', 'Đang quá tải, thử lại sau ít giây.'],
     ['REPLICATE_ERROR', 'Xử lý ảnh thất bại, vui lòng thử lại.'],
@@ -93,6 +105,10 @@ describe('mapEditError', () => {
     ['REGION_ASPECT_MISMATCH', 'Tỷ lệ vùng khoanh không khớp ảnh nguồn.'],
     ['REGION_TOO_LARGE', 'Ảnh quá lớn để inpaint — chọn version nhỏ hơn.'],
     ['VALIDATION_ERROR', 'Ảnh vùng khoanh không hợp lệ.'],
+    // flux-fill-pro binary-mask codes (design §3).
+    ['REGION_REQUIRED', 'Model này cần khoanh vùng — hãy tô vùng cần sửa.'],
+    ['MASK_SIZE_MISMATCH', 'Kích thước vùng mask không khớp ảnh nguồn.'],
+    ['REGION_KIND_MISMATCH', 'Loại vùng khoanh không phù hợp với model.'],
     ['GEMINI_RATE_LIMIT', 'Đang quá tải, thử lại sau ít giây.'],
     ['NO_IMAGE_RESPONSE', 'Xử lý ảnh thất bại, vui lòng thử lại.'],
     ['GEMINI_ERROR', 'Xử lý ảnh thất bại, vui lòng thử lại.'],
@@ -219,6 +235,102 @@ describe('exceedsRegionSizeCap', () => {
   it('returns false right at the cap boundary', () => {
     const atLength = Math.floor(REGION_MAX_DECODED_BYTES / 0.75);
     expect(exceedsRegionSizeCap('a'.repeat(atLength))).toBe(false);
+  });
+});
+
+describe('compositeMask', () => {
+  const stroke: Stroke = { points: [{ x: 0.5, y: 0.5 }], size: 10, mode: 'erase', color: '#3b6cf6' };
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.mocked(paintStrokesOnCtx).mockReset();
+  });
+
+  const fakeCtx = () =>
+    ({
+      fillStyle: '',
+      fillRect: vi.fn(),
+      putImageData: vi.fn(),
+      getImageData: (_x: number, _y: number, w: number, h: number) => ({
+        data: new Uint8ClampedArray(w * h * 4),
+        width: w,
+        height: h,
+      }),
+    }) as unknown as CanvasRenderingContext2D;
+
+  it('fills bg, recolors strokes to fg at paint mode, returns prefix-stripped base64', () => {
+    const ctx = fakeCtx();
+    const canvas = {
+      width: 0,
+      height: 0,
+      getContext: () => ctx,
+      toDataURL: () => 'data:image/png;base64,STUBMASK',
+    } as unknown as HTMLCanvasElement;
+    vi.spyOn(document, 'createElement').mockReturnValue(canvas);
+
+    const out = compositeMask([stroke], '#000000', '#ffffff', 20, 10, 10, 5);
+
+    expect(out).toBe('STUBMASK'); // `data:` prefix stripped
+    expect(canvas.width).toBe(20);
+    expect(canvas.height).toBe(10);
+    expect((ctx as unknown as { fillStyle: string }).fillStyle).toBe('#000000');
+    expect(ctx.fillRect).toHaveBeenCalledWith(0, 0, 20, 10);
+
+    // Strokes forced to fg color + paint mode; brushScale = (20/10 + 10/5)/2 = 2.
+    expect(paintStrokesOnCtx).toHaveBeenCalledTimes(1);
+    const [, passedStrokes, activeArg, w, h, brushScale, clearFirst] = vi.mocked(paintStrokesOnCtx).mock.calls[0];
+    expect(passedStrokes).toEqual([{ ...stroke, color: '#ffffff', mode: 'paint' }]);
+    expect(activeArg).toBeNull();
+    expect([w, h, brushScale]).toEqual([20, 10, 2]);
+    // clearFirst MUST be false — passing true clearRects the black fillRect away, emitting a
+    // transparent-bg mask that breaks the "black = KEEP" binary-mask contract.
+    expect(clearFirst).toBe(false);
+  });
+
+  it('throws when the 2d context is unavailable', () => {
+    const canvas = { width: 0, height: 0, getContext: () => null } as unknown as HTMLCanvasElement;
+    vi.spyOn(document, 'createElement').mockReturnValue(canvas);
+    expect(() => compositeMask([stroke], '#000000', '#ffffff', 10, 10, 10, 10)).toThrow('Could not get 2D context');
+  });
+});
+
+describe('fillEnclosedMask', () => {
+  const W = 5;
+  const H = 5;
+  const buildGrid = (whitePixels: Array<[number, number]>): Uint8ClampedArray => {
+    const data = new Uint8ClampedArray(W * H * 4); // all black, alpha 0
+    for (const [x, y] of whitePixels) {
+      const p = (y * W + x) * 4;
+      data[p] = 255;
+      data[p + 1] = 255;
+      data[p + 2] = 255;
+      data[p + 3] = 255;
+    }
+    return data;
+  };
+  const red = (data: Uint8ClampedArray, x: number, y: number): number => data[(y * W + x) * 4];
+
+  it('fills the interior enclosed by a closed stroke ring', () => {
+    // A 3×3 ring at (1,1)–(3,3) with a black hole at the center (2,2).
+    const ring: Array<[number, number]> = [
+      [1, 1], [2, 1], [3, 1], [1, 2], [3, 2], [1, 3], [2, 3], [3, 3],
+    ];
+    const data = buildGrid(ring);
+    fillEnclosedMask(data, W, H);
+    expect(red(data, 2, 2)).toBe(255); // enclosed center → white (inpaint)
+    expect(red(data, 1, 1)).toBe(255); // ring stays white
+    expect(red(data, 0, 0)).toBe(0); // outside → black (keep)
+    expect(red(data, 4, 4)).toBe(0);
+    expect(data[3]).toBe(255); // alpha forced opaque
+  });
+
+  it('leaves an open scribble as footprint only (nothing enclosed)', () => {
+    // A straight horizontal line across the middle — the canvas is not partitioned.
+    const data = buildGrid([[1, 2], [2, 2], [3, 2]]);
+    fillEnclosedMask(data, W, H);
+    expect(red(data, 2, 2)).toBe(255); // stroke stays white
+    expect(red(data, 2, 1)).toBe(0); // above the line → reachable from border → black
+    expect(red(data, 2, 3)).toBe(0); // below the line → black
   });
 });
 

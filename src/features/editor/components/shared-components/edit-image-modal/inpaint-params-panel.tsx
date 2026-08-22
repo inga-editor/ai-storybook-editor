@@ -47,6 +47,9 @@ export interface InpaintParamsPanelProps {
   onBrushSizeChange: (size: number) => void;
   prompt: string;
   onPromptChange: (prompt: string) => void;
+  /** REFERENCE IMAGES is Gemini-only — hidden under flux (binary-mask model ignores refs). The tab
+   *  owns the `isFluxModel` decision; this panel stays declarative. */
+  showReferences: boolean;
   /** Forwarded verbatim to InpaintReferencePicker (§8) — grouped so this file stays picker-agnostic. */
   picker: InpaintReferencePickerProps;
 }
@@ -58,6 +61,7 @@ export function InpaintParamsPanel({
   onBrushSizeChange,
   prompt,
   onPromptChange,
+  showReferences,
   picker,
 }: InpaintParamsPanelProps) {
   return (
@@ -101,7 +105,7 @@ export function InpaintParamsPanel({
         />
       </section>
 
-      <InpaintReferencePicker {...picker} />
+      {showReferences && <InpaintReferencePicker {...picker} />}
 
       <section>
         <p className={SECTION_LABEL_CLASS}>Prompt</p>
